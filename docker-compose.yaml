@@ -1,0 +1,76 @@
+version: '3.8'
+
+services:
+  controller:
+    build:
+      context: .
+      dockerfile: cmd/controller/Dockerfile
+    ports:
+      - "8081:8081"
+    environment:
+      - PORT=8081
+      - I2C_BUS_NUMBER=1
+      - DB_PATH=/data/trng.db
+      - HASH_INTERVAL_MS=1000
+      - TRNG_QUEUE_SIZE=100
+    volumes:
+      - trng-data:/data
+    devices:
+      - /dev/i2c-1:/dev/i2c-1
+    restart: unless-stopped
+
+  fortuna:
+    build:
+      context: .
+      dockerfile: cmd/fortuna/Dockerfile
+    ports:
+      - "8082:8082"
+    environment:
+      - PORT=8082
+      - DB_PATH=/data/fortuna.db
+      - CONTROLLER_URL=http://controller:8081
+      - PROCESS_INTERVAL_MS=5000
+      - FORTUNA_QUEUE_SIZE=100
+      - AMPLIFICATION_FACTOR=4
+      - SEED_COUNT=3
+    volumes:
+      - fortuna-data:/data
+    depends_on:
+      - controller
+    restart: unless-stopped
+
+  api:
+    build:
+      context: .
+      dockerfile: cmd/api/Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      - PORT=8080
+      - DB_PATH=/data/api.db
+      - CONTROLLER_ADDR=http://controller:8081
+      - FORTUNA_ADDR=http://fortuna:8082
+      - TRNG_QUEUE_SIZE=100
+      - FORTUNA_QUEUE_SIZE=100
+    volumes:
+      - api-data:/data
+    depends_on:
+      - controller
+      - fortuna
+    restart: unless-stopped
+#
+#  duckdb:
+#    image: ghcr.io/duckdb/duckdb:latest
+#    volumes:
+#      - trng-data:/data/trng
+#      - fortuna-data:/data/fortuna
+#      - api-data:/data/api
+#    command: ["--data", "/data"]
+#    ports:
+#      - "1527:1527"
+#    restart: unless-stopped
+
+volumes:
+  trng-data:
+  fortuna-data:
+  api-data:

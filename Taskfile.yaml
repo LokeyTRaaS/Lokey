@@ -1,0 +1,227 @@
+# Taskfile.yml
+version: '3'
+
+vars:
+  GO_VERSION: 1.24
+  BUILD_DIR: ./build
+  DOCKER_COMPOSE: docker-compose
+  MODULES:
+    - "."
+    - "./cmd/controller"
+    - "./cmd/api"
+    - "./cmd/fortuna"
+
+tasks:
+  default:
+    desc: Display available tasks
+    cmds:
+      - task --list-all
+
+  tidy:
+    desc: Tidy all Go modules
+    cmds:
+      - for: { var: MODULES }
+        cmd: cd {{.}} && go mod tidy
+    silent: false
+
+  tidy-force:
+    desc: Force tidy all Go modules by deleting go.sum files first
+    cmds:
+      - for: { var: MODULES }
+        cmd: cd {{.}} && rm -f go.sum && go mod tidy
+    silent: false
+
+  download:
+    desc: Download Go dependencies for all modules
+    cmds:
+      - for: { var: MODULES }
+        cmd: cd {{.}} && go mod download
+    silent: false
+
+  lint:
+    desc: Run linters on all modules
+    deps: [install-golangci-lint]
+    cmds:
+      - for: { var: MODULES }
+        cmd: cd {{.}} && golangci-lint run ./...
+    silent: false
+
+  fmt:
+    desc: Format all Go code
+    cmds:
+      - find . -name "*.go" -not -path "./vendor/*" | xargs gofmt -s -w
+    silent: false
+
+  vet:
+    desc: Vet all modules
+    cmds:
+      - for: { var: MODULES }
+        cmd: cd {{.}} && go vet ./...
+    silent: false
+
+  build:
+    desc: Build all components
+    cmds:
+      - mkdir -p "{{.BUILD_DIR}}"
+      - cd cmd/controller && go build -o "{{.BUILD_DIR}}/controller"
+      - cd cmd/api && go build -o "{{.BUILD_DIR}}/api"
+      - cd cmd/fortuna && go build -o "{{.BUILD_DIR}}/fortuna"
+    silent: false
+
+  build-controller:
+    desc: Build controller component
+    cmds:
+      - mkdir -p "{{.BUILD_DIR}}"
+      - cd cmd/controller && go build -o "{{.BUILD_DIR}}/controller"
+    silent: false
+
+  build-api:
+    desc: Build API component
+    cmds:
+      - mkdir -p "{{.BUILD_DIR}}"
+      - cd cmd/api && go build -o "{{.BUILD_DIR}}/api"
+    silent: false
+
+  build-fortuna:
+    desc: Build Fortuna component
+    cmds:
+      - mkdir -p "{{.BUILD_DIR}}"
+      - cd cmd/fortuna && go build -o "{{.BUILD_DIR}}/fortuna"
+    silent: false
+
+  test:
+    desc: Run tests
+    cmds:
+      - for: { var: MODULES }
+        cmd: cd {{.}} && go test -v ./...
+    silent: false
+
+  test-coverage:
+    desc: Run tests with coverage
+    cmds:
+      - for: { var: MODULES }
+        cmd: cd {{.}} && go test -v -coverprofile=coverage.out ./...
+    silent: false
+
+  docker-build:
+    desc: Build all Docker images
+    cmds:
+      - "{{.DOCKER_COMPOSE}} build"
+    silent: false
+
+  docker-build-controller:
+    desc: Build controller Docker image
+    cmds:
+      - "{{.DOCKER_COMPOSE}} build controller"
+    silent: false
+
+  docker-build-api:
+    desc: Build API Docker image
+    cmds:
+      - "{{.DOCKER_COMPOSE}} build api"
+    silent: false
+
+  docker-build-fortuna:
+    desc: Build Fortuna Docker image
+    cmds:
+      - "{{.DOCKER_COMPOSE}} build fortuna"
+    silent: false
+
+  docker-up:
+    desc: Start all services
+    cmds:
+      - "{{.DOCKER_COMPOSE}} up -d"
+    silent: false
+
+  docker-down:
+    desc: Stop all services
+    cmds:
+      - "{{.DOCKER_COMPOSE}} down"
+    silent: false
+
+  docker-logs:
+    desc: Show logs from all services
+    cmds:
+      - "{{.DOCKER_COMPOSE}} logs -f"
+    silent: false
+
+  docker-restart:
+    desc: Restart all services
+    cmds:
+      - task: docker-down
+      - task: docker-up
+    silent: false
+
+  validate-deps:
+    desc: Validate dependencies
+    cmds:
+      - for: { var: MODULES }
+        cmd: cd {{.}} && go mod verify
+    silent: false
+
+  validate-docker:
+    desc: Validate Docker configuration
+    cmds:
+      - "{{.DOCKER_COMPOSE}} config"
+    silent: false
+
+  validate-all:
+    desc: Run all validation tasks
+    deps: [validate-deps, validate-docker]
+    silent: false
+
+  clean:
+    desc: Clean build artifacts
+    cmds:
+      - rm -rf "{{.BUILD_DIR}}"
+    silent: false
+
+  install-golangci-lint:
+    desc: Install golangci-lint
+    cmds:
+      - |
+        if ! command -v golangci-lint &> /dev/null; then
+          echo "Installing golangci-lint..."
+          go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+        fi
+    silent: true
+
+  prepare-all:
+    desc: Run all preparation tasks
+    deps: [tidy, download, vet, fmt, lint]
+    silent: false
+
+  fix-modules:
+    desc: Fix all module issues
+    cmds:
+      - task: tidy-force
+      - task: validate-deps
+    silent: false
+
+  fix-docker:
+    desc: Rebuild all Docker images
+    deps: [fix-modules]
+    cmds:
+      - task: docker-build
+    silent: false
+
+  run-controller:
+    desc: Run controller locally
+    deps: [build-controller]
+    cmds:
+      - "{{.BUILD_DIR}}/controller"
+    silent: false
+
+  run-api:
+    desc: Run API locally
+    deps: [build-api]
+    cmds:
+      - "{{.BUILD_DIR}}/api"
+    silent: false
+
+  run-fortuna:
+    desc: Run Fortuna locally
+    deps: [build-fortuna]
+    cmds:
+      - "{{.BUILD_DIR}}/fortuna"
+    silent: false
