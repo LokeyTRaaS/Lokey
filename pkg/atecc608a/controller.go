@@ -63,7 +63,7 @@ func (c *Controller) WakeUp() error {
 // writeCommand sends a command to the ATECC608A
 func (c *Controller) writeCommand(command byte, data []byte) error {
 	buf := append([]byte{command}, data...)
-	err := c.i2c.WriteBytes(buf)
+	_, err := c.i2c.WriteBytes(buf)
 	if err != nil {
 		c.LastError = err
 		return err
@@ -73,7 +73,7 @@ func (c *Controller) writeCommand(command byte, data []byte) error {
 
 // readResponse reads a response from the ATECC608A
 func (c *Controller) readResponse(length int) ([]byte, error) {
-	data, err := c.i2c.ReadBytes(length)
+	data, err := c.i2c.ReadBytes([]byte{byte(length)})
 	if err != nil {
 		c.LastError = err
 		return nil, err

@@ -11,10 +11,10 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/go-playground/validator/v10"
-	_ "github.com/lokey/rng-service/pkg/api/doc
+	"github.com/lokey/rng-service/pkg/api/docs"
 	"github.com/lokey/rng-service/pkg/database"
 	"github.com/swaggo/files"
-	"github.com/swaggo/gin-swagger"
+	ginSwagger "github.com/swaggo/gin-swagger"
 )
 
 // @title RNG Service API
