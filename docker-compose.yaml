@@ -58,17 +58,17 @@ services:
       - controller
       - fortuna
     restart: unless-stopped
-#
-#  duckdb:
-#    image: ghcr.io/duckdb/duckdb:latest
-#    volumes:
-#      - trng-data:/data/trng
-#      - fortuna-data:/data/fortuna
-#      - api-data:/data/api
-#    command: ["--data", "/data"]
-#    ports:
-#      - "1527:1527"
-#    restart: unless-stopped
+
+  duckdb:
+    image: datacatering/duckdb:v1.3.0
+    volumes:
+      - trng-data:/data/trng
+      - fortuna-data:/data/fortuna
+      - api-data:/data/api
+    command: ["--data", "/data"]
+    ports:
+      - "1527:1527"
+    restart: unless-stopped
 
 volumes:
   trng-data:

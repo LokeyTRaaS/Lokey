@@ -1,5 +1,31 @@
 # Lokey: True Random Number Generation Service
 
+![Lokey Logo](docs/logo.jpeg)
+
+
+<!-- TOC -->
+* [Lokey: True Random Number Generation Service](#lokey-true-random-number-generation-service)
+  * [Project Overview](#project-overview)
+  * [System Components](#system-components)
+  * [Architecture](#architecture)
+  * [Features](#features)
+  * [API Endpoints](#api-endpoints)
+    * [Configuration](#configuration)
+    * [Data Retrieval](#data-retrieval)
+    * [Status](#status)
+  * [Getting Started](#getting-started)
+    * [Prerequisites](#prerequisites)
+    * [Running the System](#running-the-system)
+  * [Hardware](#hardware)
+  * [Development](#development)
+    * [Using Taskfile](#using-taskfile)
+    * [Building from Source Manually](#building-from-source-manually)
+    * [Testing the API](#testing-the-api)
+  * [Project Goals](#project-goals)
+  * [License](#license)
+<!-- TOC -->
+
+
 ## Project Overview
 
 Lokey is a high-availability, high-bandwidth true random number generation service. The name derives from Loki, the Norse god of chaos, reflecting the unpredictable nature of true randomness, and "key" indicating its accessibility and utility as a keystone service for cryptographic applications.
