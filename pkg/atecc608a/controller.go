@@ -10,7 +10,7 @@ import (
 )
 
 const (
-	Atecc608Address = 0xC0 // ATECC608A I2C address
+	Atecc608Address = 0x60 // ATECC608A I2C address
 	RandomCommand   = 0x1B // Random command opcode
 	ShaCommand      = 0x47 // SHA command opcode
 	WakeCommand     = 0x00 // Wake command

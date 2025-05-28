@@ -31,7 +31,7 @@ You will be connecting the ATECC608A to the Raspberry Pi's GPIO header. Refer to
 | SCL           | GPIO 3 (SCL)          | Pin 5         | I2C Clock   |
 | GND           | Ground                | Pin 6         | Ground      |
 
-<img src="docs/wiring.jpeg" alt="Endresult with a little heatsink"/>
+<img src="../docs/wiring.jpeg" alt="Endresult with a little heatsink"/>
 
 
 **Soldering Steps:**
