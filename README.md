@@ -1,7 +1,6 @@
 # Lokey: True Random Number Generation Service
 
-![Lokey Logo](docs/logo.jpeg)
-
+<img src="docs/logo.jpeg" alt="Description" width="300"/>
 
 <!-- TOC -->
 * [Lokey: True Random Number Generation Service](#lokey-true-random-number-generation-service)
