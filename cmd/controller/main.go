@@ -27,7 +27,7 @@ const (
 
 type Controller struct {
 	device        *atecc608a.Controller
-	db            *database.DuckDBHandler
+	db            database.DBHandler
 	port          int
 	hashInterval  time.Duration
 	router        *gin.Engine
@@ -45,7 +45,7 @@ func NewController(i2cBusNumber int, dbPath string, port int, hashInterval time.
 	}
 
 	// Initialize database
-	db, err := database.NewDuckDBHandler(dbPath, trngQueueSize, 0) // 0 for fortuna size as we don't manage it here
+	db, err := database.NewBadgerDBHandler(dbPath, trngQueueSize, 0) // 0 for fortuna size as we don't manage it here
 	if err != nil {
 		device.Close()
 		return nil, fmt.Errorf("failed to initialize database: %w", err)

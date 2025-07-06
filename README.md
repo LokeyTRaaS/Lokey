@@ -36,16 +36,15 @@ This project aims to provide affordable and accessible true randomness through o
 1. **Controller**: Interfaces with the ATECC608A chip to harvest true random numbers (TRNG) and process SHA-256 hashes
 2. **Fortuna Processor**: Amplifies the entropy using the Fortuna algorithm for enhanced randomness
 3. **API Server**: Provides endpoints for configuration and both raw TRNG and Fortuna-amplified data retrieval
-4. **DuckDB**: Stores and manages the queue-based data storage system
+4. **BadgerDB**: Provides embedded key-value storage for the queue-based data storage system
 
 ## Architecture
 
-The system uses a microservices architecture with four containerized applications:
+The system uses a microservices architecture with three containerized applications:
 
 - **Controller Service**: Generates random data using the ATECC608A hardware TRNG
 - **Fortuna Service**: Amplifies random data using the Fortuna algorithm
 - **API Service**: Provides a unified API for configuration and data retrieval
-- **DuckDB Service**: Manages the queue-based storage of random data
 
 Each service operates independently and communicates via HTTP APIs, with shared volumes for database access.
 
@@ -126,7 +125,94 @@ task build
 task build-controller
 task build-api
 task build-fortuna
+# RNG Service
 
+This service provides true random number generation (TRNG) and Fortuna-based random number generation.
+
+## Architecture
+
+The service consists of three main components:
+
+1. **API Service**: Frontend service that handles client requests
+2. **Controller Service**: Interfaces with ATECC608A hardware for true random number generation
+3. **Fortuna Service**: Implements the Fortuna algorithm for pseudo-random number generation
+
+## Database Architecture
+
+The service uses BadgerDB as an embedded database solution for all components. This provides:
+
+- Embedded key-value storage optimized for SSDs
+- No external database dependencies
+- Consistent data model across all services
+- Better performance for this use case
+- Simplified deployment with each service managing its own data store
+
+### Key Design Features
+
+- Centralized data storage with prefix-based namespacing
+- Queue-based architecture for handling RNG requests
+- Efficient counters for queue management
+- Consistent interface across all services
+
+## Setup and Configuration
+
+### Requirements
+
+- Go 1.24 or later
+- I2C-enabled device (for Controller service)
+
+### Environment Variables
+
+| Variable | Service | Description | Default |
+|----------|---------|-------------|--------|
+| PORT | All | HTTP port | 8080/8081/8082 |
+| DB_PATH | All | Path to BadgerDB storage | Service-specific |
+| CONTROLLER_ADDR | API | Controller service URL | http://controller:8081 |
+| FORTUNA_ADDR | API | Fortuna service URL | http://fortuna:8082 |
+| CONTROLLER_URL | Fortuna | Controller service URL | http://controller:8081 |
+| TRNG_QUEUE_SIZE | API, Controller | TRNG request queue size | 100 |
+| FORTUNA_QUEUE_SIZE | API, Fortuna | Fortuna request queue size | 100 |
+| I2C_BUS_NUMBER | Controller | I2C bus number for ATECC608A | 1 |
+| HASH_INTERVAL_MS | Controller | Interval between hash generations | 1000 |
+| PROCESS_INTERVAL_MS | Fortuna | Interval between Fortuna generations | 5000 |
+| AMPLIFICATION_FACTOR | Fortuna | Data amplification multiplier | 4 |
+| SEED_COUNT | Fortuna | Number of TRNG seeds to use | 3 |
+
+## Deployment
+
+Each service can be deployed in a separate container or as standalone services.
+
+```bash
+# Build all services
+go build -o rng-api ./cmd/api
+go build -o rng-controller ./cmd/controller
+go build -o rng-fortuna ./cmd/fortuna
+```
+
+## API Reference
+
+### API Service
+
+- `GET /api/v1/config/queue`: Get queue configuration
+- `PUT /api/v1/config/queue`: Update queue configuration
+- `GET /api/v1/config/consumption`: Get consumption behavior configuration
+- `PUT /api/v1/config/consumption`: Update consumption behavior configuration
+- `POST /api/v1/data`: Retrieve random data in specified format
+- `GET /api/v1/status`: Get system status and queue information
+- `GET /api/v1/health`: Check health of all system components
+- `GET /swagger/*any`: Swagger documentation
+
+### Controller Service
+
+- `GET /health`: Check controller health
+- `GET /info`: Get controller information
+- `GET /generate`: Generate a new TRNG hash
+
+### Fortuna Service
+
+- `GET /health`: Check Fortuna health
+- `GET /info`: Get Fortuna information
+- `GET /generate`: Generate Fortuna random data
 # Run tests
 task test
 

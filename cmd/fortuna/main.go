@@ -32,7 +32,7 @@ const (
 
 type FortunaProcessor struct {
 	generator           *fortuna.Generator
-	db                  *database.DuckDBHandler
+	db                  database.DBHandler
 	controllerURL       string
 	port                int
 	processInterval     time.Duration
@@ -47,7 +47,7 @@ type FortunaProcessor struct {
 
 func NewFortunaProcessor(dbPath, controllerURL string, port int, processInterval time.Duration, fortunaQueueSize, amplificationFactor, seedCount int) (*FortunaProcessor, error) {
 	// Initialize database
-	db, err := database.NewDuckDBHandler(dbPath, 0, fortunaQueueSize) // 0 for TRNG size as we don't manage it here
+	db, err := database.NewBadgerDBHandler(dbPath, 0, fortunaQueueSize) // 0 for TRNG size as we don't manage it here
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize database: %w", err)
 	}

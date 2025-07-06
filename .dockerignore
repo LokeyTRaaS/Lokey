@@ -1,0 +1,26 @@
+# Git files
+.git
+.gitignore
+
+# Build artifacts
+build/
+
+# Development files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Temporary files
+tmp/
+temp/
+
+# Documentation
+docs/
+*.md
+LICENSE
+
+# Don't ignore the docs folder needed for the app
+!docs/logo.jpeg
+!docs/wiring.jpeg

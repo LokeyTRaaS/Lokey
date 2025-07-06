@@ -2,18 +2,15 @@ package api
 
 import (
 	"encoding/binary"
-	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
-	"strconv"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/go-playground/validator/v10"
-	"github.com/lokey/rng-service/pkg/api/docs"
 	"github.com/lokey/rng-service/pkg/database"
-	"github.com/swaggo/files"
+	swaggerFiles "github.com/swaggo/files"
 	ginSwagger "github.com/swaggo/gin-swagger"
 )
 
@@ -33,7 +30,7 @@ import (
 
 // Server represents the API server
 type Server struct {
-	db             *database.DuckDBHandler
+	db             database.DBHandler
 	controllerAddr string
 	fortunaAddr    string
 	port           int
@@ -74,7 +71,7 @@ type HealthCheckResponse struct {
 }
 
 // NewServer creates a new API server
-func NewServer(db *database.DuckDBHandler, controllerAddr, fortunaAddr string, port int) *Server {
+func NewServer(db database.DBHandler, controllerAddr, fortunaAddr string, port int) *Server {
 	router := gin.Default()
 	validate := validator.New()
 

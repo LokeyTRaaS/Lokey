@@ -1,33 +1,48 @@
 package atecc608a
 
 import (
-	"errors"
+	"crypto/sha256"
 	"fmt"
-	"log"
+	"sync"
 	"time"
 
 	"github.com/d2r2/go-i2c"
 )
 
 const (
-	Atecc608Address = 0x60 // ATECC608A I2C address
-	RandomCommand   = 0x1B // Random command opcode
-	ShaCommand      = 0x47 // SHA command opcode
-	WakeCommand     = 0x00 // Wake command
-	WakeParameter   = 0x11 // Wake parameter
+	DefaultI2CAddress = 0x60 // Default I2C address for ATECC608A
+
+	// ATECC608A commands
+	cmdWakeUp = 0x01
+	cmdSleep  = 0x02
+	cmdRandom = 0x1B
+	cmdInfo   = 0x30
+
+	// Response codes
+	respSuccess        = 0x00
+	respChecksumError  = 0x01
+	respParseError     = 0x03
+	respExecutionError = 0x0F
+
+	// Timing constants
+	wakeupDelay    = 1500 * time.Microsecond
+	executionDelay = 50 * time.Millisecond
 )
 
+// Controller represents the ATECC608A device controller
 type Controller struct {
 	i2c         *i2c.I2C
 	initialWake bool
 	LastError   error
+	mutex       sync.Mutex
 }
 
 // NewController creates a new ATECC608A controller
-func NewController(i2cBusNumber int) (*Controller, error) {
-	i2c, err := i2c.NewI2C(Atecc608Address, i2cBusNumber)
+func NewController(busNumber int) (*Controller, error) {
+	// Initialize I2C device
+	i2c, err := i2c.NewI2C(DefaultI2CAddress, busNumber)
 	if err != nil {
-		return nil, fmt.Errorf("failed to open I2C bus: %w", err)
+		return nil, fmt.Errorf("failed to initialize I2C: %w", err)
 	}
 
 	controller := &Controller{
@@ -49,129 +64,137 @@ func NewController(i2cBusNumber int) (*Controller, error) {
 
 // WakeUp wakes up the ATECC608A device
 func (c *Controller) WakeUp() error {
-	err := c.writeCommand(WakeCommand, []byte{WakeParameter})
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+
+	// Send wakeup command
+	_, err := c.i2c.WriteBytes([]byte{0x00})
 	if err != nil {
-		c.LastError = err
-		return fmt.Errorf("wake command failed: %w", err)
+		return fmt.Errorf("failed to send wakeup command: %w", err)
 	}
 
 	// Wait for device to wake up
-	time.Sleep(10 * time.Millisecond)
+	time.Sleep(wakeupDelay)
+
 	return nil
 }
 
-// writeCommand sends a command to the ATECC608A
-func (c *Controller) writeCommand(command byte, data []byte) error {
-	buf := append([]byte{command}, data...)
-	_, err := c.i2c.WriteBytes(buf)
+// Sleep puts the ATECC608A device into low-power mode
+func (c *Controller) Sleep() error {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+
+	// Send sleep command
+	_, err := c.i2c.WriteBytes([]byte{cmdSleep})
 	if err != nil {
-		c.LastError = err
-		return err
+		return fmt.Errorf("failed to send sleep command: %w", err)
 	}
+
 	return nil
 }
 
-// readResponse reads a response from the ATECC608A
-func (c *Controller) readResponse(length int) ([]byte, error) {
-	data, err := c.i2c.ReadBytes([]byte{byte(length)})
+// GenerateRandom generates random bytes from the ATECC608A
+func (c *Controller) GenerateRandom() ([]byte, error) {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+
+	// Ensure device is awake
+	err := c.WakeUp()
 	if err != nil {
-		c.LastError = err
 		return nil, err
 	}
-	return data, nil
-}
 
-// GenerateRandomBytes generates random bytes using the ATECC608A's TRNG
-func (c *Controller) GenerateRandomBytes() ([]byte, error) {
-	// Ensure device is awake
-	if !c.initialWake {
-		err := c.WakeUp()
-		if err != nil {
-			return nil, fmt.Errorf("failed to wake up device: %w", err)
-		}
-	}
-
-	// Send Random command
-	err := c.writeCommand(0x03, []byte{RandomCommand})
+	// Send random command (implementation simplified for example)
+	_, err = c.i2c.WriteBytes([]byte{cmdRandom, 0x00, 0x00})
 	if err != nil {
-		return nil, fmt.Errorf("failed to send Random command: %w", err)
+		return nil, fmt.Errorf("failed to send random command: %w", err)
 	}
 
-	// Wait for processing
-	time.Sleep(5 * time.Millisecond)
+	// Wait for execution
+	time.Sleep(executionDelay)
 
-	// Read 32-byte random number
-	randomData, err := c.readResponse(32)
+	// Read response (32 bytes of random data + status byte)
+	buf := make([]byte, 33)
+	_, err = c.i2c.ReadBytes(buf)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read random data: %w", err)
 	}
 
-	if len(randomData) != 32 {
-		return nil, errors.New("invalid random data length")
+	// Check status code (first byte)
+	if buf[0] != respSuccess {
+		return nil, fmt.Errorf("device returned error code: %d", buf[0])
 	}
 
-	return randomData, nil
+	// Return the random data (excluding status byte)
+	return buf[1:33], nil
 }
 
-// GenerateHashFromRandom generates a SHA-256 hash of random data using the device's hardware
+// GenerateHashFromRandom generates a SHA-256 hash from random data
 func (c *Controller) GenerateHashFromRandom() ([]byte, error) {
-	// Generate random data first
-	randomData, err := c.GenerateRandomBytes()
+	// Get random data from the device
+	randomData, err := c.GenerateRandom()
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate random data: %w", err)
 	}
 
-	// Start SHA computation
-	err = c.writeCommand(0x03, []byte{ShaCommand})
-	if err != nil {
-		return nil, fmt.Errorf("failed to send SHA command: %w", err)
-	}
+	// Hash the random data using SHA-256
+	hash := sha256.Sum256(randomData)
 
-	// Wait for processing
-	time.Sleep(5 * time.Millisecond)
-
-	// Send Random data to SHA command
-	err = c.writeCommand(0x04, randomData)
-	if err != nil {
-		return nil, fmt.Errorf("failed to send data to SHA command: %w", err)
-	}
-
-	// Wait for processing
-	time.Sleep(10 * time.Millisecond)
-
-	// Read SHA digest
-	shaDigest, err := c.readResponse(32)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read SHA digest: %w", err)
-	}
-
-	if len(shaDigest) != 32 {
-		return nil, errors.New("invalid SHA digest length")
-	}
-
-	return shaDigest, nil
+	return hash[:], nil
 }
 
-// Close closes the connection to the ATECC608A
+// Close closes the I2C connection
 func (c *Controller) Close() error {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+
+	// Put device to sleep before closing
+	err := c.Sleep()
+	if err != nil {
+		return fmt.Errorf("failed to put device to sleep: %w", err)
+	}
+
 	return c.i2c.Close()
 }
 
-// HealthCheck checks if the ATECC608A device is responsive
+// HealthCheck verifies the device is responsive
 func (c *Controller) HealthCheck() bool {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+
 	// Try to wake up the device
 	err := c.WakeUp()
 	if err != nil {
-		log.Printf("ATECC608A health check failed: %v", err)
+		c.LastError = err
 		return false
 	}
 
-	// Try to generate random data as a test
-	_, err = c.GenerateRandomBytes()
+	// Send info command to check if device is responsive
+	_, err = c.i2c.WriteBytes([]byte{cmdInfo, 0x00})
 	if err != nil {
-		log.Printf("ATECC608A random generation failed: %v", err)
+		c.LastError = err
+		return false
+	}
+
+	// Wait for execution
+	time.Sleep(executionDelay)
+
+	// Read response
+	buf := make([]byte, 4)
+	_, err = c.i2c.ReadBytes(buf)
+	if err != nil {
+		c.LastError = err
+		return false
+	}
+
+	// Check status code
+	if buf[0] != respSuccess {
+		c.LastError = fmt.Errorf("device returned error code: %d", buf[0])
 		return false
 	}
 
 	return true
 }
+
+// The helper functions below were removed as they are not currently used
+// They can be reimplemented when needed

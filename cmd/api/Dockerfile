@@ -2,6 +2,9 @@ FROM golang:1.24-alpine AS builder
 
 WORKDIR /app
 
+# Install build dependencies for CGO and I2C
+RUN apk add --no-cache gcc musl-dev linux-headers
+
 # Copy the module files first to leverage Docker cache
 COPY go.mod go.sum ./
 COPY cmd/api/go.mod cmd/api/go.sum* ./cmd/api/
@@ -12,12 +15,15 @@ RUN go mod download && cd cmd/api && go mod download
 # Copy the rest of the source code
 COPY . .
 
-# Build the application
-RUN cd cmd/api && CGO_ENABLED=1 GOOS=linux go build -o /app/api
+# Build the application with CGO enabled
+# Using -trimpath for smaller binaries and more reproducible builds
+RUN cd cmd/api && CGO_ENABLED=1 GOOS=linux go build -trimpath -o /app/api
 
 # Create a smaller runtime image
 FROM alpine:latest
 
+# Add only the necessary runtime dependencies
+# ca-certificates for HTTPS, libc6-compat for dynamic linking
 RUN apk --no-cache add ca-certificates libc6-compat
 
 WORKDIR /app
