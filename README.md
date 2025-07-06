@@ -2,24 +2,32 @@
 
 <img src="docs/logo.jpeg" alt="Description" width="300"/>
 
+## Table of Contents
 <!-- TOC -->
 * [Lokey: True Random Number Generation Service](#lokey-true-random-number-generation-service)
+  * [Table of Contents](#table-of-contents)
   * [Project Overview](#project-overview)
-  * [System Components](#system-components)
-  * [Architecture](#architecture)
+  * [System Architecture](#system-architecture)
+    * [Components](#components)
+    * [Technical Architecture](#technical-architecture)
+    * [Database Design](#database-design)
   * [Features](#features)
-  * [API Endpoints](#api-endpoints)
-    * [Configuration](#configuration)
-    * [Data Retrieval](#data-retrieval)
-    * [Status](#status)
+  * [API Reference](#api-reference)
+    * [API Service](#api-service)
+    * [Controller Service](#controller-service)
+    * [Fortuna Service](#fortuna-service)
   * [Getting Started](#getting-started)
     * [Prerequisites](#prerequisites)
-    * [Running the System](#running-the-system)
-  * [Hardware](#hardware)
+    * [Local Development](#local-development)
+    * [Cross-Compilation & Raspberry Pi Deployment](#cross-compilation--raspberry-pi-deployment)
+      * [Development Machine Setup](#development-machine-setup)
+      * [Raspberry Pi Configuration](#raspberry-pi-configuration)
+  * [Hardware Setup](#hardware-setup)
   * [Development](#development)
     * [Using Taskfile](#using-taskfile)
-    * [Building from Source Manually](#building-from-source-manually)
-    * [Testing the API](#testing-the-api)
+    * [Building from Source](#building-from-source)
+    * [Testing](#testing)
+  * [Environment Variables](#environment-variables)
   * [Project Goals](#project-goals)
   * [License](#license)
 <!-- TOC -->
@@ -29,235 +37,255 @@
 
 Lokey is a high-availability, high-bandwidth true random number generation service. The name derives from Loki, the Norse god of chaos, reflecting the unpredictable nature of true randomness, and "key" indicating its accessibility and utility as a keystone service for cryptographic applications.
 
-This project aims to provide affordable and accessible true randomness through off-the-shelf components with a Go implementation. The first prototype uses a Raspberry Pi Zero 2W and an ATECC608A cryptographic chip, creating a hardware-based solution with a modest bill of materials costing approximately €50.
+This project provides affordable and accessible true randomness through off-the-shelf components with a Go implementation. The implementation uses a Raspberry Pi Zero 2W and an ATECC608A cryptographic chip, creating a hardware-based solution with a modest bill of materials costing approximately €50.
 
-## System Components
+## System Architecture
 
-1. **Controller**: Interfaces with the ATECC608A chip to harvest true random numbers (TRNG) and process SHA-256 hashes
-2. **Fortuna Processor**: Amplifies the entropy using the Fortuna algorithm for enhanced randomness
-3. **API Server**: Provides endpoints for configuration and both raw TRNG and Fortuna-amplified data retrieval
-4. **BadgerDB**: Provides embedded key-value storage for the queue-based data storage system
+### Components
 
-## Architecture
+Lokey consists of three main microservices:
 
-The system uses a microservices architecture with three containerized applications:
+1. **Controller Service**: Interfaces with the ATECC608A chip to harvest true random numbers (TRNG) and process SHA-256 hashes
+2. **Fortuna Service**: Amplifies the entropy using the Fortuna algorithm for enhanced randomness
+3. **API Service**: Provides endpoints for configuration and both raw TRNG and Fortuna-amplified data retrieval
+
+### Technical Architecture
+
+The system uses a microservices architecture with three containerized applications that communicate via HTTP APIs:
 
 - **Controller Service**: Generates random data using the ATECC608A hardware TRNG
 - **Fortuna Service**: Amplifies random data using the Fortuna algorithm
 - **API Service**: Provides a unified API for configuration and data retrieval
 
-Each service operates independently and communicates via HTTP APIs, with shared volumes for database access.
+Each service operates independently, with shared volumes for database access.
+
+### Database Design
+
+The system uses BadgerDB as an embedded database solution for all components, providing:
+
+- Embedded key-value storage optimized for SSDs
+- No external database dependencies
+- Consistent data model across all services
+- Better performance for this specific use case
+- Queue-based architecture for handling RNG requests
+- Efficient counters for queue management
 
 ## Features
 
-- Hardware-based True Random Number Generation (TRNG) using ATECC608A cryptographic chip
-- High availability and bandwidth of true randomness
-- Dual access to both raw TRNG and Fortuna-amplified randomness
-- Cryptographic amplification using the Fortuna algorithm for enhanced entropy
-- Queue-based storage with configurable sizes for efficient data management
-- Multiple data format options (int8, int16, int32, int64, uint8, uint16, uint32, uint64, binary)
-- Configurable consumption behavior (delete-on-read)
-- Comprehensive health monitoring
-- Swagger documentation for all API endpoints
+- **Hardware-based TRNG**: True Random Number Generation using ATECC608A cryptographic chip
+- **High Availability**: Reliable and continuously available random number generation
+- **Dual Access Modes**: Raw TRNG and Fortuna-amplified randomness options
+- **Cryptographic Amplification**: Fortuna algorithm implementation for enhanced entropy
+- **Efficient Storage**: Queue-based storage with configurable sizes
+- **Multiple Data Formats**: Support for various formats including int8, int16, int32, int64, uint8, uint16, uint32, uint64, and binary
+- **Flexible Consumption**: Configurable consumption behavior (e.g., delete-on-read)
+- **Health Monitoring**: Comprehensive system health checks
+- **API Documentation**: Swagger documentation for all endpoints
 
-## API Endpoints
+## API Reference
 
-### Configuration
+### API Service
 
-- `GET /api/v1/config/queue` - Get queue configuration
-- `PUT /api/v1/config/queue` - Update queue configuration
-- `GET /api/v1/config/consumption` - Get consumption behavior configuration
-- `PUT /api/v1/config/consumption` - Update consumption behavior configuration
+**Configuration Endpoints:**
+- `GET /api/v1/config/queue`: Get queue configuration
+- `PUT /api/v1/config/queue`: Update queue configuration
+- `GET /api/v1/config/consumption`: Get consumption behavior configuration
+- `PUT /api/v1/config/consumption`: Update consumption behavior configuration
 
-### Data Retrieval
+**Data Endpoints:**
+- `POST /api/v1/data`: Retrieve random data in specified format
 
-- `POST /api/v1/data` - Retrieve random data in specified format
+**Status Endpoints:**
+- `GET /api/v1/status`: Get system status and queue information
+- `GET /api/v1/health`: Check health of all system components
+- `GET /swagger/*any`: Swagger documentation
 
-### Status
+### Controller Service
 
-- `GET /api/v1/status` - Get system status and queue information
-- `GET /api/v1/health` - Check health of all system components
+- `GET /health`: Check controller health
+- `GET /info`: Get controller information
+- `GET /generate`: Generate a new TRNG hash
+
+### Fortuna Service
+
+- `GET /health`: Check Fortuna health
+- `GET /info`: Get Fortuna information
+- `GET /generate`: Generate Fortuna random data
 
 ## Getting Started
 
 ### Prerequisites
 
 - Docker and Docker Compose
-- ATECC608A connected via I2C
+- ATECC608A cryptographic chip (for hardware TRNG)
 - Go 1.24+ (for development)
 - Docker Buildx (for cross-compiling ARM images)
+- Raspberry Pi Zero 2W (for production deployment)
 
-### Running Locally (Development Machine)
+### Local Development
 
-1. Clone the repository
-2. Configure I2C settings in `docker-compose.yaml`
-3. Start the services:
+To run Lokey on your development machine:
 
-```bash
-docker compose up -d
-```
+1. Clone the repository:
+   ```bash
+   git clone https://github.com/yourusername/lokey.git
+   cd lokey
+   ```
 
-4. Access the API at http://localhost:8080
-5. View API documentation at http://localhost:8080/swagger/index.html
+2. Start the services using Docker Compose:
+   ```bash
+   docker compose up -d
+   ```
+
+3. Access the API at http://localhost:8080
+4. View API documentation at http://localhost:8080/swagger/index.html
 
 ### Cross-Compilation & Raspberry Pi Deployment
 
-Lokey can be cross-compiled on a development machine and deployed to a Raspberry Pi using the following workflow:
+Lokey can be cross-compiled on a development machine and deployed to a Raspberry Pi:
 
-#### 1. Development Machine Setup
+#### Development Machine Setup
 
-1. Create a buildx.toml configuration file:
+1. Create `buildx.toml` configuration file in your project root:
 
-```toml
-[registry."lokey-registry:5000"]
-  insecure = true
-  http = true
+   ```toml
+   [registry."lokey-registry:5000"]
+     insecure = true
+     http = true
 
-# insecure-entitlements allows insecure entitlements, disabled by default.
-insecure-entitlements = [ "network.host", "security.insecure" ]
-```
+   # insecure-entitlements allows insecure entitlements, disabled by default.
+   insecure-entitlements = [ "network.host", "security.insecure" ]
+   ```
 
 2. Build ARM images and push to local registry:
 
-```bash
-# Sets up a local registry and builds ARM images
-task build_images_and_registry
-```
+   ```bash
+   # Sets up a local registry and builds ARM images
+   task build_images_and_registry
+   ```
 
-This task:
-- Creates a Docker network for registry communication
-- Runs a local registry container
-- Sets up a Buildx builder with appropriate configuration
-- Cross-compiles ARM-compatible images
-- Pushes the images to the local registry
+   This task:
+   - Creates a Docker network for registry communication
+   - Runs a local registry container
+   - Sets up a Buildx builder with appropriate configuration
+   - Cross-compiles ARM-compatible images
+   - Pushes the images to the local registry
 
-#### 2. Raspberry Pi Configuration
+#### Raspberry Pi Configuration
 
-1. Edit the Docker daemon configuration on the Raspberry Pi:
+1. Set up your Raspberry Pi following the hardware guide in `device/HowToSetup.md`
 
-```bash
-sudo nano /etc/docker/daemon.json
-```
+2. Configure Docker on the Raspberry Pi to trust your development machine's registry:
 
-2. Add the development machine's IP to the insecure registries list:
+   ```bash
+   # Replace with your development machine's IP address
+   DEV_IP=192.168.1.100
 
-```json
-{
-  "insecure-registries": ["192.168.1.100:5000"]
-}
-```
+   # Update Docker daemon configuration
+   echo "{
+     \"insecure-registries\": [\"$DEV_IP:5000\"]
+   }" | sudo tee /etc/docker/daemon.json
 
-3. Restart Docker service:
+   # Restart Docker to apply changes
+   sudo systemctl restart docker
+   ```
 
-```bash
-sudo systemctl restart docker
-```
+3. Create a `docker-compose.yaml` file on the Pi with your development machine's IP:
 
-#### 3. Deployment to Raspberry Pi
+   ```yaml
+   version: '3.8'
 
-1. Create a docker-compose.yaml on the Raspberry Pi with the following content:
+   services:
+     controller:
+       image: 192.168.1.100:5000/lokey-controller:latest
+       ports:
+         - "8081:8081"
+       environment:
+         - PORT=8081
+         - I2C_BUS_NUMBER=1
+         - DB_PATH=/data/trng.db
+         - HASH_INTERVAL_MS=1000
+         - TRNG_QUEUE_SIZE=100
+       volumes:
+         - trng-data:/data
+       devices:
+         - /dev/i2c-1:/dev/i2c-1
+       restart: unless-stopped
 
-```yaml
-version: '3.8'
+     fortuna:
+       image: 192.168.1.100:5000/lokey-fortuna:latest
+       ports:
+         - "8082:8082"
+       environment:
+         - PORT=8082
+         - DB_PATH=/data/fortuna.db
+         - CONTROLLER_URL=http://controller:8081
+         - PROCESS_INTERVAL_MS=5000
+         - FORTUNA_QUEUE_SIZE=100
+         - AMPLIFICATION_FACTOR=4
+         - SEED_COUNT=3
+       volumes:
+         - fortuna-data:/data
+       depends_on:
+         - controller
+       restart: unless-stopped
 
-services:
-  controller:
-    image: 192.168.1.100:5000/lokey-controller:latest
-    ports:
-      - "8081:8081"
-    environment:
-      - PORT=8081
-      - I2C_BUS_NUMBER=1
-      - DB_PATH=/data/trng.db
-      - HASH_INTERVAL_MS=1000
-      - TRNG_QUEUE_SIZE=100
-    volumes:
-      - trng-data:/data
-    devices:
-      - /dev/i2c-1:/dev/i2c-1
-    restart: unless-stopped
-    deploy:
-      resources:
-        limits:
-          memory: 128M
+     api:
+       image: 192.168.1.100:5000/lokey-api:latest
+       ports:
+         - "8080:8080"
+       environment:
+         - PORT=8080
+         - DB_PATH=/data/api.db
+         - CONTROLLER_ADDR=http://controller:8081
+         - FORTUNA_ADDR=http://fortuna:8082
+         - TRNG_QUEUE_SIZE=100
+         - FORTUNA_QUEUE_SIZE=100
+       volumes:
+         - api-data:/data
+       depends_on:
+         - controller
+         - fortuna
+       restart: unless-stopped
+   volumes:
+     trng-data:
+     fortuna-data:
+     api-data:
+   ```
 
-  fortuna:
-    image: 192.168.1.100:5000/lokey-fortuna:latest
-    ports:
-      - "8082:8082"
-    environment:
-      - PORT=8082
-      - DB_PATH=/data/fortuna.db
-      - CONTROLLER_URL=http://controller:8081
-      - PROCESS_INTERVAL_MS=5000
-      - FORTUNA_QUEUE_SIZE=100
-      - AMPLIFICATION_FACTOR=4
-      - SEED_COUNT=3
-    volumes:
-      - fortuna-data:/data
-    depends_on:
-      - controller
-    restart: unless-stopped
-    deploy:
-      resources:
-        limits:
-          memory: 128M
+4. Pull and start the services on the Raspberry Pi:
 
-  api:
-    image: 192.168.1.100:5000/lokey-api:latest
-    ports:
-      - "8080:8080"
-    environment:
-      - PORT=8080
-      - DB_PATH=/data/api.db
-      - CONTROLLER_ADDR=http://controller:8081
-      - FORTUNA_ADDR=http://fortuna:8082
-      - TRNG_QUEUE_SIZE=100
-      - FORTUNA_QUEUE_SIZE=100
-    volumes:
-      - api-data:/data
-    depends_on:
-      - controller
-      - fortuna
-    restart: unless-stopped
-    deploy:
-      resources:
-        limits:
-          memory: 128M
-volumes:
-  trng-data:
-  fortuna-data:
-  api-data:
-```
+   ```bash
+   docker compose pull
+   docker compose up -d
+   ```
 
-2. Pull and start the services:
+5. Verify the deployment:
 
-```bash
-docker compose pull
-docker compose up -d
-```
+   ```bash
+   docker compose ps
+   curl http://localhost:8080/api/v1/health
+   ```
 
-3. Verify the deployment:
+## Hardware Setup
 
-```bash
-docker compose ps
-curl http://localhost:8080/api/v1/health
-```
+Lokey requires minimal hardware to function:
 
-## Hardware
+- **Raspberry Pi Zero 2W**: Main computing platform
+- **ATECC608A**: Cryptographic chip for true random number generation
 
-Lokey uses minimal hardware to achieve its goals:
+The total bill of materials is approximately €50, making this a cost-effective solution for organizations requiring true randomness.
 
-- **Raspberry Pi Zero 2W**: Serves as the main computing platform
-- **ATECC608A**: Cryptographic chip providing true random number generation capabilities
-
-The total bill of materials is approximately €50, making this a cost-effective solution for organizations requiring true randomness for cryptographic applications, simulations, or other purposes requiring high-quality random data.
+For detailed hardware setup instructions, refer to the [hardware setup guide](device/HowToSetup.md) which includes:
+- Soldering instructions for connecting the ATECC608A
+- Raspberry Pi Zero 2W configuration
+- I2C setup and verification
 
 ## Development
 
 ### Using Taskfile
 
-Lokey uses [Task](https://taskfile.dev/) as a convenient build tool. Install Task following the instructions at [taskfile.dev](https://taskfile.dev/installation/), then use these commands:
+Lokey uses [Task](https://taskfile.dev/) as a convenient build tool. Install Task following the instructions at [taskfile.dev](https://taskfile.dev/installation/).
 
 ```bash
 # Display all available tasks
@@ -266,50 +294,70 @@ task
 # Build all components
 task build
 
-# Build specific components
-task build-controller
-task build-api
-task build-fortuna
+# Run all development tasks in sequence
+task all
 
 # Cross-compilation for Raspberry Pi
-task build_images_and_registry  # Build ARM images and push to local registry
-# RNG Service
+task build_images_and_registry
 
-This service provides true random number generation (TRNG) and Fortuna-based random number generation.
+# Run services locally
+task dev_up
 
-## Architecture
+# Stop local services
+task dev_down
+```
 
-The service consists of three main components:
+### Building from Source
 
-1. **API Service**: Frontend service that handles client requests
-2. **Controller Service**: Interfaces with ATECC608A hardware for true random number generation
-3. **Fortuna Service**: Implements the Fortuna algorithm for pseudo-random number generation
+To build the components manually:
 
-## Database Architecture
+```bash
+# Build the controller
+cd cmd/controller
+go build
 
-The service uses BadgerDB as an embedded database solution for all components. This provides:
+# Build the Fortuna processor
+cd ../fortuna
+go build
 
-- Embedded key-value storage optimized for SSDs
-- No external database dependencies
-- Consistent data model across all services
-- Better performance for this use case
-- Simplified deployment with each service managing its own data store
+# Build the API server
+cd ../api
+go build
+```
 
-### Key Design Features
+### Testing
 
-- Centralized data storage with prefix-based namespacing
-- Queue-based architecture for handling RNG requests
-- Efficient counters for queue management
-- Consistent interface across all services
+Running tests:
 
-## Setup and Configuration
+```bash
+# Run all tests
+task test
 
-### Requirements
+# Format code
+task fmt
 
-- Go 1.24 or later
-- I2C-enabled device (for Controller service)
+# Lint code
+task lint
+```
 
-### Environment Variables
+Testing the API:
+
+```bash
+# Get queue configuration
+curl -X GET http://localhost:8080/api/v1/config/queue
+
+# Retrieve random data in int32 format
+curl -X POST http://localhost:8080/api/v1/data \
+  -H "Content-Type: application/json" \
+  -d '{"format":"int32","chunk_size":32,"limit":10,"offset":0,"source":"fortuna"}'
+
+# Check system health
+curl -X GET http://localhost:8080/api/v1/health
+```
+
+## Environment Variables
+
+The following environment variables can be configured for each service:
 
 | Variable | Service | Description | Default |
 |----------|---------|-------------|--------|
@@ -326,91 +374,6 @@ The service uses BadgerDB as an embedded database solution for all components. T
 | AMPLIFICATION_FACTOR | Fortuna | Data amplification multiplier | 4 |
 | SEED_COUNT | Fortuna | Number of TRNG seeds to use | 3 |
 
-## Deployment
-
-Each service can be deployed in a separate container or as standalone services.
-
-```bash
-# Build all services
-go build -o rng-api ./cmd/api
-go build -o rng-controller ./cmd/controller
-go build -o rng-fortuna ./cmd/fortuna
-```
-
-## API Reference
-
-### API Service
-
-- `GET /api/v1/config/queue`: Get queue configuration
-- `PUT /api/v1/config/queue`: Update queue configuration
-- `GET /api/v1/config/consumption`: Get consumption behavior configuration
-- `PUT /api/v1/config/consumption`: Update consumption behavior configuration
-- `POST /api/v1/data`: Retrieve random data in specified format
-- `GET /api/v1/status`: Get system status and queue information
-- `GET /api/v1/health`: Check health of all system components
-- `GET /swagger/*any`: Swagger documentation
-
-### Controller Service
-
-- `GET /health`: Check controller health
-- `GET /info`: Get controller information
-- `GET /generate`: Generate a new TRNG hash
-
-### Fortuna Service
-
-- `GET /health`: Check Fortuna health
-- `GET /info`: Get Fortuna information
-- `GET /generate`: Generate Fortuna random data
-# Run tests
-task test
-
-# Tidy Go modules
-task tidy
-
-# Format code
-task fmt
-
-# Build Docker images
-task docker-build
-
-# Start all services
-task docker-up
-
-# Stop all services
-task docker-down
-```
-
-### Building from Source Manually
-
-```bash
-# Build the controller
-cd cmd/controller
-go build
-
-# Build the Fortuna processor
-cd ../fortuna
-go build
-
-# Build the API server
-cd ../api
-go build
-```
-
-### Testing the API
-
-```bash
-# Get queue configuration
-curl -X GET http://localhost:8080/api/v1/config/queue
-
-# Retrieve random data in int32 format
-curl -X POST http://localhost:8080/api/v1/data \
-  -H "Content-Type: application/json" \
-  -d '{"format":"int32","chunk_size":32,"limit":10,"offset":0,"source":"fortuna"}'
-
-# Check system health
-curl -X GET http://localhost:8080/api/v1/health
-```
-
 ## Project Goals
 
 Lokey aims to democratize access to true randomness with these key objectives:
@@ -425,4 +388,4 @@ Future versions may incorporate additional entropy sources or higher-performance
 
 ## License
 
-MIT
+This project is licensed under the MIT License - see the LICENSE file for details.
