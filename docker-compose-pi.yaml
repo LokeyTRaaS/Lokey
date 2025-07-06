@@ -1,0 +1,74 @@
+version: '3.8'
+
+# This is a templated docker-compose file for running Lokey on a Raspberry Pi Zero 2W
+# Replace ${DEV_MACHINE_IP} with your development machine's IP address or use environment variables
+
+services:
+  controller:
+    image: ${DEV_MACHINE_IP:-localhost}:5000/lokey-controller:latest
+    ports:
+      - "8081:8081"
+    environment:
+      - PORT=8081
+      - I2C_BUS_NUMBER=1
+      - DB_PATH=/data/trng.db
+      - HASH_INTERVAL_MS=1000
+      - TRNG_QUEUE_SIZE=100
+    volumes:
+      - trng-data:/data
+    devices:
+      - /dev/i2c-1:/dev/i2c-1
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+
+  fortuna:
+    image: ${DEV_MACHINE_IP:-localhost}:5000/lokey-fortuna:latest
+    ports:
+      - "8082:8082"
+    environment:
+      - PORT=8082
+      - DB_PATH=/data/fortuna.db
+      - CONTROLLER_URL=http://controller:8081
+      - PROCESS_INTERVAL_MS=5000
+      - FORTUNA_QUEUE_SIZE=100
+      - AMPLIFICATION_FACTOR=4
+      - SEED_COUNT=3
+    volumes:
+      - fortuna-data:/data
+    depends_on:
+      - controller
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+
+  api:
+    image: ${DEV_MACHINE_IP:-localhost}:5000/lokey-api:latest
+    ports:
+      - "8080:8080"
+    environment:
+      - PORT=8080
+      - DB_PATH=/data/api.db
+      - CONTROLLER_ADDR=http://controller:8081
+      - FORTUNA_ADDR=http://fortuna:8082
+      - TRNG_QUEUE_SIZE=100
+      - FORTUNA_QUEUE_SIZE=100
+    volumes:
+      - api-data:/data
+    depends_on:
+      - controller
+      - fortuna
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+
+volumes:
+  trng-data:
+  fortuna-data:
+  api-data:

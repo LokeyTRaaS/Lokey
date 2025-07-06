@@ -1,0 +1,7 @@
+[registry."lokey-registry:5000"]
+  insecure = true
+  http = true
+
+
+# insecure-entitlements allows insecure entitlements, disabled by default.
+insecure-entitlements = [ "network.host", "security.insecure" ]

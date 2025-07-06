@@ -85,19 +85,164 @@ Each service operates independently and communicates via HTTP APIs, with shared 
 - Docker and Docker Compose
 - ATECC608A connected via I2C
 - Go 1.24+ (for development)
+- Docker Buildx (for cross-compiling ARM images)
 
-### Running the System
+### Running Locally (Development Machine)
 
 1. Clone the repository
 2. Configure I2C settings in `docker-compose.yaml`
 3. Start the services:
 
 ```bash
-docker-compose up -d
+docker compose up -d
 ```
 
 4. Access the API at http://localhost:8080
 5. View API documentation at http://localhost:8080/swagger/index.html
+
+### Cross-Compilation & Raspberry Pi Deployment
+
+Lokey can be cross-compiled on a development machine and deployed to a Raspberry Pi using the following workflow:
+
+#### 1. Development Machine Setup
+
+1. Create a buildx.toml configuration file:
+
+```toml
+[registry."lokey-registry:5000"]
+  insecure = true
+  http = true
+
+# insecure-entitlements allows insecure entitlements, disabled by default.
+insecure-entitlements = [ "network.host", "security.insecure" ]
+```
+
+2. Build ARM images and push to local registry:
+
+```bash
+# Sets up a local registry and builds ARM images
+task build_images_and_registry
+```
+
+This task:
+- Creates a Docker network for registry communication
+- Runs a local registry container
+- Sets up a Buildx builder with appropriate configuration
+- Cross-compiles ARM-compatible images
+- Pushes the images to the local registry
+
+#### 2. Raspberry Pi Configuration
+
+1. Edit the Docker daemon configuration on the Raspberry Pi:
+
+```bash
+sudo nano /etc/docker/daemon.json
+```
+
+2. Add the development machine's IP to the insecure registries list:
+
+```json
+{
+  "insecure-registries": ["192.168.1.100:5000"]
+}
+```
+
+3. Restart Docker service:
+
+```bash
+sudo systemctl restart docker
+```
+
+#### 3. Deployment to Raspberry Pi
+
+1. Create a docker-compose.yaml on the Raspberry Pi with the following content:
+
+```yaml
+version: '3.8'
+
+services:
+  controller:
+    image: 192.168.1.100:5000/lokey-controller:latest
+    ports:
+      - "8081:8081"
+    environment:
+      - PORT=8081
+      - I2C_BUS_NUMBER=1
+      - DB_PATH=/data/trng.db
+      - HASH_INTERVAL_MS=1000
+      - TRNG_QUEUE_SIZE=100
+    volumes:
+      - trng-data:/data
+    devices:
+      - /dev/i2c-1:/dev/i2c-1
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+
+  fortuna:
+    image: 192.168.1.100:5000/lokey-fortuna:latest
+    ports:
+      - "8082:8082"
+    environment:
+      - PORT=8082
+      - DB_PATH=/data/fortuna.db
+      - CONTROLLER_URL=http://controller:8081
+      - PROCESS_INTERVAL_MS=5000
+      - FORTUNA_QUEUE_SIZE=100
+      - AMPLIFICATION_FACTOR=4
+      - SEED_COUNT=3
+    volumes:
+      - fortuna-data:/data
+    depends_on:
+      - controller
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+
+  api:
+    image: 192.168.1.100:5000/lokey-api:latest
+    ports:
+      - "8080:8080"
+    environment:
+      - PORT=8080
+      - DB_PATH=/data/api.db
+      - CONTROLLER_ADDR=http://controller:8081
+      - FORTUNA_ADDR=http://fortuna:8082
+      - TRNG_QUEUE_SIZE=100
+      - FORTUNA_QUEUE_SIZE=100
+    volumes:
+      - api-data:/data
+    depends_on:
+      - controller
+      - fortuna
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+volumes:
+  trng-data:
+  fortuna-data:
+  api-data:
+```
+
+2. Pull and start the services:
+
+```bash
+docker compose pull
+docker compose up -d
+```
+
+3. Verify the deployment:
+
+```bash
+docker compose ps
+curl http://localhost:8080/api/v1/health
+```
 
 ## Hardware
 
@@ -125,6 +270,9 @@ task build
 task build-controller
 task build-api
 task build-fortuna
+
+# Cross-compilation for Raspberry Pi
+task build_images_and_registry  # Build ARM images and push to local registry
 # RNG Service
 
 This service provides true random number generation (TRNG) and Fortuna-based random number generation.
