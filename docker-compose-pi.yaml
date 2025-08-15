@@ -6,6 +6,7 @@ version: '3.8'
 services:
   controller:
     image: ${DEV_MACHINE_IP:-localhost}:5000/lokey-controller:latest
+    privileged: true
     ports:
       - "8081:8081"
     environment:
@@ -14,6 +15,7 @@ services:
       - DB_PATH=/data/trng.db
       - HASH_INTERVAL_MS=1000
       - TRNG_QUEUE_SIZE=100
+      - FORCE_CONFIG=true
     volumes:
       - trng-data:/data
     devices:
