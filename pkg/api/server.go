@@ -78,6 +78,20 @@ func NewServer(db database.DBHandler, controllerAddr, fortunaAddr string, port i
 
 // setupRoutes configures the API routes
 func (s *Server) setupRoutes() {
+	// Add CORS middleware
+	s.router.Use(func(c *gin.Context) {
+		c.Header("Access-Control-Allow-Origin", "*")
+		c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+		c.Header("Access-Control-Allow-Headers", "Content-Type, Authorization, Accept")
+
+		if c.Request.Method == "OPTIONS" {
+			c.AbortWithStatus(204)
+			return
+		}
+
+		c.Next()
+	})
+
 	// Swagger docs
 	s.router.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
 
@@ -111,7 +125,7 @@ func (s *Server) Run() error {
 // @Produce         json
 // @Success         200 {object} QueueConfig
 // @Failure         500 {object} map[string]string "Database error"
-// @Router          /api/v1/config/queue [get]
+// @Router          /config/queue [get]
 func (s *Server) GetQueueConfig(c *gin.Context) {
 	// Check if database is initialized properly
 	if !s.db.HealthCheck() {
@@ -166,7 +180,7 @@ func (s *Server) GetQueueConfig(c *gin.Context) {
 // @Success 200 {object} QueueConfig
 // @Failure 400 {object} map[string]string "Invalid request"
 // @Failure 500 {object} map[string]string "Server error"
-// @Router /api/v1/config/queue [put]
+// @Router /config/queue [put]
 func (s *Server) UpdateQueueConfig(c *gin.Context) {
 	var config QueueConfig
 	if err := c.ShouldBindJSON(&config); err != nil {
@@ -196,7 +210,7 @@ func (s *Server) UpdateQueueConfig(c *gin.Context) {
 // @Accept json
 // @Produce json
 // @Success 200 {object} ConsumptionConfig
-// @Router /api/v1/config/consumption [get]
+// @Router /config/consumption [get]
 func (s *Server) GetConsumptionConfig(c *gin.Context) {
 	// For now, this is hardcoded since it's stored in memory
 	// In a real implementation, this would be stored in a configuration store
@@ -215,7 +229,7 @@ func (s *Server) GetConsumptionConfig(c *gin.Context) {
 // @Param config body ConsumptionConfig true "Consumption configuration"
 // @Success 200 {object} ConsumptionConfig
 // @Failure 400 {object} map[string]string "Invalid request"
-// @Router /api/v1/config/consumption [put]
+// @Router /config/consumption [put]
 func (s *Server) UpdateConsumptionConfig(c *gin.Context) {
 	var config ConsumptionConfig
 	if err := c.ShouldBindJSON(&config); err != nil {
@@ -240,7 +254,7 @@ func (s *Server) UpdateConsumptionConfig(c *gin.Context) {
 // @Failure 400 {object} map[string]string "Invalid request"
 // @Failure 404 {object} map[string]string "Not enough data available"
 // @Failure 500 {object} map[string]string "Server error"
-// @Router /api/v1/data [post]
+// @Router /data [post]
 func (s *Server) GetRandomData(c *gin.Context) {
 	var request DataRequest
 	if err := c.ShouldBindJSON(&request); err != nil {
@@ -383,7 +397,7 @@ func convertToIntFormat(data [][]byte, chunkSize, bytesPerValue int, signed bool
 // @Produce         json
 // @Success         200 {object} map[string]interface{}
 // @Failure         500 {object} map[string]string "Server error"
-// @Router          /api/v1/status [get]
+// @Router          /status [get]
 func (s *Server) GetStatus(c *gin.Context) {
 	stats, err := s.db.GetStats()
 	if err != nil {
@@ -400,7 +414,7 @@ func (s *Server) GetStatus(c *gin.Context) {
 // @Accept          json
 // @Produce         json
 // @Success         200 {object} HealthCheckResponse
-// @Router          /api/v1/health [get]
+// @Router          /health [get]
 func (s *Server) HealthCheck(c *gin.Context) {
 	// Check database health
 	dbHealthy := s.db.HealthCheck()
