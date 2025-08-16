@@ -1,4 +1,4 @@
-# Lokey: True Random Number Generation Service
+# LoKey: True Random Number Generation Service
 
 <img src="docs/logo.jpeg" alt="Description" width="300"/>
 

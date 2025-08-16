@@ -9,24 +9,26 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/go-playground/validator/v10"
+	_ "github.com/lokey/rng-service/pkg/api/docs" // Import generated swagger docs
 	"github.com/lokey/rng-service/pkg/database"
 	swaggerFiles "github.com/swaggo/files"
 	ginSwagger "github.com/swaggo/gin-swagger"
 )
 
-// @title RNG Service API
-// @version 1.0
-// @description API for accessing hardware-generated random data
-// @termsOfService http://swagger.io/terms/
+// @title           Lokey RNG Service API
+// @version         1.0
+// @description     API for accessing hardware-generated true random data
+// @termsOfService  http://swagger.io/terms/
 
-// @contact.name API Support
-// @contact.email support@rng-service.com
+// @contact.name    API Support
+// @contact.email   support@rng-service.com
 
-// @license.name Apache 2.0
-// @license.url http://www.apache.org/licenses/LICENSE-2.0.html
+// @license.name    Apache 2.0
+// @license.url     http://www.apache.org/licenses/LICENSE-2.0.html
 
-// @host localhost:8080
-// @BasePath /api/v1
+// @host            localhost:8080
+// @BasePath        /api/v1
+// @schemes         http https
 
 // Server represents the API server
 type Server struct {
@@ -118,16 +120,14 @@ func (s *Server) Run() error {
 	return s.router.Run(fmt.Sprintf(":%d", s.port))
 }
 
-// @Summary Get queue configuration
-// @Description Get current queue size configuration for TRNG and Fortuna data
-// @Tags configuration
-// @Accept json
-// @Produce json
-// @Success 200 {object} QueueConfig
-// @Router /config/queue [get]
-// GetQueueConfig handles GET requests for queue configuration
-// GetQueueConfig handles GET requests for queue configuration
-// GetQueueConfig handles GET requests for queue configuration
+// @Summary         Get queue configuration
+// @Description     Get current queue size configuration for TRNG and Fortuna data
+// @Tags            configuration
+// @Accept          json
+// @Produce         json
+// @Success         200 {object} QueueConfig
+// @Failure         500 {object} map[string]string "Database error"
+// @Router          /api/v1/config/queue [get]
 func (s *Server) GetQueueConfig(c *gin.Context) {
 	// Check if database is initialized properly
 	if !s.db.HealthCheck() {
@@ -182,7 +182,7 @@ func (s *Server) GetQueueConfig(c *gin.Context) {
 // @Success 200 {object} QueueConfig
 // @Failure 400 {object} map[string]string "Invalid request"
 // @Failure 500 {object} map[string]string "Server error"
-// @Router /config/queue [put]
+// @Router /api/v1/config/queue [put]
 func (s *Server) UpdateQueueConfig(c *gin.Context) {
 	var config QueueConfig
 	if err := c.ShouldBindJSON(&config); err != nil {
@@ -212,7 +212,7 @@ func (s *Server) UpdateQueueConfig(c *gin.Context) {
 // @Accept json
 // @Produce json
 // @Success 200 {object} ConsumptionConfig
-// @Router /config/consumption [get]
+// @Router /api/v1/config/consumption [get]
 func (s *Server) GetConsumptionConfig(c *gin.Context) {
 	// For now, this is hardcoded since it's stored in memory
 	// In a real implementation, this would be stored in a configuration store
@@ -231,7 +231,7 @@ func (s *Server) GetConsumptionConfig(c *gin.Context) {
 // @Param config body ConsumptionConfig true "Consumption configuration"
 // @Success 200 {object} ConsumptionConfig
 // @Failure 400 {object} map[string]string "Invalid request"
-// @Router /config/consumption [put]
+// @Router /api/v1/config/consumption [put]
 func (s *Server) UpdateConsumptionConfig(c *gin.Context) {
 	var config ConsumptionConfig
 	if err := c.ShouldBindJSON(&config); err != nil {
@@ -256,7 +256,7 @@ func (s *Server) UpdateConsumptionConfig(c *gin.Context) {
 // @Failure 400 {object} map[string]string "Invalid request"
 // @Failure 404 {object} map[string]string "Not enough data available"
 // @Failure 500 {object} map[string]string "Server error"
-// @Router /data [post]
+// @Router /api/v1/data [post]
 func (s *Server) GetRandomData(c *gin.Context) {
 	var request DataRequest
 	if err := c.ShouldBindJSON(&request); err != nil {
@@ -392,14 +392,14 @@ func convertToIntFormat(data [][]byte, chunkSize, bytesPerValue int, signed bool
 	return result
 }
 
-// @Summary Get system status
-// @Description Get status of TRNG and Fortuna queues and data availability
-// @Tags status
-// @Accept json
-// @Produce json
-// @Success 200 {object} map[string]interface{}
-// @Failure 500 {object} map[string]string "Server error"
-// @Router /status [get]
+// @Summary         Get system status
+// @Description     Get status of TRNG and Fortuna queues and data availability
+// @Tags            status
+// @Accept          json
+// @Produce         json
+// @Success         200 {object} map[string]interface{}
+// @Failure         500 {object} map[string]string "Server error"
+// @Router          /api/v1/status [get]
 func (s *Server) GetStatus(c *gin.Context) {
 	stats, err := s.db.GetStats()
 	if err != nil {
@@ -410,13 +410,13 @@ func (s *Server) GetStatus(c *gin.Context) {
 	c.JSON(http.StatusOK, stats)
 }
 
-// @Summary Check system health
-// @Description Check health of all system components
-// @Tags status
-// @Accept json
-// @Produce json
-// @Success 200 {object} HealthCheckResponse
-// @Router /health [get]
+// @Summary         Check system health
+// @Description     Check health of all system components
+// @Tags            status
+// @Accept          json
+// @Produce         json
+// @Success         200 {object} HealthCheckResponse
+// @Router          /api/v1/health [get]
 func (s *Server) HealthCheck(c *gin.Context) {
 	// Check database health
 	dbHealthy := s.db.HealthCheck()

@@ -5,6 +5,9 @@ WORKDIR /app
 # Install build dependencies for CGO and I2C
 RUN apk add --no-cache gcc musl-dev linux-headers
 
+# Install swag for Swagger documentation generation
+RUN go install github.com/swaggo/swag/cmd/swag@latest
+
 # Copy the module files first to leverage Docker cache
 COPY go.mod go.sum ./
 COPY cmd/api/go.mod cmd/api/go.sum* ./cmd/api/
@@ -14,6 +17,16 @@ RUN go mod download && cd cmd/api && go mod download
 
 # Copy the rest of the source code
 COPY . .
+
+# Generate Swagger documentation
+# Use absolute paths to avoid any path resolution issues
+WORKDIR /app
+RUN ls -la && \
+    pwd && \
+    swag init --parseDependency --parseInternal \
+    --generalInfo main.go \
+    --dir ./cmd/api/,./pkg/api \
+    --output ./pkg/api/docs
 
 # Build the application with CGO enabled
 # Using -trimpath for smaller binaries and more reproducible builds
@@ -30,6 +43,8 @@ WORKDIR /app
 
 # Copy the binary from the builder stage
 COPY --from=builder /app/api /app/api
+# Copy the generated Swagger docs
+COPY --from=builder /app/pkg/api/docs /app/pkg/api/docs
 
 # Create data directory
 RUN mkdir -p /data
