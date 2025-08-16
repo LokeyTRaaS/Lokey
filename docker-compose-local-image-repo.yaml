@@ -13,8 +13,8 @@ services:
       - DB_PATH=/data/api.db
       - CONTROLLER_ADDR=http://controller:8081
       - FORTUNA_ADDR=http://fortuna:8082
-      - TRNG_QUEUE_SIZE=1000000
-      - FORTUNA_QUEUE_SIZE=1000000
+      - TRNG_QUEUE_SIZE=100000
+      - FORTUNA_QUEUE_SIZE=100000
       - TRNG_POLL_INTERVAL_MS=100
       - FORTUNA_POLL_INTERVAL_MS=100
     image: ${DEV_MACHINE_IP:-localhost}:5000/lokey-api:latest
@@ -33,8 +33,10 @@ services:
     environment:
       - PORT=8081
       - I2C_BUS_NUMBER=1
-      - FORCE_CONFIG=false
+      - FORCE_CONFIG=true
     image: ${DEV_MACHINE_IP:-localhost}:5000/lokey-controller:latest
+    ports:
+      - '8081:8081'
     privileged: true
     restart: unless-stopped
   fortuna:
@@ -48,6 +50,9 @@ services:
       - PORT=8082
       - AMPLIFICATION_FACTOR=4
     image: ${DEV_MACHINE_IP:-localhost}:5000/lokey-fortuna:latest
+    ports:
+      - '8082:8082'
     restart: unless-stopped
 volumes:
-  api-data: null
+  api-data: null# This is a templated docker-compose file for running Lokey on a Raspberry Pi Zero 2W
+# Replace ${DEV_MACHINE_IP} with your development machine's IP address or use environment variables
