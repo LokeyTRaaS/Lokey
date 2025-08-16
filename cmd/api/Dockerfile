@@ -21,9 +21,7 @@ COPY . .
 # Generate Swagger documentation
 # Use absolute paths to avoid any path resolution issues
 WORKDIR /app
-RUN ls -la && \
-    pwd && \
-    swag init --parseDependency --parseInternal \
+RUN swag init --parseDependency --parseInternal \
     --generalInfo main.go \
     --dir ./cmd/api/,./pkg/api \
     --output ./pkg/api/docs

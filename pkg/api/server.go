@@ -15,22 +15,6 @@ import (
 	ginSwagger "github.com/swaggo/gin-swagger"
 )
 
-// @title           Lokey RNG Service API
-// @version         1.0
-// @description     API for accessing hardware-generated true random data
-// @termsOfService  http://swagger.io/terms/
-
-// @contact.name    API Support
-// @contact.email   support@rng-service.com
-
-// @license.name    Apache 2.0
-// @license.url     http://www.apache.org/licenses/LICENSE-2.0.html
-
-// @host            localhost:8080
-// @BasePath        /api/v1
-// @schemes         http https
-
-// Server represents the API server
 type Server struct {
 	db             database.DBHandler
 	controllerAddr string

@@ -13,6 +13,40 @@ import (
 	"github.com/lokey/rng-service/pkg/database"
 )
 
+// @title           LoKey: True Random Number Generation Service API
+// @version         1.0
+// @description     LoKey is a high-availability, high-bandwidth true random number generation service named after Loki, the Norse god of chaos, reflecting the unpredictable nature of true randomness. This project provides affordable and accessible hardware-based true randomness through off-the-shelf components with a Go implementation.
+// @description
+// @description     ## Hardware Architecture
+// @description     The system uses a Raspberry Pi Zero 2W and an ATECC608A cryptographic chip, creating a hardware-based solution with a modest bill of materials costing approximately €50. This provides true random number generation (TRNG) from physical entropy sources rather than algorithmic pseudo-random generation.
+// @description
+// @description     ## System Architecture
+// @description     LoKey consists of three microservices:
+// @description     - **Controller Service**: Interfaces with the ATECC608A chip to harvest true random numbers and process SHA-256 hashes
+// @description     - **Fortuna Service**: Amplifies the entropy using the Fortuna algorithm for enhanced randomness
+// @description     - **API Service**: Provides endpoints for configuration and both raw TRNG and Fortuna-amplified data retrieval
+// @description
+// @description     ## Use Cases
+// @description     This service is valuable for cryptographic key generation, password management, blockchain applications, Monte Carlo simulations, gaming systems, IoT device authentication, secure communications, financial services, and scientific research requiring provably random data.
+// @description
+// @description     ## Data Formats
+// @description     Supports multiple output formats: int8, int16, int32, int64, uint8, uint16, uint32, uint64, and raw binary data with configurable chunk sizes and pagination.
+// @description
+// @description     ## Repository & Support
+// @description     For issues, feature requests, contributions, and detailed hardware setup instructions, visit: https://github.com/psmgeelen/lokey
+
+// @contact.name    GitHub Repository
+// @contact.url     https://github.com/psmgeelen/lokey
+
+// @license.name    MIT License
+// @license.url     https://opensource.org/licenses/MIT
+
+// @host            localhost:8080
+// @BasePath        /api/v1
+// @schemes         http https
+
+// Server represents the API server
+
 const (
 	DefaultPort                = 8080
 	DefaultDbPath              = "/data/api.db"
