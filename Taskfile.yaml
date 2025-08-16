@@ -177,6 +177,47 @@ tasks:
       - task: build
       - echo "=== All tasks completed ==="
 
+  build_controller:
+    cmds:
+      - >
+        docker buildx build --platform linux/arm64/v8
+        -t lokey-registry:5000/lokey-controller:latest
+        -f cmd/controller/Dockerfile
+        --push
+        --allow security.insecure
+        --allow network.host
+        .
+
+  build_api:
+    cmds:
+      - >
+        docker buildx build --platform linux/arm64/v8
+        -t lokey-registry:5000/lokey-api:latest
+        -f cmd/api/Dockerfile
+        --push
+        --allow security.insecure
+        --allow network.host
+        .
+
+  build_fortuna:
+    cmds:
+      - >
+        docker buildx build --platform linux/arm64/v8
+        -t lokey-registry:5000/lokey-fortuna:latest
+        -f cmd/fortuna/Dockerfile
+        --push
+        --allow security.insecure
+        --allow network.host
+        .
+
+  _build_all_containers:
+    desc: Build all containers in parallel
+    deps:
+      - build_controller
+      - build_api
+      - build_fortuna
+    run: once
+
   build_images_and_registry:
     cmds:
       - docker network create lokey-net || true
@@ -185,6 +226,4 @@ tasks:
       - docker buildx rm pi-builder || true
       - docker buildx create --config buildx.toml --name pi-builder --use --driver docker-container --buildkitd-flags '--allow-insecure-entitlement network.host --allow-insecure-entitlement security.insecure' --driver-opt network=lokey-net
       - docker buildx inspect --bootstrap
-      - docker buildx build  --platform linux/arm64/v8 -t lokey-registry:5000/lokey-controller:latest -f cmd/controller/Dockerfile --push --allow security.insecure --allow network.host .
-      - docker buildx build --platform linux/arm64/v8 -t lokey-registry:5000/lokey-api:latest -f cmd/api/Dockerfile --push --allow security.insecure --allow network.host .
-      - docker buildx build --platform linux/arm64/v8 -t lokey-registry:5000/lokey-fortuna:latest -f cmd/fortuna/Dockerfile --push --allow security.insecure --allow network.host .
+      - task: _build_all_containers
