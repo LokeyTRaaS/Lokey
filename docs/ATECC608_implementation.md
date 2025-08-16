@@ -309,12 +309,13 @@ Multiple layers of error handling:
 ## Integration with Lokey Service
 
 The controller integrates with the broader system:
-1. **Background Hash Generation**: Runs a ticker-based generator at configurable intervals
+1. **Stateless Design**: Operates as a pure service that generates TRNG data on demand
 2. **API Endpoints**:
     - `/health`: Device health verification
-    - `/info`: Runtime statistics
-    - `/generate`: On-demand random number generation
-3. **Database Storage**: Generated random data is stored in BadgerDB for consumption by other services
+    - `/info`: Runtime information
+    - `/generate`: On-demand random number generation with configurable count
+3. **Direct Response**: Returns generated hashes directly via API response
+4. **Centralized Storage**: The API service polls the controller and stores data in a centralized BoltDB database
 
 ## Environment Configuration
 
@@ -322,8 +323,6 @@ The implementation is highly configurable through environment variables:
 - `I2C_BUS_NUMBER`: I2C bus for device communication (default: 1)
 - `DISABLE_AUTO_CONFIG`: Disables automatic configuration attempts
 - `FORCE_CONFIG`: Required to enable the irreversible configuration process
-- `HASH_INTERVAL_MS`: Milliseconds between hash generation (default: 1000)
-- `TRNG_QUEUE_SIZE`: Maximum queue size for stored random numbers (default: 100)
 
 ---
 

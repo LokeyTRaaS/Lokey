@@ -10,11 +10,6 @@ services:
     environment:
       - PORT=8081
       - I2C_BUS_NUMBER=1
-      - DB_PATH=/data/trng.db
-      - HASH_INTERVAL_MS=1000
-      - TRNG_QUEUE_SIZE=100
-    volumes:
-      - trng-data:/data
     devices:
       - /dev/i2c-1:/dev/i2c-1
     restart: unless-stopped
@@ -27,14 +22,7 @@ services:
       - "8082:8082"
     environment:
       - PORT=8082
-      - DB_PATH=/data/fortuna.db
-      - CONTROLLER_URL=http://controller:8081
-      - PROCESS_INTERVAL_MS=5000
-      - FORTUNA_QUEUE_SIZE=100
       - AMPLIFICATION_FACTOR=4
-      - SEED_COUNT=3
-    volumes:
-      - fortuna-data:/data
     depends_on:
       - controller
     restart: unless-stopped
@@ -52,6 +40,8 @@ services:
       - FORTUNA_ADDR=http://fortuna:8082
       - TRNG_QUEUE_SIZE=100
       - FORTUNA_QUEUE_SIZE=100
+      - TRNG_POLL_INTERVAL_MS=1000
+      - FORTUNA_POLL_INTERVAL_MS=5000
     volumes:
       - api-data:/data
     depends_on:
@@ -59,6 +49,4 @@ services:
       - fortuna
     restart: unless-stopped
 volumes:
-  trng-data:
-  fortuna-data:
   api-data:

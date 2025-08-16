@@ -24,12 +24,6 @@ const (
 	cmdConfig = 0x47 // Config command
 	cmdWrite  = 0x12 // Write command
 
-	// Response codes
-	respSuccess        = 0x00
-	respChecksumError  = 0x01
-	respParseError     = 0x03
-	respExecutionError = 0x0F
-
 	// Timing constants (from Adafruit implementation)
 	wakeupDelay    = 1 * time.Millisecond  // 1ms like Adafruit
 	randomExecTime = 23 * time.Millisecond // 23ms for random command
@@ -274,8 +268,8 @@ func (c *Controller) wakeup() {
 	// Adafruit approach: try general call but ignore errors
 	wakeupI2C, err := i2c.NewI2C(0x00, c.busNumber)
 	if err == nil {
-		// Try to send wakeup, ignore if it fails
-		wakeupI2C.WriteBytes([]byte{0x00})
+		// Try to send wakeup, explicitly ignore if it fails
+		_, _ = wakeupI2C.WriteBytes([]byte{0x00}) // Explicitly ignoring error for wakeup
 		wakeupI2C.Close()
 	}
 	// Always wait after wakeup attempt
@@ -284,13 +278,13 @@ func (c *Controller) wakeup() {
 
 // idle puts device in idle mode (following Adafruit)
 func (c *Controller) idle() {
-	c.i2c.WriteBytes([]byte{cmdIdle})
+	_, _ = c.i2c.WriteBytes([]byte{cmdIdle}) // Explicitly ignoring error for idle command
 	time.Sleep(wakeupDelay)
 }
 
 // sleep puts device in sleep mode (following Adafruit)
 func (c *Controller) sleep() {
-	c.i2c.WriteBytes([]byte{cmdSleep})
+	_, _ = c.i2c.WriteBytes([]byte{cmdSleep}) // Explicitly ignoring error for sleep command
 	time.Sleep(wakeupDelay)
 }
 

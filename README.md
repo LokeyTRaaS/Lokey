@@ -139,22 +139,11 @@ Lokey consists of three main microservices:
 
 The system uses a microservices architecture with three containerized applications that communicate via HTTP APIs:
 
-- **Controller Service**: Generates random data using the ATECC608A hardware TRNG
-- **Fortuna Service**: Amplifies random data using the Fortuna algorithm
-- **API Service**: Provides a unified API for configuration and data retrieval
+- **Controller Service (Stateless)**: Interfaces with the ATECC608A hardware to generate TRNG data on demand
+- **Fortuna Service (Stateless)**: Provides cryptographic amplification of random data using the Fortuna algorithm
+- **API Service (Stateful)**: Centralizes all data storage, manages polling, and provides a unified API for configuration and data retrieval
 
-Each service operates independently, with shared volumes for database access.
-
-### Database Design
-
-The system uses BadgerDB as an embedded database solution for all components, providing:
-
-- Embedded key-value storage optimized for SSDs
-- No external database dependencies
-- Consistent data model across all services
-- Better performance for this specific use case
-- Queue-based architecture for handling RNG requests
-- Efficient counters for queue management
+The architecture employs a centralized database model where only the API service maintains persistent storage, while the Controller and Fortuna services operate as stateless microservices.
 
 ## Features
 
@@ -162,7 +151,9 @@ The system uses BadgerDB as an embedded database solution for all components, pr
 - **High Availability**: Reliable and continuously available random number generation
 - **Dual Access Modes**: Raw TRNG and Fortuna-amplified randomness options
 - **Cryptographic Amplification**: Fortuna algorithm implementation for enhanced entropy
-- **Efficient Storage**: Queue-based storage with configurable sizes
+- **Centralized Storage**: Single database with queue-based storage and configurable sizes
+- **Stateless Services**: Controller and Fortuna services operate as stateless microservices
+- **Configurable Polling**: Adjustable intervals for TRNG and Fortuna data generation
 - **Multiple Data Formats**: Support for various formats including int8, int16, int32, int64, uint8, uint16, uint32, uint64, and binary
 - **Flexible Consumption**: Configurable consumption behavior (e.g., delete-on-read)
 - **Health Monitoring**: Comprehensive system health checks
@@ -177,6 +168,8 @@ The system uses BadgerDB as an embedded database solution for all components, pr
 - `PUT /api/v1/config/queue`: Update queue configuration
 - `GET /api/v1/config/consumption`: Get consumption behavior configuration
 - `PUT /api/v1/config/consumption`: Update consumption behavior configuration
+- `GET /api/v1/config/polling`: Get polling intervals configuration
+- `PUT /api/v1/config/polling`: Update polling intervals configuration
 
 **Data Endpoints:**
 - `POST /api/v1/data`: Retrieve random data in specified format
@@ -186,17 +179,19 @@ The system uses BadgerDB as an embedded database solution for all components, pr
 - `GET /api/v1/health`: Check health of all system components
 - `GET /swagger/*any`: Swagger documentation
 
-### Controller Service
+### Controller Service (Stateless)
 
 - `GET /health`: Check controller health
 - `GET /info`: Get controller information
-- `GET /generate`: Generate a new TRNG hash
+- `GET /generate`: Generate new TRNG hashes (supports count parameter)
 
-### Fortuna Service
+### Fortuna Service (Stateless)
 
 - `GET /health`: Check Fortuna health
 - `GET /info`: Get Fortuna information
 - `GET /generate`: Generate Fortuna random data
+- `POST /seed`: Seed the Fortuna generator with TRNG data
+- `POST /amplify`: Amplify provided seed data using Fortuna algorithm
 
 ## Getting Started
 
@@ -289,11 +284,6 @@ Lokey can be cross-compiled on a development machine and deployed to a Raspberry
        environment:
          - PORT=8081
          - I2C_BUS_NUMBER=1
-         - DB_PATH=/data/trng.db
-         - HASH_INTERVAL_MS=1000
-         - TRNG_QUEUE_SIZE=100
-       volumes:
-         - trng-data:/data
        devices:
          - /dev/i2c-1:/dev/i2c-1
        restart: unless-stopped
@@ -304,14 +294,7 @@ Lokey can be cross-compiled on a development machine and deployed to a Raspberry
          - "8082:8082"
        environment:
          - PORT=8082
-         - DB_PATH=/data/fortuna.db
-         - CONTROLLER_URL=http://controller:8081
-         - PROCESS_INTERVAL_MS=5000
-         - FORTUNA_QUEUE_SIZE=100
          - AMPLIFICATION_FACTOR=4
-         - SEED_COUNT=3
-       volumes:
-         - fortuna-data:/data
        depends_on:
          - controller
        restart: unless-stopped
@@ -327,6 +310,8 @@ Lokey can be cross-compiled on a development machine and deployed to a Raspberry
          - FORTUNA_ADDR=http://fortuna:8082
          - TRNG_QUEUE_SIZE=100
          - FORTUNA_QUEUE_SIZE=100
+         - TRNG_POLL_INTERVAL_MS=1000
+         - FORTUNA_POLL_INTERVAL_MS=5000
        volumes:
          - api-data:/data
        depends_on:
@@ -334,8 +319,6 @@ Lokey can be cross-compiled on a development machine and deployed to a Raspberry
          - fortuna
        restart: unless-stopped
    volumes:
-     trng-data:
-     fortuna-data:
      api-data:
    ```
 
@@ -448,17 +431,15 @@ The following environment variables can be configured for each service:
 | Variable | Service | Description | Default |
 |----------|---------|-------------|--------|
 | PORT | All | HTTP port | 8080/8081/8082 |
-| DB_PATH | All | Path to BadgerDB storage | Service-specific |
+| DB_PATH | API | Path to BoltDB storage | /data/api.db |
 | CONTROLLER_ADDR | API | Controller service URL | http://controller:8081 |
 | FORTUNA_ADDR | API | Fortuna service URL | http://fortuna:8082 |
-| CONTROLLER_URL | Fortuna | Controller service URL | http://controller:8081 |
-| TRNG_QUEUE_SIZE | API, Controller | TRNG request queue size | 100 |
-| FORTUNA_QUEUE_SIZE | API, Fortuna | Fortuna request queue size | 100 |
+| TRNG_QUEUE_SIZE | API | TRNG data queue size | 100 |
+| FORTUNA_QUEUE_SIZE | API | Fortuna data queue size | 100 |
+| TRNG_POLL_INTERVAL_MS | API | Interval between TRNG polling (ms) | 1000 |
+| FORTUNA_POLL_INTERVAL_MS | API | Interval between Fortuna generation (ms) | 5000 |
 | I2C_BUS_NUMBER | Controller | I2C bus number for ATECC608A | 1 |
-| HASH_INTERVAL_MS | Controller | Interval between hash generations | 1000 |
-| PROCESS_INTERVAL_MS | Fortuna | Interval between Fortuna generations | 5000 |
 | AMPLIFICATION_FACTOR | Fortuna | Data amplification multiplier | 4 |
-| SEED_COUNT | Fortuna | Number of TRNG seeds to use | 3 |
 
 ## Project Goals
 

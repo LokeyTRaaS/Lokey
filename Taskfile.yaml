@@ -185,6 +185,6 @@ tasks:
       - docker buildx rm pi-builder || true
       - docker buildx create --config buildx.toml --name pi-builder --use --driver docker-container --buildkitd-flags '--allow-insecure-entitlement network.host --allow-insecure-entitlement security.insecure' --driver-opt network=lokey-net
       - docker buildx inspect --bootstrap
-      - docker buildx build  --platform linux/arm/v7 -t lokey-registry:5000/lokey-controller:latest -f cmd/controller/Dockerfile --push --allow security.insecure --allow network.host .
-      - docker buildx build --platform linux/arm/v7 -t lokey-registry:5000/lokey-api:latest -f cmd/api/Dockerfile --push --allow security.insecure --allow network.host .
-      - docker buildx build --platform linux/arm/v7 -t lokey-registry:5000/lokey-fortuna:latest -f cmd/fortuna/Dockerfile --push --allow security.insecure --allow network.host .
+      - docker buildx build  --platform linux/arm64/v8 -t lokey-registry:5000/lokey-controller:latest -f cmd/controller/Dockerfile --push --allow security.insecure --allow network.host .
+      - docker buildx build --platform linux/arm64/v8 -t lokey-registry:5000/lokey-api:latest -f cmd/api/Dockerfile --push --allow security.insecure --allow network.host .
+      - docker buildx build --platform linux/arm64/v8 -t lokey-registry:5000/lokey-fortuna:latest -f cmd/fortuna/Dockerfile --push --allow security.insecure --allow network.host .

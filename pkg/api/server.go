@@ -125,19 +125,52 @@ func (s *Server) Run() error {
 // @Produce json
 // @Success 200 {object} QueueConfig
 // @Router /config/queue [get]
+// GetQueueConfig handles GET requests for queue configuration
+// GetQueueConfig handles GET requests for queue configuration
+// GetQueueConfig handles GET requests for queue configuration
 func (s *Server) GetQueueConfig(c *gin.Context) {
-	stats, err := s.db.GetStats()
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get queue configuration"})
+	// Check if database is initialized properly
+	if !s.db.HealthCheck() {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "Database is not healthy or not properly initialized",
+		})
 		return
 	}
 
-	config := QueueConfig{
-		TRNGQueueSize:    stats["trng_queue_size"].(int),
-		FortunaQueueSize: stats["fortuna_queue_size"].(int),
+	// Try to get queue info
+	queueInfo, err := s.db.GetQueueInfo()
+	if err != nil {
+		// Log the error
+		log.Printf("Error getting queue info: %v", err)
+
+		// Return default values instead of failing
+		c.JSON(http.StatusOK, QueueConfig{
+			TRNGQueueSize:    100, // Default value
+			FortunaQueueSize: 100, // Default value
+		})
+		return
 	}
 
-	c.JSON(http.StatusOK, config)
+	// Safely extract values
+	var trngSize, fortunaSize int
+
+	if trngVal, ok := queueInfo["trng_queue_capacity"]; ok {
+		trngSize = trngVal
+	} else {
+		trngSize = 100 // Default value
+	}
+
+	if fortunaVal, ok := queueInfo["fortuna_queue_capacity"]; ok {
+		fortunaSize = fortunaVal
+	} else {
+		fortunaSize = 100 // Default value
+	}
+
+	// Return the configuration
+	c.JSON(http.StatusOK, QueueConfig{
+		TRNGQueueSize:    trngSize,
+		FortunaQueueSize: fortunaSize,
+	})
 }
 
 // @Summary Update queue configuration
