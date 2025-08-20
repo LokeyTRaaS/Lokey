@@ -26,6 +26,8 @@ RUN swag init --parseDependency --parseInternal \
     --dir ./cmd/api/,./pkg/api \
     --output ./pkg/api/docs
 
+# Clean cache as this can cause issues during GO Build
+RUN go clean -cache && go clean -modcache
 # Build the application with CGO enabled
 # Using -trimpath for smaller binaries and more reproducible builds
 RUN cd cmd/api && CGO_ENABLED=1 GOOS=linux go build -x -trimpath -o /app/api

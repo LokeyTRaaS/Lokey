@@ -11,6 +11,8 @@ import (
 	"github.com/go-playground/validator/v10"
 	_ "github.com/lokey/rng-service/pkg/api/docs" // Import generated swagger docs
 	"github.com/lokey/rng-service/pkg/database"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	swaggerFiles "github.com/swaggo/files"
 	ginSwagger "github.com/swaggo/gin-swagger"
 )
@@ -22,6 +24,7 @@ type Server struct {
 	port           int
 	router         *gin.Engine
 	validate       *validator.Validate
+	metrics        *Metrics
 }
 
 // QueueConfig represents the queue configuration
@@ -55,10 +58,90 @@ type HealthCheckResponse struct {
 	} `json:"details"`
 }
 
+type Metrics struct {
+	TRNGQueueCurrent    prometheus.Gauge
+	TRNGQueueCapacity   prometheus.Gauge
+	TRNGQueuePercentage prometheus.Gauge
+	TRNGConsumed        prometheus.Gauge
+	TRNGUnconsumed      prometheus.Gauge
+
+	FortunaQueueCurrent    prometheus.Gauge
+	FortunaQueueCapacity   prometheus.Gauge
+	FortunaQueuePercentage prometheus.Gauge
+	FortunaConsumed        prometheus.Gauge
+	FortunaUnconsumed      prometheus.Gauge
+
+	DatabaseSizeBytes prometheus.Gauge
+}
+
 // NewServer creates a new API server
 func NewServer(db database.DBHandler, controllerAddr, fortunaAddr string, port int) *Server {
 	router := gin.Default()
 	validate := validator.New()
+
+	metrics := &Metrics{
+		TRNGQueueCurrent: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "trng_queue_current",
+			Help: "Current size of TRNG queue",
+		}),
+		TRNGQueueCapacity: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "trng_queue_capacity",
+			Help: "Capacity of TRNG queue",
+		}),
+		TRNGQueuePercentage: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "trng_queue_percentage",
+			Help: "Percentage of TRNG queue used",
+		}),
+		TRNGConsumed: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "trng_consumed",
+			Help: "Number of TRNG items consumed",
+		}),
+		TRNGUnconsumed: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "trng_unconsumed",
+			Help: "Number of TRNG items unconsumed",
+		}),
+
+		FortunaQueueCurrent: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "fortuna_queue_current",
+			Help: "Current size of Fortuna queue",
+		}),
+		FortunaQueueCapacity: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "fortuna_queue_capacity",
+			Help: "Capacity of Fortuna queue",
+		}),
+		FortunaQueuePercentage: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "fortuna_queue_percentage",
+			Help: "Percentage of Fortuna queue used",
+		}),
+		FortunaConsumed: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "fortuna_consumed",
+			Help: "Number of Fortuna items consumed",
+		}),
+		FortunaUnconsumed: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "fortuna_unconsumed",
+			Help: "Number of Fortuna items unconsumed",
+		}),
+
+		DatabaseSizeBytes: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "database_size_bytes",
+			Help: "Size of database in bytes",
+		}),
+	}
+
+	// Register metrics
+	prometheus.MustRegister(
+		metrics.TRNGQueueCurrent,
+		metrics.TRNGQueueCapacity,
+		metrics.TRNGQueuePercentage,
+		metrics.TRNGConsumed,
+		metrics.TRNGUnconsumed,
+		metrics.FortunaQueueCurrent,
+		metrics.FortunaQueueCapacity,
+		metrics.FortunaQueuePercentage,
+		metrics.FortunaConsumed,
+		metrics.FortunaUnconsumed,
+		metrics.DatabaseSizeBytes,
+	)
 
 	server := &Server{
 		db:             db,
@@ -67,8 +150,8 @@ func NewServer(db database.DBHandler, controllerAddr, fortunaAddr string, port i
 		port:           port,
 		router:         router,
 		validate:       validate,
+		metrics:        metrics,
 	}
-
 	// Setup routes
 	server.setupRoutes()
 
@@ -93,6 +176,10 @@ func (s *Server) setupRoutes() {
 
 	// Swagger docs
 	s.router.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
+
+	// Prometheus metrics endpoint
+	s.router.GET("/metrics", s.MetricsHandler)
+	s.router.GET("api/v1/metrics", s.MetricsHandler) // For backwards compatibility
 
 	// API v1 group
 	api := s.router.Group("/api/v1")
@@ -470,6 +557,17 @@ func (s *Server) HealthCheck(c *gin.Context) {
 	response.Details.Database = dbHealthy
 
 	c.JSON(http.StatusOK, response)
+}
+
+// @Summary Get Prometheus metrics (root)
+// @Description Returns all Prometheus metrics at root and /api/v1. The 2 endpoints are equivalent are there for compatibility reasons.
+// @Tags metrics
+// @Tags metrics
+// @Produce text/plain
+// @Success 200 {string} string "Prometheus metrics"
+// @Router /metrics [get]
+func (s *Server) MetricsHandler(c *gin.Context) {
+	promhttp.Handler().ServeHTTP(c.Writer, c.Request)
 }
 
 // checkServiceHealth checks if a service is healthy by making an HTTP request
