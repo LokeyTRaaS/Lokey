@@ -210,13 +210,21 @@ tasks:
         --allow network.host
         .
 
-  _build_all_containers:
+  _build_all_containers_parallel:
     desc: Build all containers in parallel
     deps:
       - build_controller
       - build_api
       - build_fortuna
     run: once
+
+  _build_all_containers_sequential:
+    desc: Build all containers in sequential order
+    run: once
+    cmds:
+      - task: build_controller
+      - task: build_api
+      - task: build_fortuna
 
   build_images_and_registry:
     cmds:
@@ -226,4 +234,4 @@ tasks:
       - docker buildx rm pi-builder || true
       - docker buildx create --config buildx.toml --name pi-builder --use --driver docker-container --buildkitd-flags '--allow-insecure-entitlement network.host --allow-insecure-entitlement security.insecure' --driver-opt network=lokey-net
       - docker buildx inspect --bootstrap
-      - task: _build_all_containers
+      - task: _build_all_containers_sequential

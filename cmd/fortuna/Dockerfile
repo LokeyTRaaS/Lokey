@@ -17,7 +17,7 @@ COPY . .
 
 # Build the application with CGO enabled
 # Using -trimpath for smaller binaries and more reproducible builds
-RUN cd cmd/fortuna && CGO_ENABLED=1 GOOS=linux go build -trimpath -o /app/fortuna
+RUN cd cmd/fortuna && CGO_ENABLED=1 GOOS=linux go build -x -trimpath -o /app/fortuna
 
 # Create a smaller runtime image
 FROM alpine:latest
@@ -36,12 +36,7 @@ RUN mkdir -p /data
 
 # Set environment variables
 ENV PORT=8082 \
-    DB_PATH="/data/fortuna.db" \
-    CONTROLLER_URL="http://controller:8081" \
-    PROCESS_INTERVAL_MS=5000 \
-    FORTUNA_QUEUE_SIZE=100 \
-    AMPLIFICATION_FACTOR=4 \
-    SEED_COUNT=3
+    CONTROLLER_URL="http://controller:8081"
 
 # Expose the port
 EXPOSE 8082

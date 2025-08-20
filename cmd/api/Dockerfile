@@ -28,7 +28,7 @@ RUN swag init --parseDependency --parseInternal \
 
 # Build the application with CGO enabled
 # Using -trimpath for smaller binaries and more reproducible builds
-RUN cd cmd/api && CGO_ENABLED=1 GOOS=linux go build -trimpath -o /app/api
+RUN cd cmd/api && CGO_ENABLED=1 GOOS=linux go build -x -trimpath -o /app/api
 
 # Create a smaller runtime image
 FROM alpine:latest
@@ -51,9 +51,7 @@ RUN mkdir -p /data
 ENV PORT=8080 \
     DB_PATH="/data/api.db" \
     CONTROLLER_ADDR="http://controller:8081" \
-    FORTUNA_ADDR="http://fortuna:8082" \
-    TRNG_QUEUE_SIZE=100 \
-    FORTUNA_QUEUE_SIZE=100
+    FORTUNA_ADDR="http://fortuna:8082"
 
 # Expose the port
 EXPOSE 8080

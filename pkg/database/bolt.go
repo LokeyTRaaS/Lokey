@@ -34,7 +34,6 @@ type BoltDBHandler struct {
 }
 
 // NewBoltDBHandler creates a new BoltDB handler
-// NewBoltDBHandler creates a new BoltDB handler
 func NewBoltDBHandler(dbPath string, trngQueueSize, fortunaQueueSize int) (*BoltDBHandler, error) {
 	// Check if the path is a directory and append default filename if needed
 	fileInfo, err := os.Stat(dbPath)
@@ -90,6 +89,12 @@ func NewBoltDBHandler(dbPath string, trngQueueSize, fortunaQueueSize int) (*Bolt
 			{[]byte("fortuna_tail"), 0},
 			{[]byte("trng_next_id"), 0},
 			{[]byte("fortuna_next_id"), 0},
+			{[]byte("trng_polling_count"), 0},
+			{[]byte("fortuna_polling_count"), 0},
+			{[]byte("trng_dropped_count"), 0},
+			{[]byte("fortuna_dropped_count"), 0},
+			{[]byte("trng_consumed_count"), 0},
+			{[]byte("fortuna_consumed_count"), 0},
 		}
 
 		b := tx.Bucket(countersBucket)
@@ -143,7 +148,7 @@ func (h *BoltDBHandler) getCounter(tx *bolt.Tx, key []byte) (uint64, error) {
 	b := tx.Bucket(countersBucket)
 	value := b.Get(key)
 	if value == nil {
-		return 0, fmt.Errorf("counter %s not found", key)
+		return 0, nil // Return 0 instead of error for missing counters
 	}
 	return binary.BigEndian.Uint64(value), nil
 }
@@ -371,8 +376,8 @@ func (h *BoltDBHandler) DequeueFortunaRequest() (Request, error) {
 
 //---------------------- TRNG Data Operations ----------------------
 
-// StoreTRNGHash stores a new TRNG hash
-func (h *BoltDBHandler) StoreTRNGHash(hash []byte) error {
+// StoreTRNGData stores raw TRNG data
+func (h *BoltDBHandler) StoreTRNGData(data []byte) error {
 	return h.db.Update(func(tx *bolt.Tx) error {
 		// Get next ID
 		id, err := h.getNextID(tx, []byte("trng_next_id"))
@@ -381,15 +386,15 @@ func (h *BoltDBHandler) StoreTRNGHash(hash []byte) error {
 		}
 
 		// Create TRNG data object
-		data := TRNGData{
+		trngData := TRNGData{
 			ID:        id,
-			Hash:      hash,
+			Data:      data,
 			Timestamp: time.Now(),
 			Consumed:  false,
 		}
 
 		// Serialize to JSON
-		jsonData, err := json.Marshal(data)
+		jsonData, err := json.Marshal(trngData)
 		if err != nil {
 			return fmt.Errorf("serialize data: %w", err)
 		}
@@ -399,7 +404,7 @@ func (h *BoltDBHandler) StoreTRNGHash(hash []byte) error {
 		key := make([]byte, 8)
 		binary.BigEndian.PutUint64(key, id)
 		if err := b.Put(key, jsonData); err != nil {
-			return fmt.Errorf("store hash: %w", err)
+			return fmt.Errorf("store data: %w", err)
 		}
 
 		// Maintain queue size
@@ -407,41 +412,10 @@ func (h *BoltDBHandler) StoreTRNGHash(hash []byte) error {
 	})
 }
 
-// trimTRNGDataIfNeeded maintains the TRNG data queue size
-func (h *BoltDBHandler) trimTRNGDataIfNeeded(tx *bolt.Tx) error {
-	b := tx.Bucket(trngDataBucket)
-
-	// Count total items and collect oldest keys
-	var count int
-	var oldestKeys [][]byte
-
-	h.mu.RLock()
-	maxSize := h.trngQueueSize
-	h.mu.RUnlock()
-
-	cursor := b.Cursor()
-	for k, _ := cursor.First(); k != nil; k, _ = cursor.Next() {
-		count++
-		if len(oldestKeys) < count-maxSize {
-			oldestKeys = append(oldestKeys, append([]byte{}, k...))
-		}
-	}
-
-	// Delete oldest entries if we exceed the limit
-	if count > maxSize {
-		for _, key := range oldestKeys {
-			if err := b.Delete(key); err != nil {
-				return fmt.Errorf("delete oldest entry: %w", err)
-			}
-		}
-	}
-
-	return nil
-}
-
-// GetTRNGHashes retrieves TRNG hashes with pagination and optional consumption
-func (h *BoltDBHandler) GetTRNGHashes(limit, offset int, consume bool) ([][]byte, error) {
-	var hashes [][]byte
+// GetTRNGData retrieves TRNG data with pagination and consumption tracking
+func (h *BoltDBHandler) GetTRNGData(limit, offset int, consume bool) ([][]byte, error) {
+	var dataSlices [][]byte
+	consumedCount := int64(0)
 
 	err := h.db.Update(func(tx *bolt.Tx) error {
 		b := tx.Bucket(trngDataBucket)
@@ -473,12 +447,13 @@ func (h *BoltDBHandler) GetTRNGHashes(limit, offset int, consume bool) ([][]byte
 			end = len(allItems)
 		}
 
-		// Extract hashes and mark as consumed if requested
+		// Extract data and mark as consumed if requested
 		for i := start; i < end; i++ {
-			hashes = append(hashes, allItems[i].Hash)
+			dataSlices = append(dataSlices, allItems[i].Data)
 
 			if consume {
 				allItems[i].Consumed = true
+				consumedCount++
 				jsonData, err := json.Marshal(allItems[i])
 				if err != nil {
 					return fmt.Errorf("serialize data: %w", err)
@@ -490,10 +465,67 @@ func (h *BoltDBHandler) GetTRNGHashes(limit, offset int, consume bool) ([][]byte
 			}
 		}
 
+		// Update consumed counter
+		if consume && consumedCount > 0 {
+			counterB := tx.Bucket(countersBucket)
+			key := []byte("trng_consumed_count")
+
+			currentCount, _ := h.getCounter(tx, key)
+			currentCount += uint64(consumedCount)
+
+			var buf [8]byte
+			binary.BigEndian.PutUint64(buf[:], currentCount)
+			counterB.Put(key, buf[:])
+		}
+
 		return nil
 	})
 
-	return hashes, err
+	return dataSlices, err
+}
+
+// trimTRNGDataIfNeeded maintains the TRNG data queue size and counts drops
+func (h *BoltDBHandler) trimTRNGDataIfNeeded(tx *bolt.Tx) error {
+	b := tx.Bucket(trngDataBucket)
+
+	// Count total items and collect oldest keys
+	var count int
+	var oldestKeys [][]byte
+
+	h.mu.RLock()
+	maxSize := h.trngQueueSize
+	h.mu.RUnlock()
+
+	cursor := b.Cursor()
+	for k, _ := cursor.First(); k != nil; k, _ = cursor.Next() {
+		count++
+		if count > maxSize {
+			oldestKeys = append(oldestKeys, append([]byte{}, k...))
+		}
+	}
+
+	// Delete oldest entries if we exceed the limit and count drops
+	if len(oldestKeys) > 0 {
+		droppedCount := len(oldestKeys)
+		for _, key := range oldestKeys {
+			if err := b.Delete(key); err != nil {
+				return fmt.Errorf("delete oldest entry: %w", err)
+			}
+		}
+
+		// Update dropped counter
+		counterB := tx.Bucket(countersBucket)
+		key := []byte("trng_dropped_count")
+
+		currentCount, _ := h.getCounter(tx, key)
+		currentCount += uint64(droppedCount)
+
+		var buf [8]byte
+		binary.BigEndian.PutUint64(buf[:], currentCount)
+		counterB.Put(key, buf[:])
+	}
+
+	return nil
 }
 
 //---------------------- Fortuna Data Operations ----------------------
@@ -534,41 +566,10 @@ func (h *BoltDBHandler) StoreFortunaData(data []byte) error {
 	})
 }
 
-// trimFortunaDataIfNeeded maintains the Fortuna data queue size
-func (h *BoltDBHandler) trimFortunaDataIfNeeded(tx *bolt.Tx) error {
-	b := tx.Bucket(fortunaDataBucket)
-
-	// Count total items and collect oldest keys
-	var count int
-	var oldestKeys [][]byte
-
-	h.mu.RLock()
-	maxSize := h.fortunaQueueSize
-	h.mu.RUnlock()
-
-	cursor := b.Cursor()
-	for k, _ := cursor.First(); k != nil; k, _ = cursor.Next() {
-		count++
-		if len(oldestKeys) < count-maxSize {
-			oldestKeys = append(oldestKeys, append([]byte{}, k...))
-		}
-	}
-
-	// Delete oldest entries if we exceed the limit
-	if count > maxSize {
-		for _, key := range oldestKeys {
-			if err := b.Delete(key); err != nil {
-				return fmt.Errorf("delete oldest entry: %w", err)
-			}
-		}
-	}
-
-	return nil
-}
-
-// GetFortunaData retrieves Fortuna-generated data with pagination and optional consumption
+// GetFortunaData retrieves Fortuna-generated data with pagination and consumption tracking
 func (h *BoltDBHandler) GetFortunaData(limit, offset int, consume bool) ([][]byte, error) {
 	var dataSlices [][]byte
+	consumedCount := int64(0)
 
 	err := h.db.Update(func(tx *bolt.Tx) error {
 		b := tx.Bucket(fortunaDataBucket)
@@ -606,6 +607,7 @@ func (h *BoltDBHandler) GetFortunaData(limit, offset int, consume bool) ([][]byt
 
 			if consume {
 				allItems[i].Consumed = true
+				consumedCount++
 				jsonData, err := json.Marshal(allItems[i])
 				if err != nil {
 					return fmt.Errorf("serialize data: %w", err)
@@ -617,10 +619,254 @@ func (h *BoltDBHandler) GetFortunaData(limit, offset int, consume bool) ([][]byt
 			}
 		}
 
+		// Update consumed counter
+		if consume && consumedCount > 0 {
+			counterB := tx.Bucket(countersBucket)
+			key := []byte("fortuna_consumed_count")
+
+			currentCount, _ := h.getCounter(tx, key)
+			currentCount += uint64(consumedCount)
+
+			var buf [8]byte
+			binary.BigEndian.PutUint64(buf[:], currentCount)
+			counterB.Put(key, buf[:])
+		}
+
 		return nil
 	})
 
 	return dataSlices, err
+}
+
+// trimFortunaDataIfNeeded maintains the Fortuna data queue size and counts drops
+func (h *BoltDBHandler) trimFortunaDataIfNeeded(tx *bolt.Tx) error {
+	b := tx.Bucket(fortunaDataBucket)
+
+	// Count total items and collect oldest keys
+	var count int
+	var oldestKeys [][]byte
+
+	h.mu.RLock()
+	maxSize := h.fortunaQueueSize
+	h.mu.RUnlock()
+
+	cursor := b.Cursor()
+	for k, _ := cursor.First(); k != nil; k, _ = cursor.Next() {
+		count++
+		if count > maxSize {
+			oldestKeys = append(oldestKeys, append([]byte{}, k...))
+		}
+	}
+
+	// Delete oldest entries if we exceed the limit and count drops
+	if len(oldestKeys) > 0 {
+		droppedCount := len(oldestKeys)
+		for _, key := range oldestKeys {
+			if err := b.Delete(key); err != nil {
+				return fmt.Errorf("delete oldest entry: %w", err)
+			}
+		}
+
+		// Update dropped counter
+		counterB := tx.Bucket(countersBucket)
+		key := []byte("fortuna_dropped_count")
+
+		currentCount, _ := h.getCounter(tx, key)
+		currentCount += uint64(droppedCount)
+
+		var buf [8]byte
+		binary.BigEndian.PutUint64(buf[:], currentCount)
+		counterB.Put(key, buf[:])
+	}
+
+	return nil
+}
+
+//---------------------- Enhanced Statistics Operations ----------------------
+
+// IncrementPollingCount increments the polling counter for a data source
+func (h *BoltDBHandler) IncrementPollingCount(source string) error {
+	return h.db.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket(countersBucket)
+		key := []byte(source + "_polling_count")
+
+		count, _ := h.getCounter(tx, key)
+		count++
+
+		var buf [8]byte
+		binary.BigEndian.PutUint64(buf[:], count)
+		return b.Put(key, buf[:])
+	})
+}
+
+// IncrementDroppedCount increments the dropped counter for a data source
+func (h *BoltDBHandler) IncrementDroppedCount(source string) error {
+	return h.db.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket(countersBucket)
+		key := []byte(source + "_dropped_count")
+
+		count, _ := h.getCounter(tx, key)
+		count++
+
+		var buf [8]byte
+		binary.BigEndian.PutUint64(buf[:], count)
+		return b.Put(key, buf[:])
+	})
+}
+
+// getCounterValue safely retrieves a counter value
+func (h *BoltDBHandler) getCounterValue(tx *bolt.Tx, key string) int64 {
+	count, _ := h.getCounter(tx, []byte(key))
+	return int64(count)
+}
+
+// GetDetailedStats returns comprehensive system statistics
+func (h *BoltDBHandler) GetDetailedStats() (*DetailedStats, error) {
+	var stats DetailedStats
+
+	err := h.db.View(func(tx *bolt.Tx) error {
+		// Get basic queue info first
+		queueInfo, err := h.getQueueInfoInTx(tx)
+		if err != nil {
+			return err
+		}
+
+		h.mu.RLock()
+		trngCapacity := h.trngQueueSize
+		fortunaCapacity := h.fortunaQueueSize
+		h.mu.RUnlock()
+
+		// Calculate TRNG stats
+		trngCurrent := queueInfo["trng_unconsumed_count"]
+		trngPercentage := float64(trngCurrent) / float64(trngCapacity) * 100
+		if trngPercentage > 100 {
+			trngPercentage = 100
+		}
+
+		stats.TRNG = DataSourceStats{
+			PollingCount:    h.getCounterValue(tx, "trng_polling_count"),
+			QueueCurrent:    trngCurrent,
+			QueueCapacity:   trngCapacity,
+			QueuePercentage: trngPercentage,
+			QueueDropped:    h.getCounterValue(tx, "trng_dropped_count"),
+			ConsumedCount:   h.getCounterValue(tx, "trng_consumed_count"),
+			UnconsumedCount: trngCurrent,
+			TotalGenerated:  h.getCounterValue(tx, "trng_next_id"),
+		}
+
+		// Calculate Fortuna stats
+		fortunaCurrent := queueInfo["fortuna_unconsumed_count"]
+		fortunaPercentage := float64(fortunaCurrent) / float64(fortunaCapacity) * 100
+		if fortunaPercentage > 100 {
+			fortunaPercentage = 100
+		}
+
+		stats.Fortuna = DataSourceStats{
+			PollingCount:    h.getCounterValue(tx, "fortuna_polling_count"),
+			QueueCurrent:    fortunaCurrent,
+			QueueCapacity:   fortunaCapacity,
+			QueuePercentage: fortunaPercentage,
+			QueueDropped:    h.getCounterValue(tx, "fortuna_dropped_count"),
+			ConsumedCount:   h.getCounterValue(tx, "fortuna_consumed_count"),
+			UnconsumedCount: fortunaCurrent,
+			TotalGenerated:  h.getCounterValue(tx, "fortuna_next_id"),
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	// Get database stats
+	dbSize, _ := h.GetDatabaseSize()
+	stats.Database = DatabaseStats{
+		SizeBytes: dbSize,
+		SizeHuman: formatBytes(dbSize),
+		Path:      h.GetDatabasePath(),
+	}
+
+	return &stats, nil
+}
+
+// getQueueInfoInTx returns queue info within a transaction
+func (h *BoltDBHandler) getQueueInfoInTx(tx *bolt.Tx) (map[string]int, error) {
+	queueInfo := make(map[string]int)
+
+	// Count TRNG data
+	trngTotal := 0
+	trngUnconsumed := 0
+
+	trngBucket := tx.Bucket(trngDataBucket)
+	cursor := trngBucket.Cursor()
+	for k, v := cursor.First(); k != nil; k, v = cursor.Next() {
+		trngTotal++
+
+		var data TRNGData
+		if err := json.Unmarshal(v, &data); err != nil {
+			return nil, fmt.Errorf("deserialize TRNG data: %w", err)
+		}
+
+		if !data.Consumed {
+			trngUnconsumed++
+		}
+	}
+
+	// Count Fortuna data
+	fortunaTotal := 0
+	fortunaUnconsumed := 0
+
+	fortunaBucket := tx.Bucket(fortunaDataBucket)
+	cursor = fortunaBucket.Cursor()
+	for k, v := cursor.First(); k != nil; k, v = cursor.Next() {
+		fortunaTotal++
+
+		var data FortunaData
+		if err := json.Unmarshal(v, &data); err != nil {
+			return nil, fmt.Errorf("deserialize Fortuna data: %w", err)
+		}
+
+		if !data.Consumed {
+			fortunaUnconsumed++
+		}
+	}
+
+	queueInfo["trng_data_count"] = trngTotal
+	queueInfo["trng_unconsumed_count"] = trngUnconsumed
+	queueInfo["fortuna_data_count"] = fortunaTotal
+	queueInfo["fortuna_unconsumed_count"] = fortunaUnconsumed
+
+	return queueInfo, nil
+}
+
+// GetDatabaseSize returns the size of the database file in bytes
+func (h *BoltDBHandler) GetDatabaseSize() (int64, error) {
+	// Get the actual file size from the filesystem
+	fileInfo, err := os.Stat(h.db.Path())
+	if err != nil {
+		return 0, fmt.Errorf("failed to get database file info: %w", err)
+	}
+	return fileInfo.Size(), nil
+}
+
+// GetDatabasePath returns the path to the database file
+func (h *BoltDBHandler) GetDatabasePath() string {
+	return h.db.Path()
+}
+
+// formatBytes formats bytes into human readable format
+func formatBytes(bytes int64) string {
+	const unit = 1024
+	if bytes < unit {
+		return fmt.Sprintf("%d B", bytes)
+	}
+	div, exp := int64(unit), 0
+	for n := bytes / unit; n >= unit; n /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %cB", float64(bytes)/float64(div), "KMGTPE"[exp])
 }
 
 //---------------------- Statistics Operations ----------------------
@@ -705,25 +951,10 @@ func (h *BoltDBHandler) GetQueueInfo() (map[string]int, error) {
 
 	err := h.db.View(func(tx *bolt.Tx) error {
 		// Get queue counters
-		trngHead, err := h.getCounter(tx, []byte("trng_head"))
-		if err != nil {
-			return err
-		}
-
-		trngTail, err := h.getCounter(tx, []byte("trng_tail"))
-		if err != nil {
-			return err
-		}
-
-		fortunaHead, err := h.getCounter(tx, []byte("fortuna_head"))
-		if err != nil {
-			return err
-		}
-
-		fortunaTail, err := h.getCounter(tx, []byte("fortuna_tail"))
-		if err != nil {
-			return err
-		}
+		trngHead, _ := h.getCounter(tx, []byte("trng_head"))
+		trngTail, _ := h.getCounter(tx, []byte("trng_tail"))
+		fortunaHead, _ := h.getCounter(tx, []byte("fortuna_head"))
+		fortunaTail, _ := h.getCounter(tx, []byte("fortuna_tail"))
 
 		// Count TRNG data
 		trngTotal := 0

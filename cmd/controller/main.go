@@ -48,7 +48,7 @@ func (c *Controller) setupRoutes() {
 	// API routes
 	c.router.GET("/health", c.healthCheckHandler)
 	c.router.GET("/info", c.infoHandler)
-	c.router.GET("/generate", c.generateHashHandler)
+	c.router.GET("/generate", c.generateHandler)
 }
 
 func (c *Controller) Start() error {
@@ -124,7 +124,7 @@ func (c *Controller) infoHandler(ctx *gin.Context) {
 	})
 }
 
-func (c *Controller) generateHashHandler(ctx *gin.Context) {
+func (c *Controller) generateHandler(ctx *gin.Context) {
 	// Get count parameter (optional, default 1)
 	countStr := ctx.DefaultQuery("count", "1")
 	count, err := strconv.Atoi(countStr)
@@ -133,26 +133,27 @@ func (c *Controller) generateHashHandler(ctx *gin.Context) {
 		return
 	}
 
-	// Generate multiple hashes if requested
-	hashes := make([]string, 0, count)
+	// Generate multiple raw random data if requested
+	data := make([]string, 0, count)
 
 	for i := 0; i < count; i++ {
-		hash, err := c.device.GenerateHashFromRandom()
+		// Change this line: call GenerateRandom() instead of GenerateHashFromRandom()
+		randomData, err := c.device.GenerateRandom()
 		if err != nil {
-			ctx.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate hash"})
+			ctx.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate random data"})
 			return
 		}
-		hashes = append(hashes, hex.EncodeToString(hash))
+		data = append(data, hex.EncodeToString(randomData))
 	}
 
-	// Return single hash or array based on count
+	// Return single data or array based on count
 	if count == 1 {
 		ctx.JSON(http.StatusOK, gin.H{
-			"hash": hashes[0],
+			"data": data[0], // Changed from "hash" to "data"
 		})
 	} else {
 		ctx.JSON(http.StatusOK, gin.H{
-			"hashes": hashes,
+			"data": data, // Changed from "hashes" to "data"
 		})
 	}
 }

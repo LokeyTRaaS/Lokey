@@ -37,11 +37,10 @@ type ConsumptionConfig struct {
 
 // DataRequest represents a request for random data
 type DataRequest struct {
-	Format    string `json:"format" validate:"required,oneof=int8 int16 int32 int64 uint8 uint16 uint32 uint64 binary"`
-	ChunkSize int    `json:"chunk_size" validate:"required,min=1,max=1048576"`
-	Limit     int    `json:"limit" validate:"required,min=1,max=1000"`
-	Offset    int    `json:"offset" validate:"min=0"`
-	Source    string `json:"source" validate:"required,oneof=trng fortuna"`
+	Format string `json:"format" validate:"required,oneof=int8 int16 int32 int64 uint8 uint16 uint32 uint64 binary"`
+	Count  int    `json:"limit" validate:"required,min=1,max=100000"`
+	Offset int    `json:"offset" validate:"min=0"`
+	Source string `json:"source" validate:"required,oneof=trng fortuna"`
 }
 
 // HealthCheckResponse represents the health check response
@@ -255,6 +254,7 @@ func (s *Server) UpdateConsumptionConfig(c *gin.Context) {
 // @Failure 404 {object} map[string]string "Not enough data available"
 // @Failure 500 {object} map[string]string "Server error"
 // @Router /data [post]
+// In GetRandomData method:
 func (s *Server) GetRandomData(c *gin.Context) {
 	var request DataRequest
 	if err := c.ShouldBindJSON(&request); err != nil {
@@ -271,13 +271,19 @@ func (s *Server) GetRandomData(c *gin.Context) {
 	// Get consumption configuration
 	var consumeData bool = true // Default to true
 
+	// Calculate how many database chunks we might need
+	// We'll fetch more chunks than needed to ensure we have enough data
+	bytesPerValue := getBytesPerValue(request.Format)
+	estimatedBytesNeeded := request.Count * bytesPerValue
+	estimatedChunksNeeded := (estimatedBytesNeeded / 31) + 5 // Assume ~31 bytes per chunk, add buffer
+
 	// Retrieve data based on source
 	var rawData [][]byte
 	var err error
 	if request.Source == "trng" {
-		rawData, err = s.db.GetTRNGHashes(request.Limit, request.Offset, consumeData)
+		rawData, err = s.db.GetTRNGData(estimatedChunksNeeded, request.Offset, consumeData)
 	} else {
-		rawData, err = s.db.GetFortunaData(request.Limit, request.Offset, consumeData)
+		rawData, err = s.db.GetFortunaData(estimatedChunksNeeded, request.Offset, consumeData)
 	}
 
 	if err != nil {
@@ -293,15 +299,20 @@ func (s *Server) GetRandomData(c *gin.Context) {
 	// Process data based on requested format
 	switch request.Format {
 	case "binary":
-		// For binary format, just concatenate the raw bytes
+		// For binary format, return the requested count of bytes
 		binaryData := make([]byte, 0)
+		bytesNeeded := request.Count
+
 		for _, data := range rawData {
-			// Take only the requested chunk size or less if data is smaller
-			size := request.ChunkSize
-			if size > len(data) {
-				size = len(data)
+			if len(binaryData) >= bytesNeeded {
+				break
 			}
-			binaryData = append(binaryData, data[:size]...)
+			remaining := bytesNeeded - len(binaryData)
+			if len(data) <= remaining {
+				binaryData = append(binaryData, data...)
+			} else {
+				binaryData = append(binaryData, data[:remaining]...)
+			}
 		}
 
 		c.Header("Content-Type", "application/octet-stream")
@@ -309,35 +320,35 @@ func (s *Server) GetRandomData(c *gin.Context) {
 		c.Data(http.StatusOK, "application/octet-stream", binaryData)
 
 	case "int8":
-		response := convertToIntFormat(rawData, request.ChunkSize, 1, true)
+		response := convertToIntFormat(rawData, request.Count, 1, true)
 		c.JSON(http.StatusOK, response)
 
 	case "uint8":
-		response := convertToIntFormat(rawData, request.ChunkSize, 1, false)
+		response := convertToIntFormat(rawData, request.Count, 1, false)
 		c.JSON(http.StatusOK, response)
 
 	case "int16":
-		response := convertToIntFormat(rawData, request.ChunkSize, 2, true)
+		response := convertToIntFormat(rawData, request.Count, 2, true)
 		c.JSON(http.StatusOK, response)
 
 	case "uint16":
-		response := convertToIntFormat(rawData, request.ChunkSize, 2, false)
+		response := convertToIntFormat(rawData, request.Count, 2, false)
 		c.JSON(http.StatusOK, response)
 
 	case "int32":
-		response := convertToIntFormat(rawData, request.ChunkSize, 4, true)
+		response := convertToIntFormat(rawData, request.Count, 4, true)
 		c.JSON(http.StatusOK, response)
 
 	case "uint32":
-		response := convertToIntFormat(rawData, request.ChunkSize, 4, false)
+		response := convertToIntFormat(rawData, request.Count, 4, false)
 		c.JSON(http.StatusOK, response)
 
 	case "int64":
-		response := convertToIntFormat(rawData, request.ChunkSize, 8, true)
+		response := convertToIntFormat(rawData, request.Count, 8, true)
 		c.JSON(http.StatusOK, response)
 
 	case "uint64":
-		response := convertToIntFormat(rawData, request.ChunkSize, 8, false)
+		response := convertToIntFormat(rawData, request.Count, 8, false)
 		c.JSON(http.StatusOK, response)
 
 	default:
@@ -345,19 +356,30 @@ func (s *Server) GetRandomData(c *gin.Context) {
 	}
 }
 
+// Helper function to calculate bytes needed per value
+func getBytesPerValue(format string) int {
+	switch format {
+	case "int8", "uint8":
+		return 1
+	case "int16", "uint16":
+		return 2
+	case "int32", "uint32":
+		return 4
+	case "int64", "uint64":
+		return 8
+	default:
+		return 1
+	}
+}
+
 // convertToIntFormat converts raw byte data to various integer formats
-func convertToIntFormat(data [][]byte, chunkSize, bytesPerValue int, signed bool) []interface{} {
+func convertToIntFormat(data [][]byte, maxCount, bytesPerValue int, signed bool) []interface{} {
 	var result []interface{}
+	valuesGenerated := 0
 
 	for _, chunk := range data {
-		// Ensure we only use the requested chunk size
-		size := chunkSize
-		if size > len(chunk) {
-			size = len(chunk)
-		}
-
 		// Process each value (bytesPerValue at a time)
-		for i := 0; i <= size-bytesPerValue; i += bytesPerValue {
+		for i := 0; i <= len(chunk)-bytesPerValue && valuesGenerated < maxCount; i += bytesPerValue {
 			switch bytesPerValue {
 			case 1:
 				if signed {
@@ -384,6 +406,12 @@ func convertToIntFormat(data [][]byte, chunkSize, bytesPerValue int, signed bool
 					result = append(result, binary.BigEndian.Uint64(chunk[i:i+8]))
 				}
 			}
+			valuesGenerated++
+		}
+
+		// Break if we've generated enough values
+		if valuesGenerated >= maxCount {
+			break
 		}
 	}
 
@@ -391,15 +419,15 @@ func convertToIntFormat(data [][]byte, chunkSize, bytesPerValue int, signed bool
 }
 
 // @Summary         Get system status
-// @Description     Get status of TRNG and Fortuna queues and data availability
+// @Description     Get detailed status of TRNG and Fortuna systems with comprehensive metrics
 // @Tags            status
 // @Accept          json
 // @Produce         json
-// @Success         200 {object} map[string]interface{}
+// @Success         200 {object} database.DetailedStats
 // @Failure         500 {object} map[string]string "Server error"
 // @Router          /status [get]
 func (s *Server) GetStatus(c *gin.Context) {
-	stats, err := s.db.GetStats()
+	stats, err := s.db.GetDetailedStats()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get system status"})
 		return

@@ -1,7 +1,6 @@
 package atecc608a
 
 import (
-	"crypto/sha256"
 	"fmt"
 	"log"
 	"os"
@@ -438,23 +437,6 @@ func (c *Controller) GenerateRandom() ([]byte, error) {
 	fmt.Printf("Using time-based fallback due to insufficient data\n")
 	timeStr := fmt.Sprintf("%d-%d-%d", time.Now().UnixNano(), time.Now().Unix(), os.Getpid())
 	return []byte(timeStr)[:32], nil
-}
-
-// GenerateHashFromRandom generates a SHA-256 hash from random data
-func (c *Controller) GenerateHashFromRandom() ([]byte, error) {
-	// For testing: if device communication fails, generate hash from time
-	randomData, err := c.GenerateRandom()
-	if err != nil {
-		fmt.Printf("Device random failed, using fallback: %v\n", err)
-		// Use time-based fallback for testing
-		timeStr := fmt.Sprintf("%d", time.Now().UnixNano())
-		hash := sha256.Sum256([]byte(timeStr))
-		return hash[:], nil
-	}
-
-	// Hash the random data using SHA-256
-	hash := sha256.Sum256(randomData)
-	return hash[:], nil
 }
 
 // Close closes the I2C connection

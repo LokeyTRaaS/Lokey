@@ -34,7 +34,7 @@ func (s *Server) pollTRNGService(ctx context.Context, interval time.Duration) {
 			log.Printf("TRNG polling stopped")
 			return
 		case <-ticker.C:
-			// Attempt to fetch data from the controller service using the correct endpoint
+			// Attempt to fetch data from the controller service
 			resp, err := http.Get(s.controllerAddr + "/generate")
 			if err != nil {
 				log.Printf("Error connecting to TRNG controller: %v", err)
@@ -47,9 +47,9 @@ func (s *Server) pollTRNGService(ctx context.Context, interval time.Duration) {
 				continue
 			}
 
-			// Read and parse response body which contains a hash field
+			// Read and parse response body which contains a data field
 			var result struct {
-				Hash string `json:"hash"`
+				Data string `json:"data"`
 			}
 
 			if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
@@ -59,16 +59,19 @@ func (s *Server) pollTRNGService(ctx context.Context, interval time.Duration) {
 			}
 			resp.Body.Close()
 
-			// Decode the hex-encoded hash
-			hashBytes, err := hex.DecodeString(result.Hash)
+			// Decode the hex-encoded data
+			dataBytes, err := hex.DecodeString(result.Data)
 			if err != nil {
-				log.Printf("Error decoding hash from controller: %v", err)
+				log.Printf("Error decoding data from controller: %v", err)
 				continue
 			}
 
-			// Store the hash in database
-			if err := s.db.StoreTRNGHash(hashBytes); err != nil {
-				log.Printf("Error storing TRNG hash: %v", err)
+			// Store the data in database
+			if err := s.db.StoreTRNGData(dataBytes); err != nil {
+				log.Printf("Error storing TRNG data: %v", err)
+			} else {
+				// Increment polling count only on successful storage
+				s.db.IncrementPollingCount("trng")
 			}
 		}
 	}
@@ -124,7 +127,11 @@ func (s *Server) pollFortunaService(ctx context.Context, interval time.Duration)
 			// Store the data in database
 			if err := s.db.StoreFortunaData(randomData); err != nil {
 				log.Printf("Error storing Fortuna data: %v", err)
+			} else {
+				// Increment polling count only on successful storage
+				s.db.IncrementPollingCount("fortuna")
 			}
+
 		}
 	}
 }

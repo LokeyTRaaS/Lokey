@@ -17,7 +17,7 @@ COPY . .
 
 # Build the application with CGO enabled
 # Using -trimpath for smaller binaries and more reproducible builds
-RUN cd cmd/controller && CGO_ENABLED=1 GOOS=linux go build -trimpath -o /app/controller
+RUN cd cmd/controller && CGO_ENABLED=1 GOOS=linux go build -x -trimpath -o /app/controller
 
 # Create a smaller runtime image
 FROM alpine:latest
@@ -36,10 +36,7 @@ RUN mkdir -p /data
 
 # Set environment variables
 ENV PORT=8081 \
-    I2C_BUS_NUMBER=1 \
-    DB_PATH="/data/trng.db" \
-    HASH_INTERVAL_MS=1000 \
-    TRNG_QUEUE_SIZE=100
+    I2C_BUS_NUMBER=1
 
 # Expose the port
 EXPOSE 8081
