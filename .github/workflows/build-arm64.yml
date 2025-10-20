@@ -75,6 +75,8 @@ jobs:
 
   # Build Docker images in parallel
   # Build Docker images using pre-built binaries
+
+  # Build Docker images using pre-built binaries
   build-containers:
     name: Build ${{ matrix.service }} Container
     runs-on: ubuntu-latest
@@ -85,7 +87,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        service: [ controller, api, fortuna ]
+        service: [controller, api, fortuna]
 
     steps:
       - name: Checkout code
@@ -96,6 +98,11 @@ jobs:
         with:
           name: lokey-${{ matrix.service }}-arm64
           path: ./build
+
+      - name: Verify binary exists
+        run: |
+          ls -la ./build/
+          file ./build/lokey-${{ matrix.service }}-arm64
 
       - name: Make binary executable
         run: chmod +x ./build/lokey-${{ matrix.service }}-arm64
@@ -142,9 +149,6 @@ jobs:
           cache-to: type=gha,mode=max
           provenance: false
           sbom: false
-          build-args: |
-            BINARY_PATH=./build/lokey-${{ matrix.service }}-arm64
-
   # Create release with all artifacts
   create-release:
     name: Create Release

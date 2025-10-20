@@ -6,7 +6,7 @@ RUN apk --no-cache add ca-certificates libc6-compat
 WORKDIR /app
 
 # Copy pre-built binary
-ARG BINARY_PATH=./build/lokey-api-arm64
+ARG BINARY_PATH=build/lokey-api-arm64
 COPY ${BINARY_PATH} /app/lokey-api
 
 # Create data directory
