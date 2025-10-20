@@ -21,6 +21,11 @@ services:
     ports:
       - '8080:8080'
     restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
     volumes:
       - api-data:/data
   controller:
@@ -37,6 +42,11 @@ services:
     image: ${DEV_MACHINE_IP:-localhost}:5000/lokey-controller:latest
     privileged: true
     restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
   fortuna:
     depends_on:
       - controller
@@ -49,5 +59,10 @@ services:
       - AMPLIFICATION_FACTOR=4
     image: ${DEV_MACHINE_IP:-localhost}:5000/lokey-fortuna:latest
     restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 volumes:
   api-data: null

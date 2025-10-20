@@ -21,6 +21,11 @@ services:
     ports:
       - '8080:8080'
     restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
     volumes:
       - api-data:/data
   controller:
@@ -39,6 +44,11 @@ services:
       - '8081:8081'
     privileged: true
     restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
   fortuna:
     depends_on:
       - controller
@@ -53,6 +63,12 @@ services:
     ports:
       - '8082:8082'
     restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 volumes:
-  api-data: null# This is a templated docker-compose file for running Lokey on a Raspberry Pi Zero 2W
-# Replace ${DEV_MACHINE_IP} with your development machine's IP address or use environment variables
+  api-data: null
+  # This is a templated docker-compose file for running Lokey on a Raspberry Pi Zero 2W
+  # Replace ${DEV_MACHINE_IP} with your development machine's IP address or use environment variables
