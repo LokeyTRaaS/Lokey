@@ -9,7 +9,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/go-playground/validator/v10"
-	_ "github.com/lokey/rng-service/pkg/api/docs" // Import generated swagger docs
+	_ "github.com/lokey/rng-service/pkg/api/docs"
 	"github.com/lokey/rng-service/pkg/database"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -31,11 +31,6 @@ type Server struct {
 type QueueConfig struct {
 	TRNGQueueSize    int `json:"trng_queue_size" validate:"required,min=10,max=10000"`
 	FortunaQueueSize int `json:"fortuna_queue_size" validate:"required,min=10,max=10000"`
-}
-
-// ConsumptionConfig represents the consumption behavior configuration
-type ConsumptionConfig struct {
-	DeleteOnConsumption bool `json:"delete_on_consumption"`
 }
 
 // DataRequest represents a request for random data
@@ -152,9 +147,8 @@ func NewServer(db database.DBHandler, controllerAddr, fortunaAddr string, port i
 		validate:       validate,
 		metrics:        metrics,
 	}
-	// Setup routes
-	server.setupRoutes()
 
+	server.setupRoutes()
 	return server
 }
 
@@ -179,7 +173,6 @@ func (s *Server) setupRoutes() {
 
 	// Prometheus metrics endpoint
 	s.router.GET("/metrics", s.MetricsHandler)
-	s.router.GET("api/v1/metrics", s.MetricsHandler) // For backwards compatibility
 
 	// API v1 group
 	api := s.router.Group("/api/v1")
@@ -187,8 +180,6 @@ func (s *Server) setupRoutes() {
 		// Configuration endpoints
 		api.GET("/config/queue", s.GetQueueConfig)
 		api.PUT("/config/queue", s.UpdateQueueConfig)
-		api.GET("/config/consumption", s.GetConsumptionConfig)
-		api.PUT("/config/consumption", s.UpdateConsumptionConfig)
 
 		// Data retrieval endpoints
 		api.POST("/data", s.GetRandomData)
@@ -196,6 +187,7 @@ func (s *Server) setupRoutes() {
 		// Status endpoints
 		api.GET("/status", s.GetStatus)
 		api.GET("/health", s.HealthCheck)
+		api.GET("/metrics", s.MetricsHandler)
 	}
 }
 
@@ -213,47 +205,24 @@ func (s *Server) Run() error {
 // @Failure         500 {object} map[string]string "Database error"
 // @Router          /config/queue [get]
 func (s *Server) GetQueueConfig(c *gin.Context) {
-	// Check if database is initialized properly
 	if !s.db.HealthCheck() {
 		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": "Database is not healthy or not properly initialized",
+			"error": "Database is not healthy",
 		})
 		return
 	}
 
-	// Try to get queue info
 	queueInfo, err := s.db.GetQueueInfo()
 	if err != nil {
-		// Log the error
-		log.Printf("Error getting queue info: %v", err)
-
-		// Return default values instead of failing
-		c.JSON(http.StatusOK, QueueConfig{
-			TRNGQueueSize:    100, // Default value
-			FortunaQueueSize: 100, // Default value
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": fmt.Sprintf("Failed to get queue info: %v", err),
 		})
 		return
 	}
 
-	// Safely extract values
-	var trngSize, fortunaSize int
-
-	if trngVal, ok := queueInfo["trng_queue_capacity"]; ok {
-		trngSize = trngVal
-	} else {
-		trngSize = 100 // Default value
-	}
-
-	if fortunaVal, ok := queueInfo["fortuna_queue_capacity"]; ok {
-		fortunaSize = fortunaVal
-	} else {
-		fortunaSize = 100 // Default value
-	}
-
-	// Return the configuration
 	c.JSON(http.StatusOK, QueueConfig{
-		TRNGQueueSize:    trngSize,
-		FortunaQueueSize: fortunaSize,
+		TRNGQueueSize:    queueInfo["trng_queue_capacity"],
+		FortunaQueueSize: queueInfo["fortuna_queue_capacity"],
 	})
 }
 
@@ -274,57 +243,15 @@ func (s *Server) UpdateQueueConfig(c *gin.Context) {
 		return
 	}
 
-	// Validate config
 	if err := s.validate.Struct(config); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	// Update queue sizes
-	err := s.db.UpdateQueueSizes(config.TRNGQueueSize, config.FortunaQueueSize)
-	if err != nil {
+	if err := s.db.UpdateQueueSizes(config.TRNGQueueSize, config.FortunaQueueSize); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update queue configuration"})
 		return
 	}
-
-	c.JSON(http.StatusOK, config)
-}
-
-// @Summary Get consumption configuration
-// @Description Get current consumption behavior configuration
-// @Tags configuration
-// @Accept json
-// @Produce json
-// @Success 200 {object} ConsumptionConfig
-// @Router /config/consumption [get]
-func (s *Server) GetConsumptionConfig(c *gin.Context) {
-	// For now, this is hardcoded since it's stored in memory
-	// In a real implementation, this would be stored in a configuration store
-	config := ConsumptionConfig{
-		DeleteOnConsumption: true,
-	}
-
-	c.JSON(http.StatusOK, config)
-}
-
-// @Summary Update consumption configuration
-// @Description Update consumption behavior configuration
-// @Tags configuration
-// @Accept json
-// @Produce json
-// @Param config body ConsumptionConfig true "Consumption configuration"
-// @Success 200 {object} ConsumptionConfig
-// @Failure 400 {object} map[string]string "Invalid request"
-// @Router /config/consumption [put]
-func (s *Server) UpdateConsumptionConfig(c *gin.Context) {
-	var config ConsumptionConfig
-	if err := c.ShouldBindJSON(&config); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request body"})
-		return
-	}
-
-	// In a real implementation, this would update a configuration store
-	// For now, we just return the received configuration
 
 	c.JSON(http.StatusOK, config)
 }
@@ -341,7 +268,6 @@ func (s *Server) UpdateConsumptionConfig(c *gin.Context) {
 // @Failure 404 {object} map[string]string "Not enough data available"
 // @Failure 500 {object} map[string]string "Server error"
 // @Router /data [post]
-// In GetRandomData method:
 func (s *Server) GetRandomData(c *gin.Context) {
 	var request DataRequest
 	if err := c.ShouldBindJSON(&request); err != nil {
@@ -349,22 +275,20 @@ func (s *Server) GetRandomData(c *gin.Context) {
 		return
 	}
 
-	// Validate request
 	if err := s.validate.Struct(request); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	// Get consumption configuration
-	var consumeData bool = true // Default to true
+	// Always consume data (delete-on-read)
+	consumeData := true
 
-	// Calculate how many database chunks we might need
-	// We'll fetch more chunks than needed to ensure we have enough data
+	// Calculate chunks needed
 	bytesPerValue := getBytesPerValue(request.Format)
 	estimatedBytesNeeded := request.Count * bytesPerValue
-	estimatedChunksNeeded := (estimatedBytesNeeded / 31) + 5 // Assume ~31 bytes per chunk, add buffer
+	estimatedChunksNeeded := (estimatedBytesNeeded / 31) + 5
 
-	// Retrieve data based on source
+	// Retrieve data
 	var rawData [][]byte
 	var err error
 	if request.Source == "trng" {
@@ -383,18 +307,15 @@ func (s *Server) GetRandomData(c *gin.Context) {
 		return
 	}
 
-	// Process data based on requested format
+	// Process data based on format
 	switch request.Format {
 	case "binary":
-		// For binary format, return the requested count of bytes
-		binaryData := make([]byte, 0)
-		bytesNeeded := request.Count
-
+		binaryData := make([]byte, 0, request.Count)
 		for _, data := range rawData {
-			if len(binaryData) >= bytesNeeded {
+			if len(binaryData) >= request.Count {
 				break
 			}
-			remaining := bytesNeeded - len(binaryData)
+			remaining := request.Count - len(binaryData)
 			if len(data) <= remaining {
 				binaryData = append(binaryData, data...)
 			} else {
@@ -407,43 +328,27 @@ func (s *Server) GetRandomData(c *gin.Context) {
 		c.Data(http.StatusOK, "application/octet-stream", binaryData)
 
 	case "int8":
-		response := convertToIntFormat(rawData, request.Count, 1, true)
-		c.JSON(http.StatusOK, response)
-
+		c.JSON(http.StatusOK, convertToIntFormat(rawData, request.Count, 1, true))
 	case "uint8":
-		response := convertToIntFormat(rawData, request.Count, 1, false)
-		c.JSON(http.StatusOK, response)
-
+		c.JSON(http.StatusOK, convertToIntFormat(rawData, request.Count, 1, false))
 	case "int16":
-		response := convertToIntFormat(rawData, request.Count, 2, true)
-		c.JSON(http.StatusOK, response)
-
+		c.JSON(http.StatusOK, convertToIntFormat(rawData, request.Count, 2, true))
 	case "uint16":
-		response := convertToIntFormat(rawData, request.Count, 2, false)
-		c.JSON(http.StatusOK, response)
-
+		c.JSON(http.StatusOK, convertToIntFormat(rawData, request.Count, 2, false))
 	case "int32":
-		response := convertToIntFormat(rawData, request.Count, 4, true)
-		c.JSON(http.StatusOK, response)
-
+		c.JSON(http.StatusOK, convertToIntFormat(rawData, request.Count, 4, true))
 	case "uint32":
-		response := convertToIntFormat(rawData, request.Count, 4, false)
-		c.JSON(http.StatusOK, response)
-
+		c.JSON(http.StatusOK, convertToIntFormat(rawData, request.Count, 4, false))
 	case "int64":
-		response := convertToIntFormat(rawData, request.Count, 8, true)
-		c.JSON(http.StatusOK, response)
-
+		c.JSON(http.StatusOK, convertToIntFormat(rawData, request.Count, 8, true))
 	case "uint64":
-		response := convertToIntFormat(rawData, request.Count, 8, false)
-		c.JSON(http.StatusOK, response)
-
+		c.JSON(http.StatusOK, convertToIntFormat(rawData, request.Count, 8, false))
 	default:
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Unsupported format"})
 	}
 }
 
-// Helper function to calculate bytes needed per value
+// getBytesPerValue returns bytes needed per value for a given format
 func getBytesPerValue(format string) int {
 	switch format {
 	case "int8", "uint8":
@@ -465,7 +370,6 @@ func convertToIntFormat(data [][]byte, maxCount, bytesPerValue int, signed bool)
 	valuesGenerated := 0
 
 	for _, chunk := range data {
-		// Process each value (bytesPerValue at a time)
 		for i := 0; i <= len(chunk)-bytesPerValue && valuesGenerated < maxCount; i += bytesPerValue {
 			switch bytesPerValue {
 			case 1:
@@ -496,7 +400,6 @@ func convertToIntFormat(data [][]byte, maxCount, bytesPerValue int, signed bool)
 			valuesGenerated++
 		}
 
-		// Break if we've generated enough values
 		if valuesGenerated >= maxCount {
 			break
 		}
@@ -520,6 +423,21 @@ func (s *Server) GetStatus(c *gin.Context) {
 		return
 	}
 
+	// Update Prometheus metrics
+	s.metrics.TRNGQueueCurrent.Set(float64(stats.TRNG.QueueCurrent))
+	s.metrics.TRNGQueueCapacity.Set(float64(stats.TRNG.QueueCapacity))
+	s.metrics.TRNGQueuePercentage.Set(stats.TRNG.QueuePercentage)
+	s.metrics.TRNGConsumed.Set(float64(stats.TRNG.ConsumedCount))
+	s.metrics.TRNGUnconsumed.Set(float64(stats.TRNG.UnconsumedCount))
+
+	s.metrics.FortunaQueueCurrent.Set(float64(stats.Fortuna.QueueCurrent))
+	s.metrics.FortunaQueueCapacity.Set(float64(stats.Fortuna.QueueCapacity))
+	s.metrics.FortunaQueuePercentage.Set(stats.Fortuna.QueuePercentage)
+	s.metrics.FortunaConsumed.Set(float64(stats.Fortuna.ConsumedCount))
+	s.metrics.FortunaUnconsumed.Set(float64(stats.Fortuna.UnconsumedCount))
+
+	s.metrics.DatabaseSizeBytes.Set(float64(stats.Database.SizeBytes))
+
 	c.JSON(http.StatusOK, stats)
 }
 
@@ -531,16 +449,10 @@ func (s *Server) GetStatus(c *gin.Context) {
 // @Success         200 {object} HealthCheckResponse
 // @Router          /health [get]
 func (s *Server) HealthCheck(c *gin.Context) {
-	// Check database health
 	dbHealthy := s.db.HealthCheck()
-
-	// Check controller health (simplified for example)
 	controllerHealthy := checkServiceHealth(s.controllerAddr + "/health")
-
-	// Check fortuna service health (simplified for example)
 	fortunaHealthy := checkServiceHealth(s.fortunaAddr + "/health")
 
-	// Determine overall status
 	overallStatus := "healthy"
 	if !dbHealthy || !controllerHealthy || !fortunaHealthy {
 		overallStatus = "unhealthy"
@@ -551,7 +463,7 @@ func (s *Server) HealthCheck(c *gin.Context) {
 		Timestamp: time.Now().Format(time.RFC3339),
 	}
 
-	response.Details.API = true // API is running if we're handling this request
+	response.Details.API = true
 	response.Details.Controller = controllerHealthy
 	response.Details.Fortuna = fortunaHealthy
 	response.Details.Database = dbHealthy
@@ -559,9 +471,8 @@ func (s *Server) HealthCheck(c *gin.Context) {
 	c.JSON(http.StatusOK, response)
 }
 
-// @Summary Get Prometheus metrics (root)
-// @Description Returns all Prometheus metrics at root and /api/v1. The 2 endpoints are equivalent are there for compatibility reasons.
-// @Tags metrics
+// @Summary Get Prometheus metrics
+// @Description Returns all Prometheus metrics. Available at /metrics and /api/v1/metrics
 // @Tags metrics
 // @Produce text/plain
 // @Success 200 {string} string "Prometheus metrics"
@@ -570,7 +481,7 @@ func (s *Server) MetricsHandler(c *gin.Context) {
 	promhttp.Handler().ServeHTTP(c.Writer, c.Request)
 }
 
-// checkServiceHealth checks if a service is healthy by making an HTTP request
+// checkServiceHealth checks if a service is healthy
 func checkServiceHealth(url string) bool {
 	resp, err := http.Get(url)
 	if err != nil {

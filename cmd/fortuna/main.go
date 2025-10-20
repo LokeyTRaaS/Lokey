@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -27,14 +26,14 @@ type FortunaProcessor struct {
 	port                int
 	amplificationFactor int
 	router              *gin.Engine
-	controllerURL       string
+	lastReseedTime      time.Time
 }
 
-func NewFortunaProcessor(port int, amplificationFactor int, controllerURL string) (*FortunaProcessor, error) {
+func NewFortunaProcessor(port int, amplificationFactor int) (*FortunaProcessor, error) {
 	// Initialize router
 	router := gin.Default()
 
-	// Initialize Fortuna with a temporary seed (will be reseeded by API)
+	// Initialize Fortuna with a temporary seed (will be reseeded by API service)
 	initialSeed := make([]byte, 32)
 	for i := range initialSeed {
 		initialSeed[i] = byte(i)
@@ -50,7 +49,7 @@ func NewFortunaProcessor(port int, amplificationFactor int, controllerURL string
 		port:                port,
 		amplificationFactor: amplificationFactor,
 		router:              router,
-		controllerURL:       controllerURL,
+		lastReseedTime:      time.Now(),
 	}, nil
 }
 
@@ -103,49 +102,57 @@ func (p *FortunaProcessor) Start() error {
 	return nil
 }
 
-// Removed startProcessor, stopProcessor, initialSeed, and processAndAmplify methods
-// as they're no longer needed in the stateless design
+//---------------------- HTTP Handlers ----------------------
 
-func (p *FortunaProcessor) fetchTRNGData(count int) ([][]byte, error) {
-	// Make a request to the controller's API to get TRNG hashes
-	// Use the /generate endpoint instead of /api/v1/data which doesn't exist
+// healthCheckHandler checks if the generator is healthy
+func (p *FortunaProcessor) healthCheckHandler(ctx *gin.Context) {
+	healthy := p.generator.HealthCheck()
+	if healthy {
+		ctx.JSON(http.StatusOK, gin.H{
+			"status":    "healthy",
+			"timestamp": time.Now().Format(time.RFC3339),
+		})
+	} else {
+		ctx.JSON(http.StatusServiceUnavailable, gin.H{
+			"status":    "unhealthy",
+			"timestamp": time.Now().Format(time.RFC3339),
+			"details": gin.H{
+				"generator": p.generator.HealthCheck(),
+			},
+		})
+	}
+}
 
-	// Create a slice to hold the generated hashes
-	hashes := make([][]byte, 0, count)
+// infoHandler returns information about the Fortuna processor
+func (p *FortunaProcessor) infoHandler(ctx *gin.Context) {
+	ctx.JSON(http.StatusOK, gin.H{
+		"status":               "running",
+		"amplification_factor": p.amplificationFactor,
+		"last_reseeded":        p.lastReseedTime.Format(time.RFC3339),
+	})
+}
 
-	// Make multiple requests if needed to get enough data
-	for i := 0; i < count; i++ {
-		resp, err := http.Get(fmt.Sprintf("%s/generate", p.controllerURL))
-		if err != nil {
-			return nil, fmt.Errorf("failed to connect to controller: %w", err)
-		}
-
-		if resp.StatusCode != http.StatusOK {
-			resp.Body.Close()
-			return nil, fmt.Errorf("controller returned error status: %d", resp.StatusCode)
-		}
-
-		// Parse response
-		var result struct {
-			Hash string `json:"hash"`
-		}
-
-		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-			resp.Body.Close()
-			return nil, fmt.Errorf("failed to parse controller response: %w", err)
-		}
-		resp.Body.Close()
-
-		// Convert hex string to byte slice
-		hashBytes, err := hex.DecodeString(result.Hash)
-		if err != nil {
-			return nil, fmt.Errorf("failed to decode hash: %w", err)
-		}
-
-		hashes = append(hashes, hashBytes)
+// generateDataHandler generates random data using the Fortuna algorithm
+func (p *FortunaProcessor) generateDataHandler(ctx *gin.Context) {
+	// Get requested size parameter
+	sizeStr := ctx.DefaultQuery("size", "128")
+	size, err := strconv.Atoi(sizeStr)
+	if err != nil || size <= 0 || size > 1024*1024 {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "Invalid size parameter (1-1048576)"})
+		return
 	}
 
-	return hashes, nil
+	// Generate random data
+	data, err := p.generator.GenerateRandomData(size)
+	if err != nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate data"})
+		return
+	}
+
+	ctx.JSON(http.StatusOK, gin.H{
+		"data": hex.EncodeToString(data),
+		"size": len(data),
+	})
 }
 
 // seedHandler processes incoming TRNG seeds to reseed the Fortuna generator
@@ -183,9 +190,13 @@ func (p *FortunaProcessor) seedHandler(ctx *gin.Context) {
 		return
 	}
 
+	// Update last reseed time
+	p.lastReseedTime = time.Now()
+
 	ctx.JSON(http.StatusOK, gin.H{
-		"status": "reseeded",
-		"count":  len(request.Seeds),
+		"status":        "reseeded",
+		"count":         len(request.Seeds),
+		"last_reseeded": p.lastReseedTime.Format(time.RFC3339),
 	})
 }
 
@@ -233,55 +244,7 @@ func (p *FortunaProcessor) amplifyDataHandler(ctx *gin.Context) {
 	})
 }
 
-// HTTP Handlers
-
-func (p *FortunaProcessor) healthCheckHandler(ctx *gin.Context) {
-	healthy := p.generator.HealthCheck()
-	if healthy {
-		ctx.JSON(http.StatusOK, gin.H{
-			"status":    "healthy",
-			"timestamp": time.Now().Format(time.RFC3339),
-		})
-	} else {
-		ctx.JSON(http.StatusServiceUnavailable, gin.H{
-			"status":    "unhealthy",
-			"timestamp": time.Now().Format(time.RFC3339),
-			"details": gin.H{
-				"generator": p.generator.HealthCheck(),
-			},
-		})
-	}
-}
-
-func (p *FortunaProcessor) infoHandler(ctx *gin.Context) {
-	ctx.JSON(http.StatusOK, gin.H{
-		"status":               "running",
-		"amplification_factor": p.amplificationFactor,
-		"last_reseeded":        time.Now().Format(time.RFC3339), // Just use current time as we don't track this
-	})
-}
-
-func (p *FortunaProcessor) generateDataHandler(ctx *gin.Context) {
-	// Get requested size parameter
-	sizeStr := ctx.DefaultQuery("size", "128")
-	size, err := strconv.Atoi(sizeStr)
-	if err != nil || size <= 0 || size > 1024*1024 {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": "Invalid size parameter (1-1048576)"})
-		return
-	}
-
-	// Generate random data
-	data, err := p.generator.GenerateRandomData(size)
-	if err != nil {
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate data"})
-		return
-	}
-
-	ctx.JSON(http.StatusOK, gin.H{
-		"data": hex.EncodeToString(data),
-		"size": len(data),
-	})
-}
+//---------------------- Main ----------------------
 
 func main() {
 	// Read configuration from environment variables
@@ -301,14 +264,8 @@ func main() {
 		}
 	}
 
-	// Default controller URL
-	controllerURL := "http://controller:8081"
-	if val, ok := os.LookupEnv("CONTROLLER_URL"); ok && val != "" {
-		controllerURL = val
-	}
-
 	// Create and start Fortuna processor
-	processor, err := NewFortunaProcessor(port, amplificationFactor, controllerURL)
+	processor, err := NewFortunaProcessor(port, amplificationFactor)
 	if err != nil {
 		log.Fatalf("Failed to create Fortuna processor: %v", err)
 	}
@@ -316,7 +273,7 @@ func main() {
 	log.Printf("Starting Fortuna processor with configuration:")
 	log.Printf("  Port: %d", port)
 	log.Printf("  Amplification Factor: %d", amplificationFactor)
-	log.Printf("  Controller URL: %s", controllerURL)
+	log.Printf("Note: Fortuna will be seeded by the API service via /seed endpoint")
 
 	err = processor.Start()
 	if err != nil {

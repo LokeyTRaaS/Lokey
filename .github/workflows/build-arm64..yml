@@ -1,0 +1,298 @@
+name: Build ARM64 Binaries and Containers
+
+on:
+  push:
+    branches:
+      - main
+      - refactor/clean_up
+    tags:
+      - 'v*'
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  GO_VERSION: '1.24'
+
+jobs:
+  # Build native ARM64 binaries in parallel
+  build-binaries:
+    name: Build ${{ matrix.service }} Binary
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [controller, api, fortuna]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+          cache-dependency-path: |
+            go.sum
+            cmd/${{ matrix.service }}/go.sum
+
+      - name: Install ARM64 cross-compilation tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+
+      - name: Download dependencies
+        run: |
+          go mod download
+          cd cmd/${{ matrix.service }} && go mod download
+
+      - name: Build ARM64 binary
+        env:
+          CGO_ENABLED: 1
+          GOOS: linux
+          GOARCH: arm64
+          CC: aarch64-linux-gnu-gcc
+        run: |
+          mkdir -p build
+          cd cmd/${{ matrix.service }}
+          go build -v -trimpath -ldflags="-s -w" -o ../../build/lokey-${{ matrix.service }}-arm64
+
+      - name: Verify binary
+        run: |
+          file build/lokey-${{ matrix.service }}-arm64
+          ls -lh build/lokey-${{ matrix.service }}-arm64
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: lokey-${{ matrix.service }}-arm64
+          path: build/lokey-${{ matrix.service }}-arm64
+          retention-days: 30
+          compression-level: 9
+
+  # Build Docker images in parallel
+  build-containers:
+    name: Build ${{ matrix.service }} Container
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [controller, api, fortuna]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ github.repository_owner }}/lokey-${{ matrix.service }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,prefix={{branch}}-
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./cmd/${{ matrix.service }}/Dockerfile
+          platforms: linux/arm64
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: false
+          sbom: false
+
+  # Create release with all artifacts
+  create-release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    needs: [build-binaries, build-containers]
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download all binaries
+        uses: actions/download-artifact@v4
+        with:
+          path: ./artifacts
+
+      - name: Create checksums
+        run: |
+          cd artifacts
+          for dir in lokey-*-arm64; do
+            if [ -d "$dir" ]; then
+              cd "$dir"
+              sha256sum * > checksums.txt
+              cd ..
+            fi
+          done
+          
+          # Create combined checksum file
+          find . -name "lokey-*-arm64" -type f -exec sha256sum {} \; > ../all-checksums.txt
+
+      - name: Create release archives
+        run: |
+          mkdir -p releases
+          cd artifacts
+          
+          # Create individual service archives
+          for service in controller api fortuna; do
+            if [ -d "lokey-${service}-arm64" ]; then
+              tar -czf ../releases/lokey-${service}-arm64.tar.gz \
+                -C lokey-${service}-arm64 .
+            fi
+          done
+          
+          # Create combined archive with all binaries
+          mkdir -p combined
+          find . -name "lokey-*-arm64" -type f -exec cp {} combined/ \;
+          tar -czf ../releases/lokey-all-services-arm64.tar.gz -C combined .
+
+      - name: Generate release notes
+        id: release_notes
+        run: |
+          VERSION="${GITHUB_REF#refs/tags/}"
+          cat << EOF > release_notes.md
+          ## 🚀 LoKey $VERSION - ARM64 Release
+
+          ### 📦 What's Included
+          - Controller service binary (ATECC608A hardware interface)
+          - API service binary (Main REST API with BoltDB)
+          - Fortuna service binary (Cryptographic RNG amplifier)
+          - Docker images for all services
+
+          ### 🐳 Docker Images
+          Pull the images with:
+          \`\`\`bash
+          docker pull ghcr.io/${{ github.repository_owner }}/lokey-controller:$VERSION
+          docker pull ghcr.io/${{ github.repository_owner }}/lokey-api:$VERSION
+          docker pull ghcr.io/${{ github.repository_owner }}/lokey-fortuna:$VERSION
+          \`\`\`
+
+          ### 📥 Download Binaries
+
+          **All services in one archive:**
+          \`\`\`bash
+          wget https://github.com/${{ github.repository }}/releases/download/$VERSION/lokey-all-services-arm64.tar.gz
+          tar -xzf lokey-all-services-arm64.tar.gz
+          chmod +x lokey-*-arm64
+          \`\`\`
+
+          **Individual services:**
+          \`\`\`bash
+          # Controller only
+          wget https://github.com/${{ github.repository }}/releases/download/$VERSION/lokey-controller-arm64.tar.gz
+          
+          # API only
+          wget https://github.com/${{ github.repository }}/releases/download/$VERSION/lokey-api-arm64.tar.gz
+          
+          # Fortuna only
+          wget https://github.com/${{ github.repository }}/releases/download/$VERSION/lokey-fortuna-arm64.tar.gz
+          \`\`\`
+
+          ### 🥧 Raspberry Pi Quick Start
+          \`\`\`bash
+          # Download controller binary
+          wget https://github.com/${{ github.repository }}/releases/download/$VERSION/lokey-controller-arm64.tar.gz
+          tar -xzf lokey-controller-arm64.tar.gz
+          chmod +x lokey-controller-arm64
+          
+          # Run (requires I2C permissions)
+          sudo ./lokey-controller-arm64
+          \`\`\`
+
+          ### 🔐 Verify Downloads
+          \`\`\`bash
+          # Download checksums
+          wget https://github.com/${{ github.repository }}/releases/download/$VERSION/all-checksums.txt
+          
+          # Verify
+          sha256sum -c all-checksums.txt
+          \`\`\`
+
+          ### 📖 Documentation
+          - [Hardware Setup](https://github.com/${{ github.repository }}/blob/main/device/HowToSetup.md)
+          - [API Documentation](https://github.com/${{ github.repository }}/blob/main/README.md)
+          - [Docker Compose Setup](https://github.com/${{ github.repository }}/blob/main/docker-compose.yaml)
+
+          ### 🔧 System Requirements
+          - **OS**: Linux ARM64 (Raspberry Pi OS, Ubuntu, etc.)
+          - **Hardware**: Raspberry Pi Zero 2W or newer
+          - **Optional**: ATECC608A chip for hardware TRNG
+
+          ---
+          **Full Changelog**: https://github.com/${{ github.repository }}/compare/...
+          EOF
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            releases/*.tar.gz
+            all-checksums.txt
+          body_path: release_notes.md
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Summary job for status checks
+  build-summary:
+    name: Build Summary
+    runs-on: ubuntu-latest
+    needs: [build-binaries, build-containers]
+    if: always()
+    steps:
+      - name: Check build status
+        run: |
+          echo "## Build Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Service | Binary | Container |" >> $GITHUB_STEP_SUMMARY
+          echo "|---------|--------|-----------|" >> $GITHUB_STEP_SUMMARY
+          
+          if [ "${{ needs.build-binaries.result }}" == "success" ]; then
+            echo "| All | ✅ Success | " >> $GITHUB_STEP_SUMMARY
+          else
+            echo "| All | ❌ Failed | " >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          if [ "${{ needs.build-containers.result }}" == "success" ]; then
+            echo " ✅ Success |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo " ❌ Failed |" >> $GITHUB_STEP_SUMMARY
+          fi

@@ -2,17 +2,6 @@ package database
 
 import "time"
 
-// Request represents a random number generation request
-type Request struct {
-	ID        string    `json:"id"`
-	Size      int       `json:"size"`
-	Status    string    `json:"status"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
-	Result    []byte    `json:"result,omitempty"`
-	Source    string    `json:"source"`
-}
-
 // UsageStat represents usage statistics
 type UsageStat struct {
 	Source    string    `json:"source"`
@@ -65,12 +54,6 @@ type FortunaData struct {
 
 // DBHandler defines the interface for database operations
 type DBHandler interface {
-	// Queue management
-	EnqueueTRNGRequest(request Request) error
-	DequeueTRNGRequest() (Request, error)
-	EnqueueFortunaRequest(request Request) error
-	DequeueFortunaRequest() (Request, error)
-
 	// TRNG operations
 	StoreTRNGData(data []byte) error
 	GetTRNGData(limit, offset int, consume bool) ([][]byte, error)

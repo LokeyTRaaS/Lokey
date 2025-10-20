@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
 	"encoding/json"
@@ -17,7 +18,10 @@ func (s *Server) StartPolling(ctx context.Context, trngPollInterval, fortunaPoll
 	// Start Fortuna polling
 	go s.pollFortunaService(ctx, fortunaPollInterval)
 
-	log.Printf("Started polling services - TRNG interval: %s, Fortuna interval: %s",
+	// Start Fortuna seeding with TRNG data
+	go s.seedFortunaWithTRNG(ctx, 30*time.Second)
+
+	log.Printf("Started polling services - TRNG interval: %s, Fortuna interval: %s, Fortuna seeding: every 30s",
 		trngPollInterval, fortunaPollInterval)
 }
 
@@ -131,7 +135,82 @@ func (s *Server) pollFortunaService(ctx context.Context, interval time.Duration)
 				// Increment polling count only on successful storage
 				s.db.IncrementPollingCount("fortuna")
 			}
+		}
+	}
+}
 
+// seedFortunaWithTRNG periodically seeds Fortuna generator with hardware TRNG data
+func (s *Server) seedFortunaWithTRNG(ctx context.Context, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	log.Printf("Starting Fortuna seeding with TRNG data every %s", interval)
+
+	for {
+		select {
+		case <-ctx.Done():
+			log.Printf("Fortuna seeding stopped")
+			return
+		case <-ticker.C:
+			// Fetch multiple TRNG samples from controller for good entropy
+			resp, err := http.Get(s.controllerAddr + "/generate?count=5")
+			if err != nil {
+				log.Printf("Error fetching TRNG data for Fortuna seeding: %v", err)
+				continue
+			}
+
+			if resp.StatusCode != http.StatusOK {
+				log.Printf("Controller returned non-OK status for seeding: %d", resp.StatusCode)
+				resp.Body.Close()
+				continue
+			}
+
+			// Parse controller response (returns array when count > 1)
+			var result struct {
+				Data []string `json:"data"`
+			}
+
+			if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+				log.Printf("Error parsing controller response for seeding: %v", err)
+				resp.Body.Close()
+				continue
+			}
+			resp.Body.Close()
+
+			if len(result.Data) == 0 {
+				log.Printf("No TRNG data received for seeding")
+				continue
+			}
+
+			// Send seeds to Fortuna's /seed endpoint
+			seedRequest := struct {
+				Seeds []string `json:"seeds"`
+			}{
+				Seeds: result.Data,
+			}
+
+			seedData, err := json.Marshal(seedRequest)
+			if err != nil {
+				log.Printf("Error marshaling seed request: %v", err)
+				continue
+			}
+
+			seedResp, err := http.Post(
+				s.fortunaAddr+"/seed",
+				"application/json",
+				bytes.NewBuffer(seedData),
+			)
+			if err != nil {
+				log.Printf("Error seeding Fortuna: %v", err)
+				continue
+			}
+
+			if seedResp.StatusCode != http.StatusOK {
+				log.Printf("Fortuna seeding failed with status: %d", seedResp.StatusCode)
+			} else {
+				log.Printf("Successfully seeded Fortuna with %d TRNG samples", len(result.Data))
+			}
+			seedResp.Body.Close()
 		}
 	}
 }

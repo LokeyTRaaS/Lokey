@@ -16,13 +16,11 @@ import (
 
 var (
 	// Bucket names
-	trngQueueBucket    = []byte("trng_queue")
-	fortunaQueueBucket = []byte("fortuna_queue")
-	trngDataBucket     = []byte("trng_data")
-	fortunaDataBucket  = []byte("fortuna_data")
-	usageStatsBucket   = []byte("usage_stats")
-	countersBucket     = []byte("counters")
-	configBucket       = []byte("config")
+	trngDataBucket    = []byte("trng_data")
+	fortunaDataBucket = []byte("fortuna_data")
+	usageStatsBucket  = []byte("usage_stats")
+	countersBucket    = []byte("counters")
+	configBucket      = []byte("config")
 )
 
 // BoltDBHandler implements the database interface using BoltDB
@@ -63,8 +61,6 @@ func NewBoltDBHandler(dbPath string, trngQueueSize, fortunaQueueSize int) (*Bolt
 	// Initialize buckets
 	err = db.Update(func(tx *bolt.Tx) error {
 		buckets := [][]byte{
-			trngQueueBucket,
-			fortunaQueueBucket,
 			trngDataBucket,
 			fortunaDataBucket,
 			usageStatsBucket,
@@ -83,10 +79,6 @@ func NewBoltDBHandler(dbPath string, trngQueueSize, fortunaQueueSize int) (*Bolt
 			key   []byte
 			value uint64
 		}{
-			{[]byte("trng_head"), 0},
-			{[]byte("trng_tail"), 0},
-			{[]byte("fortuna_head"), 0},
-			{[]byte("fortuna_tail"), 0},
 			{[]byte("trng_next_id"), 0},
 			{[]byte("fortuna_next_id"), 0},
 			{[]byte("trng_polling_count"), 0},
@@ -174,204 +166,6 @@ func (h *BoltDBHandler) getNextID(tx *bolt.Tx, counterKey []byte) (uint64, error
 	}
 
 	return id, nil
-}
-
-//---------------------- TRNG Request Queue Operations ----------------------
-
-// EnqueueTRNGRequest adds a new TRNG request to the queue
-func (h *BoltDBHandler) EnqueueTRNGRequest(request Request) error {
-	return h.db.Update(func(tx *bolt.Tx) error {
-		// Get queue counters
-		headCounter, err := h.getCounter(tx, []byte("trng_head"))
-		if err != nil {
-			return err
-		}
-
-		tailCounter, err := h.getCounter(tx, []byte("trng_tail"))
-		if err != nil {
-			return err
-		}
-
-		// Check queue size
-		h.mu.RLock()
-		queueSize := int(headCounter - tailCounter)
-		maxSize := h.trngQueueSize
-		h.mu.RUnlock()
-
-		if queueSize >= maxSize {
-			return fmt.Errorf("TRNG queue is full")
-		}
-
-		// Set request fields
-		request.Status = "pending"
-		request.CreatedAt = time.Now()
-		request.UpdatedAt = request.CreatedAt
-		request.Source = "trng"
-
-		// Serialize request to JSON
-		data, err := json.Marshal(request)
-		if err != nil {
-			return fmt.Errorf("serialize request: %w", err)
-		}
-
-		// Store in queue
-		b := tx.Bucket(trngQueueBucket)
-		key := make([]byte, 8)
-		binary.BigEndian.PutUint64(key, headCounter)
-		if err := b.Put(key, data); err != nil {
-			return fmt.Errorf("store request: %w", err)
-		}
-
-		// Update head counter
-		return h.setCounter(tx, []byte("trng_head"), headCounter+1)
-	})
-}
-
-// DequeueTRNGRequest retrieves and removes the next TRNG request from the queue
-func (h *BoltDBHandler) DequeueTRNGRequest() (Request, error) {
-	var request Request
-
-	err := h.db.Update(func(tx *bolt.Tx) error {
-		// Get queue counters
-		headCounter, err := h.getCounter(tx, []byte("trng_head"))
-		if err != nil {
-			return err
-		}
-
-		tailCounter, err := h.getCounter(tx, []byte("trng_tail"))
-		if err != nil {
-			return err
-		}
-
-		// Check if queue is empty
-		if headCounter == tailCounter {
-			return fmt.Errorf("TRNG queue is empty")
-		}
-
-		// Get request from tail
-		b := tx.Bucket(trngQueueBucket)
-		key := make([]byte, 8)
-		binary.BigEndian.PutUint64(key, tailCounter)
-
-		data := b.Get(key)
-		if data == nil {
-			return fmt.Errorf("request not found")
-		}
-
-		// Deserialize request
-		if err := json.Unmarshal(data, &request); err != nil {
-			return fmt.Errorf("deserialize request: %w", err)
-		}
-
-		// Delete request from queue
-		if err := b.Delete(key); err != nil {
-			return fmt.Errorf("delete request: %w", err)
-		}
-
-		// Update tail counter
-		return h.setCounter(tx, []byte("trng_tail"), tailCounter+1)
-	})
-
-	return request, err
-}
-
-//---------------------- Fortuna Request Queue Operations ----------------------
-
-// EnqueueFortunaRequest adds a new Fortuna request to the queue
-func (h *BoltDBHandler) EnqueueFortunaRequest(request Request) error {
-	return h.db.Update(func(tx *bolt.Tx) error {
-		// Get queue counters
-		headCounter, err := h.getCounter(tx, []byte("fortuna_head"))
-		if err != nil {
-			return err
-		}
-
-		tailCounter, err := h.getCounter(tx, []byte("fortuna_tail"))
-		if err != nil {
-			return err
-		}
-
-		// Check queue size
-		h.mu.RLock()
-		queueSize := int(headCounter - tailCounter)
-		maxSize := h.fortunaQueueSize
-		h.mu.RUnlock()
-
-		if queueSize >= maxSize {
-			return fmt.Errorf("Fortuna queue is full")
-		}
-
-		// Set request fields
-		request.Status = "pending"
-		request.CreatedAt = time.Now()
-		request.UpdatedAt = request.CreatedAt
-		request.Source = "fortuna"
-
-		// Serialize request to JSON
-		data, err := json.Marshal(request)
-		if err != nil {
-			return fmt.Errorf("serialize request: %w", err)
-		}
-
-		// Store in queue
-		b := tx.Bucket(fortunaQueueBucket)
-		key := make([]byte, 8)
-		binary.BigEndian.PutUint64(key, headCounter)
-		if err := b.Put(key, data); err != nil {
-			return fmt.Errorf("store request: %w", err)
-		}
-
-		// Update head counter
-		return h.setCounter(tx, []byte("fortuna_head"), headCounter+1)
-	})
-}
-
-// DequeueFortunaRequest retrieves and removes the next Fortuna request from the queue
-func (h *BoltDBHandler) DequeueFortunaRequest() (Request, error) {
-	var request Request
-
-	err := h.db.Update(func(tx *bolt.Tx) error {
-		// Get queue counters
-		headCounter, err := h.getCounter(tx, []byte("fortuna_head"))
-		if err != nil {
-			return err
-		}
-
-		tailCounter, err := h.getCounter(tx, []byte("fortuna_tail"))
-		if err != nil {
-			return err
-		}
-
-		// Check if queue is empty
-		if headCounter == tailCounter {
-			return fmt.Errorf("Fortuna queue is empty")
-		}
-
-		// Get request from tail
-		b := tx.Bucket(fortunaQueueBucket)
-		key := make([]byte, 8)
-		binary.BigEndian.PutUint64(key, tailCounter)
-
-		data := b.Get(key)
-		if data == nil {
-			return fmt.Errorf("request not found")
-		}
-
-		// Deserialize request
-		if err := json.Unmarshal(data, &request); err != nil {
-			return fmt.Errorf("deserialize request: %w", err)
-		}
-
-		// Delete request from queue
-		if err := b.Delete(key); err != nil {
-			return fmt.Errorf("delete request: %w", err)
-		}
-
-		// Update tail counter
-		return h.setCounter(tx, []byte("fortuna_tail"), tailCounter+1)
-	})
-
-	return request, err
 }
 
 //---------------------- TRNG Data Operations ----------------------
@@ -467,15 +261,10 @@ func (h *BoltDBHandler) GetTRNGData(limit, offset int, consume bool) ([][]byte, 
 
 		// Update consumed counter
 		if consume && consumedCount > 0 {
-			counterB := tx.Bucket(countersBucket)
 			key := []byte("trng_consumed_count")
-
 			currentCount, _ := h.getCounter(tx, key)
 			currentCount += uint64(consumedCount)
-
-			var buf [8]byte
-			binary.BigEndian.PutUint64(buf[:], currentCount)
-			counterB.Put(key, buf[:])
+			h.setCounter(tx, key, currentCount)
 		}
 
 		return nil
@@ -514,15 +303,12 @@ func (h *BoltDBHandler) trimTRNGDataIfNeeded(tx *bolt.Tx) error {
 		}
 
 		// Update dropped counter
-		counterB := tx.Bucket(countersBucket)
 		key := []byte("trng_dropped_count")
-
 		currentCount, _ := h.getCounter(tx, key)
 		currentCount += uint64(droppedCount)
-
 		var buf [8]byte
 		binary.BigEndian.PutUint64(buf[:], currentCount)
-		counterB.Put(key, buf[:])
+		tx.Bucket(countersBucket).Put(key, buf[:])
 	}
 
 	return nil
@@ -621,15 +407,10 @@ func (h *BoltDBHandler) GetFortunaData(limit, offset int, consume bool) ([][]byt
 
 		// Update consumed counter
 		if consume && consumedCount > 0 {
-			counterB := tx.Bucket(countersBucket)
 			key := []byte("fortuna_consumed_count")
-
 			currentCount, _ := h.getCounter(tx, key)
 			currentCount += uint64(consumedCount)
-
-			var buf [8]byte
-			binary.BigEndian.PutUint64(buf[:], currentCount)
-			counterB.Put(key, buf[:])
+			h.setCounter(tx, key, currentCount)
 		}
 
 		return nil
@@ -668,15 +449,12 @@ func (h *BoltDBHandler) trimFortunaDataIfNeeded(tx *bolt.Tx) error {
 		}
 
 		// Update dropped counter
-		counterB := tx.Bucket(countersBucket)
 		key := []byte("fortuna_dropped_count")
-
 		currentCount, _ := h.getCounter(tx, key)
 		currentCount += uint64(droppedCount)
-
 		var buf [8]byte
 		binary.BigEndian.PutUint64(buf[:], currentCount)
-		counterB.Put(key, buf[:])
+		tx.Bucket(countersBucket).Put(key, buf[:])
 	}
 
 	return nil
@@ -950,12 +728,6 @@ func (h *BoltDBHandler) GetQueueInfo() (map[string]int, error) {
 	queueInfo := make(map[string]int)
 
 	err := h.db.View(func(tx *bolt.Tx) error {
-		// Get queue counters
-		trngHead, _ := h.getCounter(tx, []byte("trng_head"))
-		trngTail, _ := h.getCounter(tx, []byte("trng_tail"))
-		fortunaHead, _ := h.getCounter(tx, []byte("fortuna_head"))
-		fortunaTail, _ := h.getCounter(tx, []byte("fortuna_tail"))
-
 		// Count TRNG data
 		trngTotal := 0
 		trngUnconsumed := 0
@@ -1001,9 +773,7 @@ func (h *BoltDBHandler) GetQueueInfo() (map[string]int, error) {
 		h.mu.RUnlock()
 
 		// Populate result
-		queueInfo["trng_queue_size"] = int(trngHead - trngTail)
 		queueInfo["trng_queue_capacity"] = trngCapacity
-		queueInfo["fortuna_queue_size"] = int(fortunaHead - fortunaTail)
 		queueInfo["fortuna_queue_capacity"] = fortunaCapacity
 		queueInfo["trng_data_count"] = trngTotal
 		queueInfo["trng_unconsumed_count"] = trngUnconsumed
