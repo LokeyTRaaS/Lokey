@@ -1,0 +1,21 @@
+FROM alpine:latest
+
+# Add runtime dependencies
+RUN apk --no-cache add ca-certificates libc6-compat
+
+WORKDIR /app
+
+# Copy pre-built binary
+ARG BINARY_PATH=./build/lokey-fortuna-arm64
+COPY ${BINARY_PATH} /app/lokey-fortuna
+
+# Set environment variables
+ENV PORT=8082 \
+    CONTROLLER_URL=http://controller:8081 \
+    AMPLIFICATION_FACTOR=4
+
+# Expose the port
+EXPOSE 8082
+
+# Run the application
+CMD ["/app/lokey-fortuna"]

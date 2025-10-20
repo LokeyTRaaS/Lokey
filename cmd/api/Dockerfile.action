@@ -1,0 +1,29 @@
+FROM alpine:latest
+
+# Add runtime dependencies
+RUN apk --no-cache add ca-certificates libc6-compat
+
+WORKDIR /app
+
+# Copy pre-built binary
+ARG BINARY_PATH=./build/lokey-api-arm64
+COPY ${BINARY_PATH} /app/lokey-api
+
+# Create data directory
+RUN mkdir -p /data
+
+# Set environment variables
+ENV PORT=8080 \
+    DB_PATH=/data/api.db \
+    CONTROLLER_ADDR=http://controller:8081 \
+    FORTUNA_ADDR=http://fortuna:8082 \
+    TRNG_QUEUE_SIZE=1000000 \
+    FORTUNA_QUEUE_SIZE=1000000 \
+    TRNG_POLL_INTERVAL_MS=100 \
+    FORTUNA_POLL_INTERVAL_MS=100
+
+# Expose the port
+EXPOSE 8080
+
+# Run the application
+CMD ["/app/lokey-api"]

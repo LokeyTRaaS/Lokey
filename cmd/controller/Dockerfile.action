@@ -1,0 +1,21 @@
+FROM alpine:latest
+
+# Add runtime dependencies
+RUN apk --no-cache add ca-certificates libc6-compat
+
+WORKDIR /app
+
+# Copy pre-built binary
+ARG BINARY_PATH=./build/lokey-controller-arm64
+COPY ${BINARY_PATH} /app/lokey-controller
+
+# Set environment variables
+ENV PORT=8081 \
+    I2C_BUS_NUMBER=1 \
+    FORCE_CONFIG=false
+
+# Expose the port
+EXPOSE 8081
+
+# Run the application
+CMD ["/app/lokey-controller"]
