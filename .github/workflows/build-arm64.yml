@@ -73,14 +73,11 @@ jobs:
           retention-days: 30
           compression-level: 9
 
-  # Build Docker images in parallel
-  # Build Docker images using pre-built binaries
-
   # Build Docker images using pre-built binaries
   build-containers:
     name: Build ${{ matrix.service }} Container
     runs-on: ubuntu-latest
-    needs: build-binaries  # Wait for binaries to be ready
+    needs: build-binaries
     permissions:
       contents: read
       packages: write
@@ -93,19 +90,36 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Create build directory
+        run: mkdir -p build
+
       - name: Download binary artifact
         uses: actions/download-artifact@v4
         with:
           name: lokey-${{ matrix.service }}-arm64
           path: ./build
 
-      - name: Verify binary exists
+      - name: Verify binary and fix .dockerignore
         run: |
+          echo "=== Binary verification ==="
           ls -la ./build/
           file ./build/lokey-${{ matrix.service }}-arm64
-
-      - name: Make binary executable
-        run: chmod +x ./build/lokey-${{ matrix.service }}-arm64
+          chmod +x ./build/lokey-${{ matrix.service }}-arm64
+          
+          echo ""
+          echo "=== Fixing .dockerignore to allow build/ directory ==="
+          if [ -f .dockerignore ]; then
+            echo "Original .dockerignore:"
+            cat .dockerignore
+            # Temporarily remove lines that exclude build directory
+            grep -v '^build' .dockerignore > .dockerignore.tmp || true
+            mv .dockerignore.tmp .dockerignore
+            echo ""
+            echo "Modified .dockerignore:"
+            cat .dockerignore
+          else
+            echo "No .dockerignore found"
+          fi
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -149,6 +163,7 @@ jobs:
           cache-to: type=gha,mode=max
           provenance: false
           sbom: false
+
   # Create release with all artifacts
   create-release:
     name: Create Release
