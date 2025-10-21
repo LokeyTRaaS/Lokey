@@ -129,7 +129,7 @@ jobs:
 
   # Build Docker images for multiple architectures
   build-containers:
-    name: Build ${{ matrix.service }} Container (${{ matrix.platform }})
+    name: Build ${{ matrix.service }} Container (${{ matrix.arch }})
     runs-on: ubuntu-latest
     needs: build-binaries
     permissions:
@@ -138,14 +138,20 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        service: [controller, api, fortuna]
+        service: [ controller, api, fortuna ]
+        arch: [ amd64, arm64, armv7 ]
         include:
-          - platform: linux/amd64
-            arch: amd64
-          - platform: linux/arm64
-            arch: arm64
-          - platform: linux/arm/v7
-            arch: armv7
+          # AMD64 platform mapping
+          - arch: amd64
+            platform: linux/amd64
+
+          # ARM64 platform mapping
+          - arch: arm64
+            platform: linux/arm64
+
+          # ARMv7 platform mapping
+          - arch: armv7
+            platform: linux/arm/v7
 
     steps:
       - name: Checkout code
@@ -154,7 +160,7 @@ jobs:
       - name: Create build directory
         run: mkdir -p build
 
-      - name: Download binary artifact
+      - name: Download binary artifact for ${{ matrix.arch }}
         uses: actions/download-artifact@v4
         with:
           name: lokey-${{ matrix.service }}-${{ matrix.arch }}
@@ -168,18 +174,24 @@ jobs:
           name: swagger-docs
           path: ./pkg/api/docs
 
-      - name: Verify artifacts
+      - name: Verify artifacts and prepare for build
         run: |
           echo "=== Binary verification ==="
           ls -la ./build/
           file ./build/lokey-${{ matrix.service }}-${{ matrix.arch }}
           chmod +x ./build/lokey-${{ matrix.service }}-${{ matrix.arch }}
-          
+
           # Verify Swagger docs for API service
           if [ "${{ matrix.service }}" == "api" ]; then
             echo ""
             echo "=== Swagger documentation verification ==="
-            ls -la ./pkg/api/docs/ || echo "No swagger docs found"
+            if [ -d "./pkg/api/docs" ]; then
+              ls -la ./pkg/api/docs/
+              [ -f "./pkg/api/docs/swagger.json" ] && echo "✓ swagger.json found"
+              [ -f "./pkg/api/docs/swagger.yaml" ] && echo "✓ swagger.yaml found"
+            else
+              echo "⚠ Swagger docs directory not found"
+            fi
           fi
 
       - name: Set up QEMU
@@ -220,7 +232,7 @@ jobs:
           flavor: |
             latest=false
 
-      - name: Build and push Docker image
+      - name: Build and push Docker image for ${{ matrix.platform }}
         uses: docker/build-push-action@v5
         with:
           context: .
