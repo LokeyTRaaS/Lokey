@@ -174,20 +174,6 @@ jobs:
           name: swagger-docs
           path: ./pkg/api/docs
 
-      - name: Debug - List all files
-        run: |
-          echo "=== Current directory ==="
-          pwd
-          echo ""
-          echo "=== Root directory contents ==="
-          ls -la .
-          echo ""
-          echo "=== Build directory contents ==="
-          ls -la ./build/ || echo "build directory does not exist"
-          echo ""
-          echo "=== Find all lokey binaries ==="
-          find . -name "lokey-*" -type f
-
       - name: Verify artifacts and prepare for build
         run: |
           echo "=== Binary verification ==="
@@ -206,6 +192,13 @@ jobs:
             cp "$BINARY_WITH_ARCH" "$BINARY_STANDARD"
             echo "Created standardized binary: $BINARY_STANDARD"
             ls -lh "$BINARY_STANDARD"
+          
+            # Verify the file is readable and in the correct location
+            echo ""
+            echo "=== Final verification before Docker build ==="
+            pwd
+            ls -la build/
+            file "build/lokey-${{ matrix.service }}"
           else
             echo "ERROR: Binary not found at $BINARY_WITH_ARCH"
             echo "Contents of ./build/:"
@@ -233,6 +226,9 @@ jobs:
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
+        with:
+          driver-opts: |
+            network=host
 
       - name: Log in to GitHub Container Registry
         if: github.event_name != 'pull_request'
