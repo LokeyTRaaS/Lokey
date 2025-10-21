@@ -196,7 +196,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ github.repository_owner }}/lokey-${{ matrix.service }}
+          images: ${{ env.REGISTRY }}/${{ github.repository }}/${{ matrix.service }}
           tags: |
             type=ref,event=branch
             type=ref,event=pr
@@ -204,6 +204,8 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
             type=sha,prefix={{branch}}-
             type=raw,value=latest,enable={{is_default_branch}}
+          flavor: |
+            latest=auto
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
@@ -287,6 +289,8 @@ jobs:
         id: release_notes
         run: |
           VERSION="${GITHUB_REF#refs/tags/}"
+          REPO_LOWER=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
+          
           cat << EOF > release_notes.md
           ## 🚀 LoKey $VERSION - ARM64 Release
 
@@ -300,9 +304,9 @@ jobs:
           ### 🐳 Docker Images
           Pull the images with:
           \`\`\`bash
-          docker pull ghcr.io/${{ github.repository_owner }}/lokey-controller:$VERSION
-          docker pull ghcr.io/${{ github.repository_owner }}/lokey-api:$VERSION
-          docker pull ghcr.io/${{ github.repository_owner }}/lokey-fortuna:$VERSION
+          docker pull ghcr.io/${REPO_LOWER}/controller:$VERSION
+          docker pull ghcr.io/${REPO_LOWER}/api:$VERSION
+          docker pull ghcr.io/${REPO_LOWER}/fortuna:$VERSION
           \`\`\`
 
           ### 📥 Download Binaries
@@ -409,6 +413,9 @@ jobs:
 
       - name: Generate comprehensive summary
         run: |
+          # Convert repository name to lowercase for Docker registry
+          REPO_LOWER=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
+          
           echo "# 🚀 Build Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           
@@ -541,17 +548,19 @@ jobs:
             echo "Container images have been pushed to GitHub Container Registry:" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
-            echo "# Pull individual images" >> $GITHUB_STEP_SUMMARY
-            echo "docker pull ${{ env.REGISTRY }}/${{ github.repository_owner }}/lokey-controller:${GITHUB_REF_NAME}" >> $GITHUB_STEP_SUMMARY
-            echo "docker pull ${{ env.REGISTRY }}/${{ github.repository_owner }}/lokey-api:${GITHUB_REF_NAME}" >> $GITHUB_STEP_SUMMARY
-            echo "docker pull ${{ env.REGISTRY }}/${{ github.repository_owner }}/lokey-fortuna:${GITHUB_REF_NAME}" >> $GITHUB_STEP_SUMMARY
+            echo "# Pull individual images (note: use lowercase repository name)" >> $GITHUB_STEP_SUMMARY
+            echo "docker pull ghcr.io/${REPO_LOWER}/controller:${GITHUB_REF_NAME}" >> $GITHUB_STEP_SUMMARY
+            echo "docker pull ghcr.io/${REPO_LOWER}/api:${GITHUB_REF_NAME}" >> $GITHUB_STEP_SUMMARY
+            echo "docker pull ghcr.io/${REPO_LOWER}/fortuna:${GITHUB_REF_NAME}" >> $GITHUB_STEP_SUMMARY
             echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
-            echo "| Service | Image Tag | Platform | Notes |" >> $GITHUB_STEP_SUMMARY
-            echo "|---------|-----------|----------|-------|" >> $GITHUB_STEP_SUMMARY
-            echo "| lokey-controller | \`${GITHUB_REF_NAME}\` | linux/arm64 | I2C hardware support |" >> $GITHUB_STEP_SUMMARY
-            echo "| lokey-api | \`${GITHUB_REF_NAME}\` | linux/arm64 | Includes Swagger UI |" >> $GITHUB_STEP_SUMMARY
-            echo "| lokey-fortuna | \`${GITHUB_REF_NAME}\` | linux/arm64 | Stateless CSPRNG |" >> $GITHUB_STEP_SUMMARY
+            echo "| Service | Image Name | Platform | Notes |" >> $GITHUB_STEP_SUMMARY
+            echo "|---------|------------|----------|-------|" >> $GITHUB_STEP_SUMMARY
+            echo "| lokey-controller | \`ghcr.io/${REPO_LOWER}/controller:${GITHUB_REF_NAME}\` | linux/arm64 | I2C hardware support |" >> $GITHUB_STEP_SUMMARY
+            echo "| lokey-api | \`ghcr.io/${REPO_LOWER}/api:${GITHUB_REF_NAME}\` | linux/arm64 | Includes Swagger UI |" >> $GITHUB_STEP_SUMMARY
+            echo "| lokey-fortuna | \`ghcr.io/${REPO_LOWER}/fortuna:${GITHUB_REF_NAME}\` | linux/arm64 | Stateless CSPRNG |" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "> 🔗 **View on GHCR**: [https://github.com/orgs/${{ github.repository_owner }}/packages](https://github.com/orgs/${{ github.repository_owner }}/packages)" >> $GITHUB_STEP_SUMMARY
           else
             echo "🔄 Pull request build - images not pushed to registry." >> $GITHUB_STEP_SUMMARY
           fi
