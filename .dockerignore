@@ -2,6 +2,13 @@
 .git
 .gitignore
 
+# Build artifacts (exclude everything in build/)
+build/
+
+# But allow the pre-built binaries for Docker (CI creates these)
+!build/lokey-controller
+!build/lokey-api
+!build/lokey-fortuna
 
 # Development files
 .idea/
