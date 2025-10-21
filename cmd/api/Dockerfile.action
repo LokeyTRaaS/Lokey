@@ -1,18 +1,27 @@
 FROM alpine:latest
 
-# Add runtime dependencies for API service
+# OCI Labels
+LABEL org.opencontainers.image.title="LoKey API"
+LABEL org.opencontainers.image.description="Main REST API service with BoltDB storage, queue management, and Swagger documentation"
+LABEL org.opencontainers.image.url="https://lokey.cloud"
+LABEL org.opencontainers.image.source="https://github.com/LokeyTRaaS/Lokey"
+LABEL org.opencontainers.image.licenses="MIT"
+LABEL org.opencontainers.image.vendor="LoKey TRaaS"
+LABEL org.opencontainers.image.documentation="https://github.com/LokeyTRaaS/Lokey/blob/main/README.md"
+
+# Add runtime dependencies
 # ca-certificates: HTTPS support
 # libc6-compat: glibc compatibility for CGO binaries
-RUN apk --no-cache add ca-certificates libc6-compat
+# wget: for healthcheck
+RUN apk --no-cache add ca-certificates libc6-compat wget
 
 WORKDIR /app
 
-# Copy pre-built binary
+# Copy pre-built binary (architecture determined by build-arg)
 ARG BINARY_PATH=build/lokey-api-arm64
 COPY ${BINARY_PATH} /app/lokey-api
 
 # Copy Swagger documentation (required for /swagger endpoint)
-# The GitHub Action downloads this artifact before building
 COPY pkg/api/docs /app/pkg/api/docs
 
 # Create data directory for BoltDB
@@ -30,6 +39,10 @@ ENV PORT=8080 \
 
 # Expose the port
 EXPOSE 8080
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
+  CMD wget --no-verbose --tries=1 --spider http://localhost:8080/api/v1/health || exit 1
 
 # Run the application
 CMD ["/app/lokey-api"]
