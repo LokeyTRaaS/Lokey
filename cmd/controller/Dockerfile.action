@@ -17,9 +17,8 @@ RUN apk --no-cache add ca-certificates libc6-compat i2c-tools
 
 WORKDIR /app
 
-# Copy pre-built binary (architecture determined by build-arg)
-ARG BINARY_PATH=build/lokey-controller-arm64
-COPY ${BINARY_PATH} /app/lokey-controller
+# Copy pre-built binary (standardized name created in CI)
+COPY build/lokey-api /app/lokey-api
 
 # Set environment variables
 ENV PORT=8081 \

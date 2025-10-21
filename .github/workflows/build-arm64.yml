@@ -180,6 +180,10 @@ jobs:
           ls -la ./build/
           file ./build/lokey-${{ matrix.service }}-${{ matrix.arch }}
           chmod +x ./build/lokey-${{ matrix.service }}-${{ matrix.arch }}
+          
+          # Create a standardized binary name for Docker (removes arch suffix)
+          cp ./build/lokey-${{ matrix.service }}-${{ matrix.arch }} ./build/lokey-${{ matrix.service }}
+          echo "Created standardized binary: ./build/lokey-${{ matrix.service }}"
 
           # Verify Swagger docs for API service
           if [ "${{ matrix.service }}" == "api" ]; then
@@ -241,8 +245,6 @@ jobs:
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          build-args: |
-            BINARY_PATH=build/lokey-${{ matrix.service }}-${{ matrix.arch }}
           cache-from: type=gha,scope=${{ matrix.service }}-${{ matrix.arch }}
           cache-to: type=gha,mode=max,scope=${{ matrix.service }}-${{ matrix.arch }}
           provenance: false
