@@ -2,9 +2,16 @@ name: Lint
 
 on:
   push:
-    branches: [ main, master, develop ]
+    branches:
+      - main
+      - feature/**
+      - debug/**
+      - prerelease/**
+      - refactor/**
+    tags:
+      - 'v*'
   pull_request:
-    branches: [ main, master, develop ]
+    branches: [ main, feature, debug ]
 
 jobs:
   golangci:
