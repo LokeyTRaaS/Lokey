@@ -178,12 +178,26 @@ jobs:
         run: |
           echo "=== Binary verification ==="
           ls -la ./build/
-          file ./build/lokey-${{ matrix.service }}-${{ matrix.arch }}
-          chmod +x ./build/lokey-${{ matrix.service }}-${{ matrix.arch }}
-          
-          # Create a standardized binary name for Docker (removes arch suffix)
-          cp ./build/lokey-${{ matrix.service }}-${{ matrix.arch }} ./build/lokey-${{ matrix.service }}
-          echo "Created standardized binary: ./build/lokey-${{ matrix.service }}"
+
+          # The artifact contains the binary with arch suffix
+          BINARY_WITH_ARCH="./build/lokey-${{ matrix.service }}-${{ matrix.arch }}"
+          BINARY_STANDARD="./build/lokey-${{ matrix.service }}"
+
+          if [ -f "$BINARY_WITH_ARCH" ]; then
+            echo "Found: $BINARY_WITH_ARCH"
+            file "$BINARY_WITH_ARCH"
+            chmod +x "$BINARY_WITH_ARCH"
+
+            # Create a standardized binary name for Docker (removes arch suffix)
+            cp "$BINARY_WITH_ARCH" "$BINARY_STANDARD"
+            echo "Created standardized binary: $BINARY_STANDARD"
+            ls -lh "$BINARY_STANDARD"
+          else
+            echo "ERROR: Binary not found at $BINARY_WITH_ARCH"
+            echo "Contents of ./build/:"
+            ls -la ./build/
+            exit 1
+          fi
 
           # Verify Swagger docs for API service
           if [ "${{ matrix.service }}" == "api" ]; then
