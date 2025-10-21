@@ -2,9 +2,11 @@
 
 <img src="docs/logo.jpeg" alt="Description" width="300"/>
 
+
+[![Lint](https://github.com/YOUR_USERNAME/YOUR_REPO/actions/workflows/lint.yml/badge.svg)](https://github.com/YOUR_USERNAME/YOUR_REPO/actions/workflows/lint.yml)
 ## Table of Contents
 <!-- TOC -->
-* [Lokey: True Random Number Generation Service](#lokey-true-random-number-generation-service)
+* [LoKey: True Random Number Generation Service](#lokey-true-random-number-generation-service)
   * [Table of Contents](#table-of-contents)
   * [Project Overview](#project-overview)
   * [Services That Benefit from True Random Data](#services-that-benefit-from-true-random-data)
@@ -21,12 +23,11 @@
   * [System Architecture](#system-architecture)
     * [Components](#components)
     * [Technical Architecture](#technical-architecture)
-    * [Database Design](#database-design)
   * [Features](#features)
   * [API Reference](#api-reference)
     * [API Service](#api-service)
-    * [Controller Service](#controller-service)
-    * [Fortuna Service](#fortuna-service)
+    * [Controller Service (Stateless)](#controller-service-stateless)
+    * [Fortuna Service (Stateless)](#fortuna-service-stateless)
   * [Getting Started](#getting-started)
     * [Prerequisites](#prerequisites)
     * [Local Development](#local-development)
@@ -345,7 +346,7 @@ Lokey requires minimal hardware to function:
 
 The total bill of materials is approximately €50, making this a cost-effective solution for organizations requiring true randomness.
 
-For detailed hardware setup instructions, refer to the [hardware setup guide](device/HowToSetup.md) which includes:
+For detailed hardware setup instructions, refer to the [hardware setup guide](docs/HowToSetup.md) which includes:
 - Soldering instructions for connecting the ATECC608A
 - Raspberry Pi Zero 2W configuration
 - I2C setup and verification

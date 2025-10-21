@@ -380,19 +380,22 @@ func convertToIntFormat(data [][]byte, maxCount, bytesPerValue int, signed bool)
 				}
 			case 2:
 				if signed {
-					result = append(result, int16(binary.BigEndian.Uint16(chunk[i:i+2])))
+					// Safe conversion - reading from byte slice
+					result = append(result, int16(binary.BigEndian.Uint16(chunk[i:i+2]))) // #nosec G115
 				} else {
 					result = append(result, binary.BigEndian.Uint16(chunk[i:i+2]))
 				}
 			case 4:
 				if signed {
-					result = append(result, int32(binary.BigEndian.Uint32(chunk[i:i+4])))
+					// Safe conversion - reading from byte slice
+					result = append(result, int32(binary.BigEndian.Uint32(chunk[i:i+4]))) // #nosec G115
 				} else {
 					result = append(result, binary.BigEndian.Uint32(chunk[i:i+4]))
 				}
 			case 8:
 				if signed {
-					result = append(result, int64(binary.BigEndian.Uint64(chunk[i:i+8])))
+					// Safe conversion - reading from byte slice
+					result = append(result, int64(binary.BigEndian.Uint64(chunk[i:i+8]))) // #nosec G115
 				} else {
 					result = append(result, binary.BigEndian.Uint64(chunk[i:i+8]))
 				}
@@ -441,54 +444,59 @@ func (s *Server) GetStatus(c *gin.Context) {
 	c.JSON(http.StatusOK, stats)
 }
 
-// @Summary         Check system health
-// @Description     Check health of all system components
-// @Tags            status
-// @Accept          json
-// @Produce         json
-// @Success         200 {object} HealthCheckResponse
-// @Router          /health [get]
+// @Summary Health check endpoint
+// @Description Checks health of the API server and its dependencies
+// @Tags status
+// @Accept json
+// @Produce json
+// @Success 200 {object} HealthCheckResponse
+// @Router /health [get]
 func (s *Server) HealthCheck(c *gin.Context) {
-	dbHealthy := s.db.HealthCheck()
-	controllerHealthy := checkServiceHealth(s.controllerAddr + "/health")
-	fortunaHealthy := checkServiceHealth(s.fortunaAddr + "/health")
-
-	overallStatus := "healthy"
-	if !dbHealthy || !controllerHealthy || !fortunaHealthy {
-		overallStatus = "unhealthy"
-	}
-
 	response := HealthCheckResponse{
-		Status:    overallStatus,
+		Status:    "ok",
 		Timestamp: time.Now().Format(time.RFC3339),
 	}
 
+	// Check database
+	response.Details.Database = s.db.HealthCheck()
+
+	// Check API (always true if we got here)
 	response.Details.API = true
-	response.Details.Controller = controllerHealthy
-	response.Details.Fortuna = fortunaHealthy
-	response.Details.Database = dbHealthy
+
+	// Check controller service
+	response.Details.Controller = s.checkServiceHealth(s.controllerAddr)
+
+	// Check Fortuna service
+	response.Details.Fortuna = s.checkServiceHealth(s.fortunaAddr)
+
+	// Determine overall status
+	if !response.Details.Database || !response.Details.Controller || !response.Details.Fortuna {
+		response.Status = "degraded"
+	}
 
 	c.JSON(http.StatusOK, response)
 }
 
-// @Summary Get Prometheus metrics
-// @Description Returns all Prometheus metrics. Available at /metrics and /api/v1/metrics
-// @Tags metrics
-// @Produce text/plain
-// @Success 200 {string} string "Prometheus metrics"
-// @Router /metrics [get]
-func (s *Server) MetricsHandler(c *gin.Context) {
-	promhttp.Handler().ServeHTTP(c.Writer, c.Request)
-}
+// checkServiceHealth checks if a service is reachable and healthy
+func (s *Server) checkServiceHealth(serviceAddr string) bool {
+	// Build URL safely
+	url := serviceAddr + "/health"
 
-// checkServiceHealth checks if a service is healthy
-func checkServiceHealth(url string) bool {
-	resp, err := http.Get(url)
+	// URL is constructed from validated server configuration, not user input
+	resp, err := http.Get(url) // #nosec G107
 	if err != nil {
-		log.Printf("Health check failed for %s: %v", url, err)
 		return false
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			log.Printf("Warning: failed to close health check response body: %v", closeErr)
+		}
+	}()
 
 	return resp.StatusCode == http.StatusOK
+}
+
+// MetricsHandler serves Prometheus metrics
+func (s *Server) MetricsHandler(c *gin.Context) {
+	promhttp.Handler().ServeHTTP(c.Writer, c.Request)
 }

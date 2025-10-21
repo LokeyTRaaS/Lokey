@@ -217,9 +217,10 @@ func (c *Controller) configureDevice() error {
 		}
 		copy(blockData, CFG_TLS[i:end])
 
-		// Write the block
+		// Write the block - safe conversion as i/4 is always < 32
+		addr := uint16(i / 4) // #nosec G115 - i is bounded 16-128, i/4 always fits in uint16
 		log.Printf("Writing block at address %d: %x", i, blockData)
-		if err := c.sendCommand(cmdWrite, 0x00, uint16(i/4), blockData); err != nil {
+		if err := c.sendCommand(cmdWrite, 0x00, addr, blockData); err != nil {
 			return fmt.Errorf("failed to write configuration block: %w", err)
 		}
 
@@ -267,9 +268,13 @@ func (c *Controller) wakeup() {
 	// Adafruit approach: try general call but ignore errors
 	wakeupI2C, err := i2c.NewI2C(0x00, c.busNumber)
 	if err == nil {
-		// Try to send wakeup, explicitly ignore if it fails
-		_, _ = wakeupI2C.WriteBytes([]byte{0x00}) // Explicitly ignoring error for wakeup
-		wakeupI2C.Close()
+		// Try to send wakeup, log if it fails
+		if _, writeErr := wakeupI2C.WriteBytes([]byte{0x00}); writeErr != nil {
+			log.Printf("Debug: wakeup write returned error (expected): %v", writeErr)
+		}
+		if closeErr := wakeupI2C.Close(); closeErr != nil {
+			log.Printf("Warning: failed to close wakeup I2C connection: %v", closeErr)
+		}
 	}
 	// Always wait after wakeup attempt
 	time.Sleep(wakeupDelay)
@@ -277,13 +282,17 @@ func (c *Controller) wakeup() {
 
 // idle puts device in idle mode (following Adafruit)
 func (c *Controller) idle() {
-	_, _ = c.i2c.WriteBytes([]byte{cmdIdle}) // Explicitly ignoring error for idle command
+	if _, err := c.i2c.WriteBytes([]byte{cmdIdle}); err != nil {
+		log.Printf("Debug: idle command returned error: %v", err)
+	}
 	time.Sleep(wakeupDelay)
 }
 
 // sleep puts device in sleep mode (following Adafruit)
 func (c *Controller) sleep() {
-	_, _ = c.i2c.WriteBytes([]byte{cmdSleep}) // Explicitly ignoring error for sleep command
+	if _, err := c.i2c.WriteBytes([]byte{cmdSleep}); err != nil {
+		log.Printf("Debug: sleep command returned error: %v", err)
+	}
 	time.Sleep(wakeupDelay)
 }
 

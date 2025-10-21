@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"time"
@@ -38,47 +39,56 @@ func (s *Server) pollTRNGService(ctx context.Context, interval time.Duration) {
 			log.Printf("TRNG polling stopped")
 			return
 		case <-ticker.C:
-			// Attempt to fetch data from the controller service
-			resp, err := http.Get(s.controllerAddr + "/generate")
-			if err != nil {
-				log.Printf("Error connecting to TRNG controller: %v", err)
-				continue
-			}
-
-			if resp.StatusCode != http.StatusOK {
-				log.Printf("TRNG controller returned non-OK status: %d", resp.StatusCode)
-				resp.Body.Close()
-				continue
-			}
-
-			// Read and parse response body which contains a data field
-			var result struct {
-				Data string `json:"data"`
-			}
-
-			if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-				log.Printf("Error parsing TRNG response: %v", err)
-				resp.Body.Close()
-				continue
-			}
-			resp.Body.Close()
-
-			// Decode the hex-encoded data
-			dataBytes, err := hex.DecodeString(result.Data)
-			if err != nil {
-				log.Printf("Error decoding data from controller: %v", err)
-				continue
-			}
-
-			// Store the data in database
-			if err := s.db.StoreTRNGData(dataBytes); err != nil {
-				log.Printf("Error storing TRNG data: %v", err)
-			} else {
-				// Increment polling count only on successful storage
-				s.db.IncrementPollingCount("trng")
+			if err := s.fetchAndStoreTRNGData(); err != nil {
+				log.Printf("TRNG polling error: %v", err)
 			}
 		}
 	}
+}
+
+// fetchAndStoreTRNGData fetches and stores TRNG data from the controller
+func (s *Server) fetchAndStoreTRNGData() error {
+	// Attempt to fetch data from the controller service
+	resp, err := http.Get(s.controllerAddr + "/generate")
+	if err != nil {
+		return fmt.Errorf("error connecting to TRNG controller: %w", err)
+	}
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			log.Printf("Error closing TRNG response body: %v", closeErr)
+		}
+	}()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("TRNG controller returned status %d", resp.StatusCode)
+	}
+
+	// Read and parse response body which contains a data field
+	var result struct {
+		Data string `json:"data"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return fmt.Errorf("error parsing TRNG response: %w", err)
+	}
+
+	// Decode the hex-encoded data
+	dataBytes, err := hex.DecodeString(result.Data)
+	if err != nil {
+		return fmt.Errorf("error decoding data from controller: %w", err)
+	}
+
+	// Store the data in database
+	if err := s.db.StoreTRNGData(dataBytes); err != nil {
+		return fmt.Errorf("error storing TRNG data: %w", err)
+	}
+
+	// Increment polling count only on successful storage
+	if err := s.db.IncrementPollingCount("trng"); err != nil {
+		log.Printf("Warning: failed to increment TRNG polling count: %v", err)
+	}
+
+	return nil
 }
 
 // pollFortunaService periodically polls the Fortuna PRNG service for new random data
@@ -94,49 +104,58 @@ func (s *Server) pollFortunaService(ctx context.Context, interval time.Duration)
 			log.Printf("Fortuna polling stopped")
 			return
 		case <-ticker.C:
-			// Attempt to fetch data from the Fortuna service using the correct endpoint
-			// Specify size=256 for a reasonable amount of random data
-			resp, err := http.Get(s.fortunaAddr + "/generate?size=256")
-			if err != nil {
-				log.Printf("Error connecting to Fortuna service: %v", err)
-				continue
-			}
-
-			if resp.StatusCode != http.StatusOK {
-				log.Printf("Fortuna service returned non-OK status: %d", resp.StatusCode)
-				resp.Body.Close()
-				continue
-			}
-
-			// Parse response which contains a data field with hex-encoded random data
-			var result struct {
-				Data string `json:"data"`
-				Size int    `json:"size"`
-			}
-
-			if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-				log.Printf("Error parsing Fortuna response: %v", err)
-				resp.Body.Close()
-				continue
-			}
-			resp.Body.Close()
-
-			// Decode the hex-encoded data
-			randomData, err := hex.DecodeString(result.Data)
-			if err != nil {
-				log.Printf("Error decoding data from Fortuna: %v", err)
-				continue
-			}
-
-			// Store the data in database
-			if err := s.db.StoreFortunaData(randomData); err != nil {
-				log.Printf("Error storing Fortuna data: %v", err)
-			} else {
-				// Increment polling count only on successful storage
-				s.db.IncrementPollingCount("fortuna")
+			if err := s.fetchAndStoreFortunaData(); err != nil {
+				log.Printf("Fortuna polling error: %v", err)
 			}
 		}
 	}
+}
+
+// fetchAndStoreFortunaData fetches and stores Fortuna data from the service
+func (s *Server) fetchAndStoreFortunaData() error {
+	// Attempt to fetch data from the Fortuna service using the correct endpoint
+	// Specify size=256 for a reasonable amount of random data
+	resp, err := http.Get(s.fortunaAddr + "/generate?size=256")
+	if err != nil {
+		return fmt.Errorf("error connecting to Fortuna service: %w", err)
+	}
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			log.Printf("Error closing Fortuna response body: %v", closeErr)
+		}
+	}()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("Fortuna service returned status %d", resp.StatusCode)
+	}
+
+	// Parse response which contains a data field with hex-encoded random data
+	var result struct {
+		Data string `json:"data"`
+		Size int    `json:"size"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return fmt.Errorf("error parsing Fortuna response: %w", err)
+	}
+
+	// Decode the hex-encoded data
+	randomData, err := hex.DecodeString(result.Data)
+	if err != nil {
+		return fmt.Errorf("error decoding data from Fortuna: %w", err)
+	}
+
+	// Store the data in database
+	if err := s.db.StoreFortunaData(randomData); err != nil {
+		return fmt.Errorf("error storing Fortuna data: %w", err)
+	}
+
+	// Increment polling count only on successful storage
+	if err := s.db.IncrementPollingCount("fortuna"); err != nil {
+		log.Printf("Warning: failed to increment Fortuna polling count: %v", err)
+	}
+
+	return nil
 }
 
 // seedFortunaWithTRNG periodically seeds Fortuna generator with hardware TRNG data
@@ -152,65 +171,73 @@ func (s *Server) seedFortunaWithTRNG(ctx context.Context, interval time.Duration
 			log.Printf("Fortuna seeding stopped")
 			return
 		case <-ticker.C:
-			// Fetch multiple TRNG samples from controller for good entropy
-			resp, err := http.Get(s.controllerAddr + "/generate?count=5")
-			if err != nil {
-				log.Printf("Error fetching TRNG data for Fortuna seeding: %v", err)
-				continue
+			if err := s.seedFortuna(); err != nil {
+				log.Printf("Fortuna seeding error: %v", err)
 			}
-
-			if resp.StatusCode != http.StatusOK {
-				log.Printf("Controller returned non-OK status for seeding: %d", resp.StatusCode)
-				resp.Body.Close()
-				continue
-			}
-
-			// Parse controller response (returns array when count > 1)
-			var result struct {
-				Data []string `json:"data"`
-			}
-
-			if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-				log.Printf("Error parsing controller response for seeding: %v", err)
-				resp.Body.Close()
-				continue
-			}
-			resp.Body.Close()
-
-			if len(result.Data) == 0 {
-				log.Printf("No TRNG data received for seeding")
-				continue
-			}
-
-			// Send seeds to Fortuna's /seed endpoint
-			seedRequest := struct {
-				Seeds []string `json:"seeds"`
-			}{
-				Seeds: result.Data,
-			}
-
-			seedData, err := json.Marshal(seedRequest)
-			if err != nil {
-				log.Printf("Error marshaling seed request: %v", err)
-				continue
-			}
-
-			seedResp, err := http.Post(
-				s.fortunaAddr+"/seed",
-				"application/json",
-				bytes.NewBuffer(seedData),
-			)
-			if err != nil {
-				log.Printf("Error seeding Fortuna: %v", err)
-				continue
-			}
-
-			if seedResp.StatusCode != http.StatusOK {
-				log.Printf("Fortuna seeding failed with status: %d", seedResp.StatusCode)
-			} else {
-				log.Printf("Successfully seeded Fortuna with %d TRNG samples", len(result.Data))
-			}
-			seedResp.Body.Close()
 		}
 	}
+}
+
+// seedFortuna fetches TRNG data and seeds the Fortuna generator
+func (s *Server) seedFortuna() error {
+	// Fetch multiple TRNG samples from controller for good entropy
+	resp, err := http.Get(s.controllerAddr + "/generate?count=5")
+	if err != nil {
+		return fmt.Errorf("error fetching TRNG data for seeding: %w", err)
+	}
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			log.Printf("Error closing controller response body: %v", closeErr)
+		}
+	}()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("controller returned status %d for seeding", resp.StatusCode)
+	}
+
+	// Parse controller response (returns array when count > 1)
+	var result struct {
+		Data []string `json:"data"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return fmt.Errorf("error parsing controller response for seeding: %w", err)
+	}
+
+	if len(result.Data) == 0 {
+		return fmt.Errorf("no TRNG data received for seeding")
+	}
+
+	// Send seeds to Fortuna's /seed endpoint
+	seedRequest := struct {
+		Seeds []string `json:"seeds"`
+	}{
+		Seeds: result.Data,
+	}
+
+	seedData, err := json.Marshal(seedRequest)
+	if err != nil {
+		return fmt.Errorf("error marshaling seed request: %w", err)
+	}
+
+	seedResp, err := http.Post(
+		s.fortunaAddr+"/seed",
+		"application/json",
+		bytes.NewBuffer(seedData),
+	)
+	if err != nil {
+		return fmt.Errorf("error seeding Fortuna: %w", err)
+	}
+	defer func() {
+		if closeErr := seedResp.Body.Close(); closeErr != nil {
+			log.Printf("Error closing seed response body: %v", closeErr)
+		}
+	}()
+
+	if seedResp.StatusCode != http.StatusOK {
+		return fmt.Errorf("Fortuna seeding failed with status: %d", seedResp.StatusCode)
+	}
+
+	log.Printf("Successfully seeded Fortuna with %d TRNG samples", len(result.Data))
+	return nil
 }

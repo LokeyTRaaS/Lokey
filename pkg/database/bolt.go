@@ -1,7 +1,6 @@
 package database
 
 import (
-	"bytes"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -103,12 +102,13 @@ func NewBoltDBHandler(dbPath string, trngQueueSize, fortunaQueueSize int) (*Bolt
 		// Store queue sizes in config
 		configB := tx.Bucket(configBucket)
 		var buf [8]byte
-		binary.BigEndian.PutUint64(buf[:], uint64(trngQueueSize))
+		// Safe conversion - queue sizes are validated to be reasonable values
+		binary.BigEndian.PutUint64(buf[:], uint64(trngQueueSize)) // #nosec G115
 		if err := configB.Put([]byte("trng_queue_size"), buf[:]); err != nil {
 			return fmt.Errorf("store trng queue size: %w", err)
 		}
 
-		binary.BigEndian.PutUint64(buf[:], uint64(fortunaQueueSize))
+		binary.BigEndian.PutUint64(buf[:], uint64(fortunaQueueSize)) // #nosec G115
 		if err := configB.Put([]byte("fortuna_queue_size"), buf[:]); err != nil {
 			return fmt.Errorf("store fortuna queue size: %w", err)
 		}
@@ -262,9 +262,14 @@ func (h *BoltDBHandler) GetTRNGData(limit, offset int, consume bool) ([][]byte, 
 		// Update consumed counter
 		if consume && consumedCount > 0 {
 			key := []byte("trng_consumed_count")
-			currentCount, _ := h.getCounter(tx, key)
-			currentCount += uint64(consumedCount)
-			h.setCounter(tx, key, currentCount)
+			currentCount, err := h.getCounter(tx, key)
+			if err != nil {
+				return fmt.Errorf("get consumed count: %w", err)
+			}
+			currentCount += uint64(consumedCount) // #nosec G115
+			if err := h.setCounter(tx, key, currentCount); err != nil {
+				return fmt.Errorf("set consumed count: %w", err)
+			}
 		}
 
 		return nil
@@ -304,11 +309,14 @@ func (h *BoltDBHandler) trimTRNGDataIfNeeded(tx *bolt.Tx) error {
 
 		// Update dropped counter
 		key := []byte("trng_dropped_count")
-		currentCount, _ := h.getCounter(tx, key)
+		currentCount, err := h.getCounter(tx, key)
+		if err != nil {
+			return fmt.Errorf("get dropped count: %w", err)
+		}
 		currentCount += uint64(droppedCount)
-		var buf [8]byte
-		binary.BigEndian.PutUint64(buf[:], currentCount)
-		tx.Bucket(countersBucket).Put(key, buf[:])
+		if err := h.setCounter(tx, key, currentCount); err != nil {
+			return fmt.Errorf("set dropped count: %w", err)
+		}
 	}
 
 	return nil
@@ -408,9 +416,14 @@ func (h *BoltDBHandler) GetFortunaData(limit, offset int, consume bool) ([][]byt
 		// Update consumed counter
 		if consume && consumedCount > 0 {
 			key := []byte("fortuna_consumed_count")
-			currentCount, _ := h.getCounter(tx, key)
-			currentCount += uint64(consumedCount)
-			h.setCounter(tx, key, currentCount)
+			currentCount, err := h.getCounter(tx, key)
+			if err != nil {
+				return fmt.Errorf("get consumed count: %w", err)
+			}
+			currentCount += uint64(consumedCount) // #nosec G115
+			if err := h.setCounter(tx, key, currentCount); err != nil {
+				return fmt.Errorf("set consumed count: %w", err)
+			}
 		}
 
 		return nil
@@ -450,11 +463,17 @@ func (h *BoltDBHandler) trimFortunaDataIfNeeded(tx *bolt.Tx) error {
 
 		// Update dropped counter
 		key := []byte("fortuna_dropped_count")
-		currentCount, _ := h.getCounter(tx, key)
+		currentCount, err := h.getCounter(tx, key)
+		if err != nil {
+			return fmt.Errorf("get dropped count: %w", err)
+		}
 		currentCount += uint64(droppedCount)
+
 		var buf [8]byte
 		binary.BigEndian.PutUint64(buf[:], currentCount)
-		tx.Bucket(countersBucket).Put(key, buf[:])
+		if err := tx.Bucket(countersBucket).Put(key, buf[:]); err != nil {
+			return fmt.Errorf("update dropped count: %w", err)
+		}
 	}
 
 	return nil
@@ -468,7 +487,10 @@ func (h *BoltDBHandler) IncrementPollingCount(source string) error {
 		b := tx.Bucket(countersBucket)
 		key := []byte(source + "_polling_count")
 
-		count, _ := h.getCounter(tx, key)
+		count, err := h.getCounter(tx, key)
+		if err != nil {
+			return fmt.Errorf("get polling count: %w", err)
+		}
 		count++
 
 		var buf [8]byte
@@ -483,7 +505,10 @@ func (h *BoltDBHandler) IncrementDroppedCount(source string) error {
 		b := tx.Bucket(countersBucket)
 		key := []byte(source + "_dropped_count")
 
-		count, _ := h.getCounter(tx, key)
+		count, err := h.getCounter(tx, key)
+		if err != nil {
+			return fmt.Errorf("get dropped count: %w", err)
+		}
 		count++
 
 		var buf [8]byte
@@ -494,138 +519,106 @@ func (h *BoltDBHandler) IncrementDroppedCount(source string) error {
 
 // getCounterValue safely retrieves a counter value
 func (h *BoltDBHandler) getCounterValue(tx *bolt.Tx, key string) int64 {
-	count, _ := h.getCounter(tx, []byte(key))
-	return int64(count)
+	count, err := h.getCounter(tx, []byte(key))
+	if err != nil {
+		log.Printf("Warning: failed to get counter %s: %v", key, err)
+		return 0
+	}
+	// Safe conversion - counter values are tracking reasonable metrics
+	return int64(count) // #nosec G115
 }
 
 // GetDetailedStats returns comprehensive system statistics
 func (h *BoltDBHandler) GetDetailedStats() (*DetailedStats, error) {
-	var stats DetailedStats
+	stats := &DetailedStats{}
 
 	err := h.db.View(func(tx *bolt.Tx) error {
-		// Get basic queue info first
-		queueInfo, err := h.getQueueInfoInTx(tx)
-		if err != nil {
-			return err
+		// TRNG stats
+		stats.TRNG.PollingCount = h.getCounterValue(tx, "trng_polling_count")
+		stats.TRNG.QueueDropped = h.getCounterValue(tx, "trng_dropped_count")
+		stats.TRNG.ConsumedCount = h.getCounterValue(tx, "trng_consumed_count")
+
+		// Count TRNG items
+		trngBucket := tx.Bucket(trngDataBucket)
+		trngCursor := trngBucket.Cursor()
+		trngTotal := 0
+		trngUnconsumed := 0
+		for k, v := trngCursor.First(); k != nil; k, v = trngCursor.Next() {
+			trngTotal++
+			var data TRNGData
+			if err := json.Unmarshal(v, &data); err == nil && !data.Consumed {
+				trngUnconsumed++
+			}
 		}
 
 		h.mu.RLock()
-		trngCapacity := h.trngQueueSize
-		fortunaCapacity := h.fortunaQueueSize
+		stats.TRNG.QueueCapacity = h.trngQueueSize
 		h.mu.RUnlock()
 
-		// Calculate TRNG stats
-		trngCurrent := queueInfo["trng_unconsumed_count"]
-		trngPercentage := float64(trngCurrent) / float64(trngCapacity) * 100
-		if trngPercentage > 100 {
-			trngPercentage = 100
+		stats.TRNG.QueueCurrent = trngUnconsumed
+		if stats.TRNG.QueueCapacity > 0 {
+			stats.TRNG.QueuePercentage = float64(trngUnconsumed) / float64(stats.TRNG.QueueCapacity) * 100
+		}
+		stats.TRNG.UnconsumedCount = trngUnconsumed
+		stats.TRNG.TotalGenerated = int64(trngTotal)
+
+		// Fortuna stats
+		stats.Fortuna.PollingCount = h.getCounterValue(tx, "fortuna_polling_count")
+		stats.Fortuna.QueueDropped = h.getCounterValue(tx, "fortuna_dropped_count")
+		stats.Fortuna.ConsumedCount = h.getCounterValue(tx, "fortuna_consumed_count")
+
+		// Count Fortuna items
+		fortunaBucket := tx.Bucket(fortunaDataBucket)
+		fortunaCursor := fortunaBucket.Cursor()
+		fortunaTotal := 0
+		fortunaUnconsumed := 0
+		for k, v := fortunaCursor.First(); k != nil; k, v = fortunaCursor.Next() {
+			fortunaTotal++
+			var data FortunaData
+			if err := json.Unmarshal(v, &data); err == nil && !data.Consumed {
+				fortunaUnconsumed++
+			}
 		}
 
-		stats.TRNG = DataSourceStats{
-			PollingCount:    h.getCounterValue(tx, "trng_polling_count"),
-			QueueCurrent:    trngCurrent,
-			QueueCapacity:   trngCapacity,
-			QueuePercentage: trngPercentage,
-			QueueDropped:    h.getCounterValue(tx, "trng_dropped_count"),
-			ConsumedCount:   h.getCounterValue(tx, "trng_consumed_count"),
-			UnconsumedCount: trngCurrent,
-			TotalGenerated:  h.getCounterValue(tx, "trng_next_id"),
-		}
+		h.mu.RLock()
+		stats.Fortuna.QueueCapacity = h.fortunaQueueSize
+		h.mu.RUnlock()
 
-		// Calculate Fortuna stats
-		fortunaCurrent := queueInfo["fortuna_unconsumed_count"]
-		fortunaPercentage := float64(fortunaCurrent) / float64(fortunaCapacity) * 100
-		if fortunaPercentage > 100 {
-			fortunaPercentage = 100
+		stats.Fortuna.QueueCurrent = fortunaUnconsumed
+		if stats.Fortuna.QueueCapacity > 0 {
+			stats.Fortuna.QueuePercentage = float64(fortunaUnconsumed) / float64(stats.Fortuna.QueueCapacity) * 100
 		}
-
-		stats.Fortuna = DataSourceStats{
-			PollingCount:    h.getCounterValue(tx, "fortuna_polling_count"),
-			QueueCurrent:    fortunaCurrent,
-			QueueCapacity:   fortunaCapacity,
-			QueuePercentage: fortunaPercentage,
-			QueueDropped:    h.getCounterValue(tx, "fortuna_dropped_count"),
-			ConsumedCount:   h.getCounterValue(tx, "fortuna_consumed_count"),
-			UnconsumedCount: fortunaCurrent,
-			TotalGenerated:  h.getCounterValue(tx, "fortuna_next_id"),
-		}
+		stats.Fortuna.UnconsumedCount = fortunaUnconsumed
+		stats.Fortuna.TotalGenerated = int64(fortunaTotal)
 
 		return nil
 	})
 
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to get detailed stats: %w", err)
 	}
 
-	// Get database stats
-	dbSize, _ := h.GetDatabaseSize()
-	stats.Database = DatabaseStats{
-		SizeBytes: dbSize,
-		SizeHuman: formatBytes(dbSize),
-		Path:      h.GetDatabasePath(),
+	// Database stats
+	dbSize, err := h.GetDatabaseSize()
+	if err != nil {
+		log.Printf("Warning: failed to get database size: %v", err)
+		dbSize = 0
 	}
+	stats.Database.SizeBytes = dbSize
+	stats.Database.SizeHuman = formatBytes(dbSize)
+	stats.Database.Path = h.GetDatabasePath()
 
-	return &stats, nil
-}
-
-// getQueueInfoInTx returns queue info within a transaction
-func (h *BoltDBHandler) getQueueInfoInTx(tx *bolt.Tx) (map[string]int, error) {
-	queueInfo := make(map[string]int)
-
-	// Count TRNG data
-	trngTotal := 0
-	trngUnconsumed := 0
-
-	trngBucket := tx.Bucket(trngDataBucket)
-	cursor := trngBucket.Cursor()
-	for k, v := cursor.First(); k != nil; k, v = cursor.Next() {
-		trngTotal++
-
-		var data TRNGData
-		if err := json.Unmarshal(v, &data); err != nil {
-			return nil, fmt.Errorf("deserialize TRNG data: %w", err)
-		}
-
-		if !data.Consumed {
-			trngUnconsumed++
-		}
-	}
-
-	// Count Fortuna data
-	fortunaTotal := 0
-	fortunaUnconsumed := 0
-
-	fortunaBucket := tx.Bucket(fortunaDataBucket)
-	cursor = fortunaBucket.Cursor()
-	for k, v := cursor.First(); k != nil; k, v = cursor.Next() {
-		fortunaTotal++
-
-		var data FortunaData
-		if err := json.Unmarshal(v, &data); err != nil {
-			return nil, fmt.Errorf("deserialize Fortuna data: %w", err)
-		}
-
-		if !data.Consumed {
-			fortunaUnconsumed++
-		}
-	}
-
-	queueInfo["trng_data_count"] = trngTotal
-	queueInfo["trng_unconsumed_count"] = trngUnconsumed
-	queueInfo["fortuna_data_count"] = fortunaTotal
-	queueInfo["fortuna_unconsumed_count"] = fortunaUnconsumed
-
-	return queueInfo, nil
+	return stats, nil
 }
 
 // GetDatabaseSize returns the size of the database file in bytes
 func (h *BoltDBHandler) GetDatabaseSize() (int64, error) {
-	// Get the actual file size from the filesystem
-	fileInfo, err := os.Stat(h.db.Path())
-	if err != nil {
-		return 0, fmt.Errorf("failed to get database file info: %w", err)
-	}
-	return fileInfo.Size(), nil
+	var size int64
+	err := h.db.View(func(tx *bolt.Tx) error {
+		size = tx.Size()
+		return nil
+	})
+	return size, err
 }
 
 // GetDatabasePath returns the path to the database file
@@ -633,7 +626,7 @@ func (h *BoltDBHandler) GetDatabasePath() string {
 	return h.db.Path()
 }
 
-// formatBytes formats bytes into human readable format
+// formatBytes formats bytes into human-readable string
 func formatBytes(bytes int64) string {
 	const unit = 1024
 	if bytes < unit {
@@ -649,68 +642,44 @@ func formatBytes(bytes int64) string {
 
 //---------------------- Statistics Operations ----------------------
 
-// RecordRNGUsage records RNG usage statistics
+// RecordRNGUsage records usage statistics for RNG data
 func (h *BoltDBHandler) RecordRNGUsage(source string, bytesUsed int64) error {
 	return h.db.Update(func(tx *bolt.Tx) error {
 		b := tx.Bucket(usageStatsBucket)
 
-		// Create hourly timestamp bucket key
-		now := time.Now()
-		timestamp := time.Date(now.Year(), now.Month(), now.Day(), now.Hour(), 0, 0, 0, now.Location())
-		bucketKey := fmt.Sprintf("%s:%d", source, timestamp.Unix())
-
-		// Check for existing stats
-		var stat UsageStat
-		data := b.Get([]byte(bucketKey))
-
-		if data != nil {
-			// Update existing stat
-			if err := json.Unmarshal(data, &stat); err != nil {
-				return fmt.Errorf("deserialize usage stat: %w", err)
-			}
-
-			stat.BytesUsed += bytesUsed
-			stat.Requests++
-		} else {
-			// Create new stat
-			stat = UsageStat{
-				Source:    source,
-				BytesUsed: bytesUsed,
-				Requests:  1,
-				Timestamp: timestamp,
-			}
+		stat := UsageStat{
+			Source:    source,
+			BytesUsed: bytesUsed,
+			Requests:  1,
+			Timestamp: time.Now(),
 		}
 
-		// Serialize and store
 		jsonData, err := json.Marshal(stat)
 		if err != nil {
 			return fmt.Errorf("serialize usage stat: %w", err)
 		}
 
-		return b.Put([]byte(bucketKey), jsonData)
+		// Use timestamp as key
+		key := []byte(fmt.Sprintf("%s_%d", source, time.Now().UnixNano()))
+		return b.Put(key, jsonData)
 	})
 }
 
-// GetRNGStatistics retrieves RNG usage statistics for a specific time range
+// GetRNGStatistics retrieves usage statistics for a specific source within a time range
 func (h *BoltDBHandler) GetRNGStatistics(source string, start, end time.Time) ([]UsageStat, error) {
 	var stats []UsageStat
 
 	err := h.db.View(func(tx *bolt.Tx) error {
 		b := tx.Bucket(usageStatsBucket)
-
-		// Source prefix for keys
-		prefix := []byte(source + ":")
-
 		cursor := b.Cursor()
-		for k, v := cursor.Seek(prefix); k != nil && bytes.HasPrefix(k, prefix); k, v = cursor.Next() {
+
+		for k, v := cursor.First(); k != nil; k, v = cursor.Next() {
 			var stat UsageStat
 			if err := json.Unmarshal(v, &stat); err != nil {
-				return fmt.Errorf("deserialize usage stat: %w", err)
+				continue
 			}
 
-			// Filter by time range
-			if (stat.Timestamp.Equal(start) || stat.Timestamp.After(start)) &&
-				(stat.Timestamp.Equal(end) || stat.Timestamp.Before(end)) {
+			if stat.Source == source && stat.Timestamp.After(start) && stat.Timestamp.Before(end) {
 				stats = append(stats, stat)
 			}
 		}
@@ -721,95 +690,80 @@ func (h *BoltDBHandler) GetRNGStatistics(source string, start, end time.Time) ([
 	return stats, err
 }
 
-//---------------------- Utility Operations ----------------------
-
-// GetQueueInfo returns information about the current queue status
-func (h *BoltDBHandler) GetQueueInfo() (map[string]int, error) {
-	queueInfo := make(map[string]int)
+// GetStats returns general statistics about the database
+func (h *BoltDBHandler) GetStats() (map[string]interface{}, error) {
+	stats := make(map[string]interface{})
 
 	err := h.db.View(func(tx *bolt.Tx) error {
 		// Count TRNG data
-		trngTotal := 0
-		trngUnconsumed := 0
-
 		trngBucket := tx.Bucket(trngDataBucket)
-		cursor := trngBucket.Cursor()
-		for k, v := cursor.First(); k != nil; k, v = cursor.Next() {
-			trngTotal++
-
-			var data TRNGData
-			if err := json.Unmarshal(v, &data); err != nil {
-				return fmt.Errorf("deserialize TRNG data: %w", err)
-			}
-
-			if !data.Consumed {
-				trngUnconsumed++
-			}
+		trngCount := 0
+		trngCursor := trngBucket.Cursor()
+		for k, _ := trngCursor.First(); k != nil; k, _ = trngCursor.Next() {
+			trngCount++
 		}
+		stats["trng_count"] = trngCount
 
 		// Count Fortuna data
-		fortunaTotal := 0
-		fortunaUnconsumed := 0
-
 		fortunaBucket := tx.Bucket(fortunaDataBucket)
-		cursor = fortunaBucket.Cursor()
-		for k, v := cursor.First(); k != nil; k, v = cursor.Next() {
-			fortunaTotal++
-
-			var data FortunaData
-			if err := json.Unmarshal(v, &data); err != nil {
-				return fmt.Errorf("deserialize Fortuna data: %w", err)
-			}
-
-			if !data.Consumed {
-				fortunaUnconsumed++
-			}
+		fortunaCount := 0
+		fortunaCursor := fortunaBucket.Cursor()
+		for k, _ := fortunaCursor.First(); k != nil; k, _ = fortunaCursor.Next() {
+			fortunaCount++
 		}
+		stats["fortuna_count"] = fortunaCount
 
-		// Read current queue capacities
-		h.mu.RLock()
-		trngCapacity := h.trngQueueSize
-		fortunaCapacity := h.fortunaQueueSize
-		h.mu.RUnlock()
-
-		// Populate result
-		queueInfo["trng_queue_capacity"] = trngCapacity
-		queueInfo["fortuna_queue_capacity"] = fortunaCapacity
-		queueInfo["trng_data_count"] = trngTotal
-		queueInfo["trng_unconsumed_count"] = trngUnconsumed
-		queueInfo["fortuna_data_count"] = fortunaTotal
-		queueInfo["fortuna_unconsumed_count"] = fortunaUnconsumed
+		// Get database size
+		stats["db_size"] = tx.Size()
 
 		return nil
 	})
 
-	return queueInfo, err
+	return stats, err
 }
 
-// GetStats returns statistics about the database
-func (h *BoltDBHandler) GetStats() (map[string]interface{}, error) {
-	stats := make(map[string]interface{})
+//---------------------- Queue Management ----------------------
 
-	// Get queue info
-	queueInfo, err := h.GetQueueInfo()
-	if err != nil {
-		return nil, err
+// GetQueueInfo returns information about the current queue sizes
+func (h *BoltDBHandler) GetQueueInfo() (map[string]int, error) {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+
+	info := map[string]int{
+		"trng_queue_capacity":    h.trngQueueSize,
+		"fortuna_queue_capacity": h.fortunaQueueSize,
 	}
 
-	h.mu.RLock()
-	trngQueueSize := h.trngQueueSize
-	fortunaQueueSize := h.fortunaQueueSize
-	h.mu.RUnlock()
+	// Get current queue usage
+	err := h.db.View(func(tx *bolt.Tx) error {
+		// Count TRNG unconsumed
+		trngBucket := tx.Bucket(trngDataBucket)
+		trngCursor := trngBucket.Cursor()
+		trngUnconsumed := 0
+		for k, v := trngCursor.First(); k != nil; k, v = trngCursor.Next() {
+			var data TRNGData
+			if err := json.Unmarshal(v, &data); err == nil && !data.Consumed {
+				trngUnconsumed++
+			}
+		}
+		info["trng_queue_current"] = trngUnconsumed
 
-	// Format stats
-	stats["trng_total"] = queueInfo["trng_data_count"]
-	stats["trng_unconsumed"] = queueInfo["trng_unconsumed_count"]
-	stats["trng_queue_full"] = queueInfo["trng_data_count"] >= trngQueueSize
-	stats["fortuna_total"] = queueInfo["fortuna_data_count"]
-	stats["fortuna_unconsumed"] = queueInfo["fortuna_unconsumed_count"]
-	stats["fortuna_queue_full"] = queueInfo["fortuna_data_count"] >= fortunaQueueSize
+		// Count Fortuna unconsumed
+		fortunaBucket := tx.Bucket(fortunaDataBucket)
+		fortunaCursor := fortunaBucket.Cursor()
+		fortunaUnconsumed := 0
+		for k, v := fortunaCursor.First(); k != nil; k, v = fortunaCursor.Next() {
+			var data FortunaData
+			if err := json.Unmarshal(v, &data); err == nil && !data.Consumed {
+				fortunaUnconsumed++
+			}
+		}
+		info["fortuna_queue_current"] = fortunaUnconsumed
 
-	return stats, nil
+		return nil
+	})
+
+	return info, err
 }
 
 // UpdateQueueSizes updates the queue size configuration
@@ -819,18 +773,18 @@ func (h *BoltDBHandler) UpdateQueueSizes(trngSize, fortunaSize int) error {
 	h.fortunaQueueSize = fortunaSize
 	h.mu.Unlock()
 
-	// Also persist the settings
 	return h.db.Update(func(tx *bolt.Tx) error {
-		b := tx.Bucket(configBucket)
-
+		configB := tx.Bucket(configBucket)
 		var buf [8]byte
-		binary.BigEndian.PutUint64(buf[:], uint64(trngSize))
-		if err := b.Put([]byte("trng_queue_size"), buf[:]); err != nil {
+
+		// Safe conversion - queue sizes are validated configuration values
+		binary.BigEndian.PutUint64(buf[:], uint64(trngSize)) // #nosec G115
+		if err := configB.Put([]byte("trng_queue_size"), buf[:]); err != nil {
 			return fmt.Errorf("store trng queue size: %w", err)
 		}
 
-		binary.BigEndian.PutUint64(buf[:], uint64(fortunaSize))
-		if err := b.Put([]byte("fortuna_queue_size"), buf[:]); err != nil {
+		binary.BigEndian.PutUint64(buf[:], uint64(fortunaSize)) // #nosec G115
+		if err := configB.Put([]byte("fortuna_queue_size"), buf[:]); err != nil {
 			return fmt.Errorf("store fortuna queue size: %w", err)
 		}
 
@@ -838,21 +792,12 @@ func (h *BoltDBHandler) UpdateQueueSizes(trngSize, fortunaSize int) error {
 	})
 }
 
-// HealthCheck checks if the database is accessible
+//---------------------- Health Check ----------------------
+
+// HealthCheck performs a basic health check on the database
 func (h *BoltDBHandler) HealthCheck() bool {
 	err := h.db.View(func(tx *bolt.Tx) error {
-		// Try to access counters bucket as a basic health check
-		b := tx.Bucket(countersBucket)
-		if b == nil {
-			return fmt.Errorf("counters bucket missing")
-		}
 		return nil
 	})
-
-	if err != nil {
-		log.Printf("Database health check failed: %v", err)
-		return false
-	}
-
-	return true
+	return err == nil
 }
