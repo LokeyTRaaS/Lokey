@@ -198,14 +198,14 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ github.repository }}/${{ matrix.service }}
           tags: |
-            type=ref,event=branch
-            type=ref,event=pr
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=sha,prefix={{branch}}-
-            type=raw,value=latest,enable={{is_default_branch}}
+            type=ref,event=branch,suffix=-arm64
+            type=ref,event=pr,suffix=-arm64
+            type=semver,pattern={{version}},suffix=-arm64
+            type=semver,pattern={{major}}.{{minor}},suffix=-arm64
+            type=sha,prefix=sha-,suffix=-arm64
+            type=raw,value=latest-arm64,enable={{is_default_branch}}
           flavor: |
-            latest=auto
+            latest=false
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
@@ -304,9 +304,9 @@ jobs:
           ### 🐳 Docker Images
           Pull the images with:
           \`\`\`bash
-          docker pull ghcr.io/${REPO_LOWER}/controller:$VERSION
-          docker pull ghcr.io/${REPO_LOWER}/api:$VERSION
-          docker pull ghcr.io/${REPO_LOWER}/fortuna:$VERSION
+          docker pull ghcr.io/${REPO_LOWER}/controller:${VERSION}-arm64
+          docker pull ghcr.io/${REPO_LOWER}/api:${VERSION}-arm64
+          docker pull ghcr.io/${REPO_LOWER}/fortuna:${VERSION}-arm64
           \`\`\`
 
           ### 📥 Download Binaries
@@ -415,6 +415,8 @@ jobs:
         run: |
           # Convert repository name to lowercase for Docker registry
           REPO_LOWER=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
+          # Sanitize branch name for Docker tag (replace / with -)
+          BRANCH_TAG=$(echo "${GITHUB_REF_NAME}" | sed 's/\//-/g')
           
           echo "# 🚀 Build Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
@@ -548,19 +550,19 @@ jobs:
             echo "Container images have been pushed to GitHub Container Registry:" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
-            echo "# Pull individual images (note: use lowercase repository name)" >> $GITHUB_STEP_SUMMARY
-            echo "docker pull ghcr.io/${REPO_LOWER}/controller:${GITHUB_REF_NAME}" >> $GITHUB_STEP_SUMMARY
-            echo "docker pull ghcr.io/${REPO_LOWER}/api:${GITHUB_REF_NAME}" >> $GITHUB_STEP_SUMMARY
-            echo "docker pull ghcr.io/${REPO_LOWER}/fortuna:${GITHUB_REF_NAME}" >> $GITHUB_STEP_SUMMARY
+            echo "# Pull individual images" >> $GITHUB_STEP_SUMMARY
+            echo "docker pull ghcr.io/${REPO_LOWER}/controller:${BRANCH_TAG}-arm64" >> $GITHUB_STEP_SUMMARY
+            echo "docker pull ghcr.io/${REPO_LOWER}/api:${BRANCH_TAG}-arm64" >> $GITHUB_STEP_SUMMARY
+            echo "docker pull ghcr.io/${REPO_LOWER}/fortuna:${BRANCH_TAG}-arm64" >> $GITHUB_STEP_SUMMARY
             echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "| Service | Image Name | Platform | Notes |" >> $GITHUB_STEP_SUMMARY
             echo "|---------|------------|----------|-------|" >> $GITHUB_STEP_SUMMARY
-            echo "| lokey-controller | \`ghcr.io/${REPO_LOWER}/controller:${GITHUB_REF_NAME}\` | linux/arm64 | I2C hardware support |" >> $GITHUB_STEP_SUMMARY
-            echo "| lokey-api | \`ghcr.io/${REPO_LOWER}/api:${GITHUB_REF_NAME}\` | linux/arm64 | Includes Swagger UI |" >> $GITHUB_STEP_SUMMARY
-            echo "| lokey-fortuna | \`ghcr.io/${REPO_LOWER}/fortuna:${GITHUB_REF_NAME}\` | linux/arm64 | Stateless CSPRNG |" >> $GITHUB_STEP_SUMMARY
+            echo "| lokey-controller | \`ghcr.io/${REPO_LOWER}/controller:${BRANCH_TAG}-arm64\` | linux/arm64 | I2C hardware support |" >> $GITHUB_STEP_SUMMARY
+            echo "| lokey-api | \`ghcr.io/${REPO_LOWER}/api:${BRANCH_TAG}-arm64\` | linux/arm64 | Includes Swagger UI |" >> $GITHUB_STEP_SUMMARY
+            echo "| lokey-fortuna | \`ghcr.io/${REPO_LOWER}/fortuna:${BRANCH_TAG}-arm64\` | linux/arm64 | Stateless CSPRNG |" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
-            echo "> 🔗 **View on GHCR**: [https://github.com/orgs/${{ github.repository_owner }}/packages](https://github.com/orgs/${{ github.repository_owner }}/packages)" >> $GITHUB_STEP_SUMMARY
+            echo "> 🔗 **View on GHCR**: [https://github.com/${{ github.repository_owner }}?tab=packages](https://github.com/${{ github.repository_owner }}?tab=packages)" >> $GITHUB_STEP_SUMMARY
           else
             echo "🔄 Pull request build - images not pushed to registry." >> $GITHUB_STEP_SUMMARY
           fi
@@ -575,7 +577,7 @@ jobs:
           echo "- **Run Number**: ${{ github.run_number }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Run ID**: ${{ github.run_id }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Commit**: \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "- **Branch/Tag**: \`${GITHUB_REF_NAME}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Branch/Tag**: \`${GITHUB_REF_NAME}\` (Docker: \`${BRANCH_TAG}\`)" >> $GITHUB_STEP_SUMMARY
           echo "- **Go Version**: ${{ env.GO_VERSION }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Architecture**: ARM64 (aarch64)" >> $GITHUB_STEP_SUMMARY
           echo "- **CGO**: Enabled (for I2C and BoltDB support)" >> $GITHUB_STEP_SUMMARY
