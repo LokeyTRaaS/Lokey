@@ -174,6 +174,20 @@ jobs:
           name: swagger-docs
           path: ./pkg/api/docs
 
+      - name: Debug - List all files
+        run: |
+          echo "=== Current directory ==="
+          pwd
+          echo ""
+          echo "=== Root directory contents ==="
+          ls -la .
+          echo ""
+          echo "=== Build directory contents ==="
+          ls -la ./build/ || echo "build directory does not exist"
+          echo ""
+          echo "=== Find all lokey binaries ==="
+          find . -name "lokey-*" -type f
+
       - name: Verify artifacts and prepare for build
         run: |
           echo "=== Binary verification ==="
