@@ -31,9 +31,6 @@ WORKDIR /app
 # Copy the binary from the builder stage
 COPY --from=builder /app/fortuna /app/fortuna
 
-# Create data directory
-RUN mkdir -p /data
-
 # Set environment variables
 ENV PORT=8082 \
     CONTROLLER_URL="http://controller:8081"

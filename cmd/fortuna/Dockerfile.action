@@ -1,7 +1,6 @@
-
 FROM alpine:latest
 
-# Add runtime dependencies
+# Add runtime dependencies matching local Dockerfile
 RUN apk --no-cache add ca-certificates libc6-compat
 
 WORKDIR /app

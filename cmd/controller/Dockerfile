@@ -31,9 +31,6 @@ WORKDIR /app
 # Copy the binary from the builder stage
 COPY --from=builder /app/controller /app/controller
 
-# Create data directory
-RUN mkdir -p /data
-
 # Set environment variables
 ENV PORT=8081 \
     I2C_BUS_NUMBER=1

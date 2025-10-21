@@ -1,8 +1,8 @@
-
 FROM alpine:latest
 
-# Add runtime dependencies
-RUN apk --no-cache add ca-certificates libc6-compat
+# Add runtime dependencies matching local Dockerfile
+# ca-certificates for HTTPS, libc6-compat for dynamic linking, i2c-tools for I2C support
+RUN apk --no-cache add ca-certificates libc6-compat i2c-tools
 
 WORKDIR /app
 

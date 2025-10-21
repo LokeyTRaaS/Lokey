@@ -44,6 +44,29 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y gcc-aarch64-linux-gnu
 
+      # Install Swag for API service only
+      - name: Install Swag for API service
+        if: matrix.service == 'api'
+        run: go install github.com/swaggo/swag/cmd/swag@latest
+
+      # Generate Swagger docs for API service
+      - name: Generate Swagger documentation
+        if: matrix.service == 'api'
+        run: |
+          echo "=== Generating Swagger documentation ==="
+          swag init --parseDependency --parseInternal \
+            --generalInfo main.go \
+            --dir ./cmd/api/,./pkg/api \
+            --output ./pkg/api/docs
+          
+          echo ""
+          echo "=== Generated Swagger files ==="
+          ls -lah ./pkg/api/docs/
+          
+          echo ""
+          echo "=== Swagger.json preview ==="
+          head -n 20 ./pkg/api/docs/swagger.json
+
       - name: Download dependencies
         run: |
           go mod download
@@ -62,6 +85,7 @@ jobs:
 
       - name: Verify binary
         run: |
+          echo "=== Binary verification ==="
           file build/lokey-${{ matrix.service }}-arm64
           ls -lh build/lokey-${{ matrix.service }}-arm64
 
@@ -72,6 +96,16 @@ jobs:
           path: build/lokey-${{ matrix.service }}-arm64
           retention-days: 30
           compression-level: 9
+
+      # Upload Swagger docs as artifact (API service only)
+      - name: Upload Swagger documentation
+        if: matrix.service == 'api'
+        uses: actions/upload-artifact@v4
+        with:
+          name: swagger-docs
+          path: pkg/api/docs/
+          retention-days: 30
+          compression-level: 6
 
   # Build Docker images using pre-built binaries
   build-containers:
@@ -99,12 +133,33 @@ jobs:
           name: lokey-${{ matrix.service }}-arm64
           path: ./build
 
-      - name: Verify binary and fix .dockerignore
+      # Download Swagger docs for API service
+      - name: Download Swagger documentation
+        if: matrix.service == 'api'
+        uses: actions/download-artifact@v4
+        with:
+          name: swagger-docs
+          path: ./pkg/api/docs
+
+      - name: Verify artifacts and fix .dockerignore
         run: |
           echo "=== Binary verification ==="
           ls -la ./build/
           file ./build/lokey-${{ matrix.service }}-arm64
           chmod +x ./build/lokey-${{ matrix.service }}-arm64
+          
+          # Verify Swagger docs for API service
+          if [ "${{ matrix.service }}" == "api" ]; then
+            echo ""
+            echo "=== Swagger documentation verification ==="
+            ls -la ./pkg/api/docs/
+            if [ -f "./pkg/api/docs/swagger.json" ]; then
+              echo "✓ swagger.json found ($(ls -lh ./pkg/api/docs/swagger.json | awk '{print $5}'))"
+            fi
+            if [ -f "./pkg/api/docs/swagger.yaml" ]; then
+              echo "✓ swagger.yaml found ($(ls -lh ./pkg/api/docs/swagger.yaml | awk '{print $5}'))"
+            fi
+          fi
           
           echo ""
           echo "=== Fixing .dockerignore to allow build/ directory ==="
@@ -177,7 +232,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Download all binaries
+      - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
           path: ./artifacts
@@ -185,6 +240,8 @@ jobs:
       - name: Create checksums
         run: |
           cd artifacts
+          
+          # Create checksums for binaries
           for dir in lokey-*-arm64; do
             if [ -d "$dir" ]; then
               cd "$dir"
@@ -193,8 +250,15 @@ jobs:
             fi
           done
           
-          # Create combined checksum file
+          # Create combined checksum file for all binaries
           find . -name "lokey-*-arm64" -type f -exec sha256sum {} \; > ../all-checksums.txt
+          
+          # Create checksum for swagger docs
+          if [ -d "swagger-docs" ]; then
+            cd swagger-docs
+            sha256sum * > ../swagger-checksums.txt
+            cd ..
+          fi
 
       - name: Create release archives
         run: |
@@ -213,6 +277,11 @@ jobs:
           mkdir -p combined
           find . -name "lokey-*-arm64" -type f -exec cp {} combined/ \;
           tar -czf ../releases/lokey-all-services-arm64.tar.gz -C combined .
+          
+          # Create swagger docs archive
+          if [ -d "swagger-docs" ]; then
+            tar -czf ../releases/swagger-docs.tar.gz -C swagger-docs .
+          fi
 
       - name: Generate release notes
         id: release_notes
@@ -225,6 +294,7 @@ jobs:
           - Controller service binary (ATECC608A hardware interface)
           - API service binary (Main REST API with BoltDB)
           - Fortuna service binary (Cryptographic RNG amplifier)
+          - OpenAPI/Swagger documentation
           - Docker images for all services
 
           ### 🐳 Docker Images
@@ -256,6 +326,25 @@ jobs:
           wget https://github.com/${{ github.repository }}/releases/download/$VERSION/lokey-fortuna-arm64.tar.gz
           \`\`\`
 
+          ### 📚 API Documentation
+
+          **Download OpenAPI/Swagger specification:**
+          \`\`\`bash
+          wget https://github.com/${{ github.repository }}/releases/download/$VERSION/swagger-docs.tar.gz
+          tar -xzf swagger-docs.tar.gz
+          \`\`\`
+
+          The archive contains:
+          - \`swagger.json\` - OpenAPI 3.0 specification (JSON format)
+          - \`swagger.yaml\` - OpenAPI 3.0 specification (YAML format)
+          - \`docs.go\` - Generated Go documentation
+
+          **View live documentation:**
+          Once the API service is running, access Swagger UI at:
+          \`\`\`
+          http://your-api-host:8080/swagger/index.html
+          \`\`\`
+
           ### 🥧 Raspberry Pi Quick Start
           \`\`\`bash
           # Download controller binary
@@ -271,9 +360,11 @@ jobs:
           \`\`\`bash
           # Download checksums
           wget https://github.com/${{ github.repository }}/releases/download/$VERSION/all-checksums.txt
+          wget https://github.com/${{ github.repository }}/releases/download/$VERSION/swagger-checksums.txt
           
           # Verify
           sha256sum -c all-checksums.txt
+          sha256sum -c swagger-checksums.txt
           \`\`\`
 
           ### 📖 Documentation
@@ -296,6 +387,7 @@ jobs:
           files: |
             releases/*.tar.gz
             all-checksums.txt
+            swagger-checksums.txt
           body_path: release_notes.md
           draft: false
           prerelease: false
@@ -310,21 +402,179 @@ jobs:
     needs: [build-binaries, build-containers]
     if: always()
     steps:
-      - name: Check build status
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: ./artifacts
+
+      - name: Generate comprehensive summary
         run: |
-          echo "## Build Results" >> $GITHUB_STEP_SUMMARY
+          echo "# 🚀 Build Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Service | Binary | Container |" >> $GITHUB_STEP_SUMMARY
-          echo "|---------|--------|-----------|" >> $GITHUB_STEP_SUMMARY
           
-          if [ "${{ needs.build-binaries.result }}" == "success" ]; then
-            echo "| All | ✅ Success | " >> $GITHUB_STEP_SUMMARY
+          echo "## 📊 Build Status" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Service | Binary Build | Container Build | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|---------|--------------|-----------------|--------|" >> $GITHUB_STEP_SUMMARY
+          
+          # Determine overall status
+          BINARY_STATUS="${{ needs.build-binaries.result }}"
+          CONTAINER_STATUS="${{ needs.build-containers.result }}"
+          
+          if [ "$BINARY_STATUS" == "success" ] && [ "$CONTAINER_STATUS" == "success" ]; then
+            OVERALL="✅ All Passed"
           else
-            echo "| All | ❌ Failed | " >> $GITHUB_STEP_SUMMARY
+            OVERALL="❌ Failed"
           fi
           
-          if [ "${{ needs.build-containers.result }}" == "success" ]; then
-            echo " ✅ Success |" >> $GITHUB_STEP_SUMMARY
+          # Individual service status (check artifact existence)
+          for service in controller api fortuna; do
+            if [ -f "./artifacts/lokey-${service}-arm64/lokey-${service}-arm64" ]; then
+              BINARY_ICON="✅"
+            else
+              BINARY_ICON="❌"
+            fi
+          
+            if [ "$CONTAINER_STATUS" == "success" ]; then
+              CONTAINER_ICON="✅"
+            else
+              CONTAINER_ICON="❌"
+            fi
+          
+            echo "| lokey-${service} | ${BINARY_ICON} | ${CONTAINER_ICON} | ${OVERALL} |" >> $GITHUB_STEP_SUMMARY
+          done
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "---" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          echo "## 📦 Binary Artifacts" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Download the compiled ARM64 binaries from the artifacts section below." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Service | Binary Name | Size | SHA256 |" >> $GITHUB_STEP_SUMMARY
+          echo "|---------|-------------|------|--------|" >> $GITHUB_STEP_SUMMARY
+          
+          # List all binaries with details
+          for service in controller api fortuna; do
+            ARTIFACT_PATH="./artifacts/lokey-${service}-arm64/lokey-${service}-arm64"
+            if [ -f "$ARTIFACT_PATH" ]; then
+              SIZE=$(ls -lh "$ARTIFACT_PATH" | awk '{print $5}')
+              SHA256=$(sha256sum "$ARTIFACT_PATH" | awk '{print substr($1,1,16)"..."}')
+              echo "| lokey-${service} | \`lokey-${service}-arm64\` | $SIZE | \`$SHA256\` |" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "| lokey-${service} | \`lokey-${service}-arm64\` | N/A | N/A |" >> $GITHUB_STEP_SUMMARY
+            fi
+          done
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "> 💡 **Tip**: Binaries are available in the **Artifacts** section of this workflow run for 30 days." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Add Swagger/OpenAPI documentation section
+          echo "---" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## 📚 API Documentation (OpenAPI/Swagger)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [ -d "./artifacts/swagger-docs" ]; then
+            echo "✅ OpenAPI specification and Swagger UI files are available for download." >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "| File | Description | Size |" >> $GITHUB_STEP_SUMMARY
+            echo "|------|-------------|------|" >> $GITHUB_STEP_SUMMARY
+          
+            if [ -f "./artifacts/swagger-docs/swagger.json" ]; then
+              SWAGGER_JSON_SIZE=$(ls -lh "./artifacts/swagger-docs/swagger.json" | awk '{print $5}')
+              SWAGGER_JSON_SHA=$(sha256sum "./artifacts/swagger-docs/swagger.json" | awk '{print substr($1,1,12)"..."}')
+              echo "| \`swagger.json\` | OpenAPI 3.0 specification (JSON) | $SWAGGER_JSON_SIZE |" >> $GITHUB_STEP_SUMMARY
+            fi
+          
+            if [ -f "./artifacts/swagger-docs/swagger.yaml" ]; then
+              SWAGGER_YAML_SIZE=$(ls -lh "./artifacts/swagger-docs/swagger.yaml" | awk '{print $5}')
+              echo "| \`swagger.yaml\` | OpenAPI 3.0 specification (YAML) | $SWAGGER_YAML_SIZE |" >> $GITHUB_STEP_SUMMARY
+            fi
+          
+            if [ -f "./artifacts/swagger-docs/docs.go" ]; then
+              DOCS_GO_SIZE=$(ls -lh "./artifacts/swagger-docs/docs.go" | awk '{print $5}')
+              echo "| \`docs.go\` | Generated Go documentation | $DOCS_GO_SIZE |" >> $GITHUB_STEP_SUMMARY
+            fi
+          
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "### 📖 Using the API Documentation" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**View in Swagger UI (when API is running):**" >> $GITHUB_STEP_SUMMARY
+            echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+            echo "http://your-api-host:8080/swagger/index.html" >> $GITHUB_STEP_SUMMARY
+            echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**Import into Postman/Insomnia:**" >> $GITHUB_STEP_SUMMARY
+            echo "1. Download \`swagger-docs\` artifact from below" >> $GITHUB_STEP_SUMMARY
+            echo "2. Extract and import \`swagger.json\` or \`swagger.yaml\`" >> $GITHUB_STEP_SUMMARY
+            echo "3. All endpoints will be automatically configured" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**Available API Endpoints:**" >> $GITHUB_STEP_SUMMARY
+            echo "- \`GET /api/v1/health\` - Health check for all services" >> $GITHUB_STEP_SUMMARY
+            echo "- \`GET /api/v1/status\` - Detailed system status with queue metrics" >> $GITHUB_STEP_SUMMARY
+            echo "- \`GET /api/v1/config/queue\` - Get queue configuration" >> $GITHUB_STEP_SUMMARY
+            echo "- \`PUT /api/v1/config/queue\` - Update queue configuration" >> $GITHUB_STEP_SUMMARY
+            echo "- \`POST /api/v1/data\` - Get random data (TRNG/Fortuna, multiple formats)" >> $GITHUB_STEP_SUMMARY
+            echo "- \`GET /metrics\` - Prometheus metrics endpoint" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "> 📥 **Download**: Find the \`swagger-docs\` artifact in the **Artifacts** section below." >> $GITHUB_STEP_SUMMARY
           else
-            echo " ❌ Failed |" >> $GITHUB_STEP_SUMMARY
+            echo "⚠️ **Warning**: Swagger documentation not found in artifacts." >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "This may indicate:" >> $GITHUB_STEP_SUMMARY
+            echo "- API build failed before Swagger generation" >> $GITHUB_STEP_SUMMARY
+            echo "- Swagger artifact upload failed" >> $GITHUB_STEP_SUMMARY
+            echo "- Check the build logs for errors" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "---" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          echo "## 🐳 Container Images" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            echo "Container images have been pushed to GitHub Container Registry:" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
+            echo "# Pull individual images" >> $GITHUB_STEP_SUMMARY
+            echo "docker pull ${{ env.REGISTRY }}/${{ github.repository_owner }}/lokey-controller:${GITHUB_REF_NAME}" >> $GITHUB_STEP_SUMMARY
+            echo "docker pull ${{ env.REGISTRY }}/${{ github.repository_owner }}/lokey-api:${GITHUB_REF_NAME}" >> $GITHUB_STEP_SUMMARY
+            echo "docker pull ${{ env.REGISTRY }}/${{ github.repository_owner }}/lokey-fortuna:${GITHUB_REF_NAME}" >> $GITHUB_STEP_SUMMARY
+            echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "| Service | Image Tag | Platform | Notes |" >> $GITHUB_STEP_SUMMARY
+            echo "|---------|-----------|----------|-------|" >> $GITHUB_STEP_SUMMARY
+            echo "| lokey-controller | \`${GITHUB_REF_NAME}\` | linux/arm64 | I2C hardware support |" >> $GITHUB_STEP_SUMMARY
+            echo "| lokey-api | \`${GITHUB_REF_NAME}\` | linux/arm64 | Includes Swagger UI |" >> $GITHUB_STEP_SUMMARY
+            echo "| lokey-fortuna | \`${GITHUB_REF_NAME}\` | linux/arm64 | Stateless CSPRNG |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "🔄 Pull request build - images not pushed to registry." >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "---" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          echo "## ℹ️ Build Information" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Workflow**: ${{ github.workflow }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Run Number**: ${{ github.run_number }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Run ID**: ${{ github.run_id }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Commit**: \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Branch/Tag**: \`${GITHUB_REF_NAME}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Go Version**: ${{ env.GO_VERSION }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Architecture**: ARM64 (aarch64)" >> $GITHUB_STEP_SUMMARY
+          echo "- **CGO**: Enabled (for I2C and BoltDB support)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [ "$BINARY_STATUS" == "success" ] && [ "$CONTAINER_STATUS" == "success" ]; then
+            echo "### ✅ All builds completed successfully!" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "### ❌ Some builds failed - check logs above" >> $GITHUB_STEP_SUMMARY
+            exit 1
           fi
