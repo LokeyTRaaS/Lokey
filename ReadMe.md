@@ -1,12 +1,14 @@
 
 # LoKey: True Random Number Generation Service
 
-<img src="docs/assets/logo.jpeg" alt="LoKey Logo" width="300"/>
-
 [![Build Status](https://github.com/LokeyTRaaS/Lokey/actions/workflows/build-arm64.yml/badge.svg)](https://github.com/LokeyTRaaS/Lokey/actions/workflows/build-arm64.yml)
 [![Lint](https://github.com/LokeyTRaaS/Lokey/actions/workflows/linter.yml/badge.svg)](https://github.com/LokeyTRaaS/Lokey/actions/workflows/linter.yml)
 [![API Docs](https://img.shields.io/badge/API-Documentation-blue)](https://lokeytraas.github.io/Lokey/api-reference.html)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
+<div align="center">
+  <img src="docs/assets/logo.jpeg" alt="LoKey Logo" width="300"/>
+</div>
 
 **Hardware-based true random number generation for ~€50**
 
