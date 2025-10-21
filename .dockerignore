@@ -2,8 +2,6 @@
 .git
 .gitignore
 
-# Build artifacts
-build/
 
 # Development files
 .idea/
