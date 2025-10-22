@@ -9,7 +9,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/go-playground/validator/v10"
-	_ "github.com/lokey/rng-service/pkg/api/docs"
+	"github.com/lokey/rng-service/pkg/api/docs"
 	"github.com/lokey/rng-service/pkg/database"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -73,6 +73,9 @@ type Metrics struct {
 func NewServer(db database.DBHandler, controllerAddr, fortunaAddr string, port int) *Server {
 	router := gin.Default()
 	validate := validator.New()
+
+	// Initialize Swagger documentation
+	docs.SwaggerInfo.BasePath = "/api/v1"
 
 	metrics := &Metrics{
 		TRNGQueueCurrent: prometheus.NewGauge(prometheus.GaugeOpts{
