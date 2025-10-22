@@ -140,6 +140,16 @@ jobs:
     permissions:
       contents: read
       packages: write
+    outputs:
+      controller-amd64-digest: ${{ steps.build-push.outputs.digest }}
+      controller-arm64-digest: ${{ steps.build-push.outputs.digest }}
+      controller-armv7-digest: ${{ steps.build-push.outputs.digest }}
+      api-amd64-digest: ${{ steps.build-push.outputs.digest }}
+      api-arm64-digest: ${{ steps.build-push.outputs.digest }}
+      api-armv7-digest: ${{ steps.build-push.outputs.digest }}
+      fortuna-amd64-digest: ${{ steps.build-push.outputs.digest }}
+      fortuna-arm64-digest: ${{ steps.build-push.outputs.digest }}
+      fortuna-armv7-digest: ${{ steps.build-push.outputs.digest }}
     strategy:
       fail-fast: false
       matrix:
@@ -266,6 +276,7 @@ jobs:
             latest=false
 
       - name: Build and push Docker image for ${{ matrix.platform }}
+        id: build-push
         uses: docker/build-push-action@v5
         with:
           context: .
@@ -278,6 +289,23 @@ jobs:
           cache-to: type=gha,mode=max,scope=${{ matrix.service }}-${{ matrix.arch }}
           provenance: false
           sbom: false
+          outputs: type=image,name=target,annotation-index.org.opencontainers.image.description=Multi-arch image
+
+      - name: Save digest to file
+        if: github.event_name != 'pull_request'
+        run: |
+          mkdir -p /tmp/digests
+          digest="${{ steps.build-push.outputs.digest }}"
+          echo "$digest" > "/tmp/digests/${{ matrix.service }}-${{ matrix.arch }}.txt"
+          echo "Saved digest for ${{ matrix.service }}-${{ matrix.arch }}: $digest"
+
+      - name: Upload digest
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: digest-${{ matrix.service }}-${{ matrix.arch }}
+          path: /tmp/digests/
+          retention-days: 1
 
   # Create release with all artifacts
   create-release:
@@ -624,11 +652,23 @@ jobs:
           if [ "${{ github.event_name }}" != "pull_request" ]; then
             echo "Multi-architecture images available:" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
-            echo "| Service | AMD64 | ARM64 | ARMv7 |" >> $GITHUB_STEP_SUMMARY
-            echo "|---------|-------|-------|-------|" >> $GITHUB_STEP_SUMMARY
+            echo "| Service | Architecture | Name | SHA |" >> $GITHUB_STEP_SUMMARY
+            echo "|---------|--------------|------|-----|" >> $GITHUB_STEP_SUMMARY
           
             for service in controller api fortuna; do
-              echo "| ${service} | \`${BRANCH_TAG}-amd64\` | \`${BRANCH_TAG}-arm64\` | \`${BRANCH_TAG}-armv7\` |" >> $GITHUB_STEP_SUMMARY
+              for arch in amd64 arm64 armv7; do
+                # Read digest from artifact if it exists
+                DIGEST_FILE="./artifacts/digest-${service}-${arch}/${service}-${arch}.txt"
+                if [ -f "$DIGEST_FILE" ]; then
+                  FULL_DIGEST=$(cat "$DIGEST_FILE")
+                  # Extract just the SHA (remove 'sha256:' prefix if present)
+                  SHORT_SHA=$(echo "$FULL_DIGEST" | sed 's/sha256://' | cut -c1-12)
+                  IMAGE_NAME="ghcr.io/${REPO_LOWER}/${service}:${BRANCH_TAG}-${arch}"
+                  echo "| ${service} | ${arch} | \`${BRANCH_TAG}-${arch}\` | \`${SHORT_SHA}...\` |" >> $GITHUB_STEP_SUMMARY
+                else
+                  echo "| ${service} | ${arch} | \`${BRANCH_TAG}-${arch}\` | N/A |" >> $GITHUB_STEP_SUMMARY
+                fi
+              done
             done
           
             echo "" >> $GITHUB_STEP_SUMMARY
