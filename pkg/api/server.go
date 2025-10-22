@@ -171,12 +171,11 @@ func (s *Server) setupRoutes() {
 		c.Next()
 	})
 
-	// Swagger docs
-	// Serve swagger.json as a static file
-	s.router.StaticFile("/swagger/swagger.json", "./pkg/api/docs/swagger.json")
-	s.router.StaticFile("/swagger/swagger.yaml", "./pkg/api/docs/swagger.yaml")
+	// Serve static swagger spec files at /api-docs/* (different path to avoid conflict)
+	s.router.StaticFile("/api-docs/swagger.json", "./pkg/api/docs/swagger.json")
+	s.router.StaticFile("/api-docs/swagger.yaml", "./pkg/api/docs/swagger.yaml")
 
-	// Swagger UI with URL pointing to the static file
+	// Swagger UI with custom URL pointing to swagger.json
 	s.router.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler,
 		ginSwagger.URL("/swagger/swagger.json")))
 
