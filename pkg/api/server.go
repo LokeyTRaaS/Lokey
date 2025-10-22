@@ -172,8 +172,13 @@ func (s *Server) setupRoutes() {
 	})
 
 	// Swagger docs
+	// Serve swagger.json as a static file
+	s.router.StaticFile("/swagger/swagger.json", "./pkg/api/docs/swagger.json")
+	s.router.StaticFile("/swagger/swagger.yaml", "./pkg/api/docs/swagger.yaml")
+
+	// Swagger UI with URL pointing to the static file
 	s.router.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler,
-		ginSwagger.InstanceName("swagger")))
+		ginSwagger.URL("/swagger/swagger.json")))
 
 	// Prometheus metrics endpoint
 	s.router.GET("/metrics", s.MetricsHandler)
