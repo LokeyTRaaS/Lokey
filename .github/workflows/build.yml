@@ -101,7 +101,7 @@ jobs:
         run: |
           mkdir -p build
           cd cmd/${{ matrix.service }}
-          go build -v -trimpath -ldflags="-s -w" -o ../../build/lokey-${{ matrix.service }}-${{ matrix.arch }}
+          go build -v -x -trimpath -ldflags="-s -w" -o ../../build/lokey-${{ matrix.service }}-${{ matrix.arch }}
 
       - name: Verify binary
         run: |

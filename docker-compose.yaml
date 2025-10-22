@@ -7,17 +7,17 @@ services:
     deploy:
       resources:
         limits:
-          memory: 128M
+          memory: 64M
     environment:
       - PORT=8080
       - DB_PATH=/data/api.db
       - CONTROLLER_ADDR=http://controller:8081
       - FORTUNA_ADDR=http://fortuna:8082
-      - TRNG_QUEUE_SIZE=1000000
-      - FORTUNA_QUEUE_SIZE=1000000
+      - TRNG_QUEUE_SIZE=10000
+      - FORTUNA_QUEUE_SIZE=10000
       - TRNG_POLL_INTERVAL_MS=100
       - FORTUNA_POLL_INTERVAL_MS=100
-    image: ${DEV_MACHINE_IP:-localhost}:5000/lokey-api:latest
+    image: ghcr.io/lokeytraas/lokey/api:prerelease-major-refactor-arm64
     ports:
       - '8080:8080'
     restart: unless-stopped
@@ -32,14 +32,14 @@ services:
     deploy:
       resources:
         limits:
-          memory: 128M
+          memory: 20M
     devices:
       - /dev/i2c-1:/dev/i2c-1
     environment:
       - PORT=8081
       - I2C_BUS_NUMBER=1
       - FORCE_CONFIG=false
-    image: ${DEV_MACHINE_IP:-localhost}:5000/lokey-controller:latest
+    image: ghcr.io/lokeytraas/lokey/controller:prerelease-major-refactor-arm64
     privileged: true
     restart: unless-stopped
     logging:
@@ -53,11 +53,11 @@ services:
     deploy:
       resources:
         limits:
-          memory: 128M
+          memory: 20M
     environment:
       - PORT=8082
       - AMPLIFICATION_FACTOR=4
-    image: ${DEV_MACHINE_IP:-localhost}:5000/lokey-fortuna:latest
+    image: ghcr.io/lokeytraas/lokey/fortuna:prerelease-major-refactor-arm64
     restart: unless-stopped
     logging:
       driver: "json-file"
