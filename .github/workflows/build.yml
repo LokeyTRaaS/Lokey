@@ -64,12 +64,12 @@ jobs:
             sudo apt-get install -y gcc-arm-linux-gnueabihf
           fi
 
-      # Install Swag for API service only
+      # Install Swag for API service only (amd64 - the one that generates docs)
       - name: Install Swag for API service
         if: matrix.service == 'api' && matrix.arch == 'amd64'
         run: go install github.com/swaggo/swag/cmd/swag@latest
 
-      # Generate Swagger docs once (for API service, any arch will do)
+      # Generate Swagger docs once (for API service, amd64 only)
       - name: Generate Swagger documentation
         if: matrix.service == 'api' && matrix.arch == 'amd64'
         run: |
@@ -82,6 +82,24 @@ jobs:
           echo ""
           echo "=== Generated Swagger files ==="
           ls -lah ./pkg/api/docs/
+
+      # Upload Swagger docs as artifact (API service, once)
+      - name: Upload Swagger documentation
+        if: matrix.service == 'api' && matrix.arch == 'amd64'
+        uses: actions/upload-artifact@v4
+        with:
+          name: swagger-docs
+          path: pkg/api/docs/
+          retention-days: 30
+          compression-level: 6
+
+      # Download swagger docs for ALL API builds (not just amd64)
+      - name: Download Swagger documentation for API builds
+        if: matrix.service == 'api' && matrix.arch != 'amd64'
+        uses: actions/download-artifact@v4
+        with:
+          name: swagger-docs
+          path: ./pkg/api/docs
 
       - name: Download dependencies
         run: |
@@ -113,16 +131,6 @@ jobs:
           path: build/lokey-${{ matrix.service }}-${{ matrix.arch }}
           retention-days: 30
           compression-level: 9
-
-      # Upload Swagger docs as artifact (API service, once)
-      - name: Upload Swagger documentation
-        if: matrix.service == 'api' && matrix.arch == 'amd64'
-        uses: actions/upload-artifact@v4
-        with:
-          name: swagger-docs
-          path: pkg/api/docs/
-          retention-days: 30
-          compression-level: 6
 
   # Build Docker images for multiple architectures
   build-containers:
