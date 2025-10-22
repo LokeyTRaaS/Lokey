@@ -172,7 +172,8 @@ func (s *Server) setupRoutes() {
 	})
 
 	// Swagger docs
-	s.router.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
+	s.router.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler,
+		ginSwagger.InstanceName("swagger")))
 
 	// Prometheus metrics endpoint
 	s.router.GET("/metrics", s.MetricsHandler)
