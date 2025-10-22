@@ -289,7 +289,6 @@ jobs:
           cache-to: type=gha,mode=max,scope=${{ matrix.service }}-${{ matrix.arch }}
           provenance: false
           sbom: false
-          outputs: type=image,name=target,annotation-index.org.opencontainers.image.description=Multi-arch image
 
       - name: Save digest to file
         if: github.event_name != 'pull_request'
