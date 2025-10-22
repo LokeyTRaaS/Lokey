@@ -10,8 +10,6 @@ on:
       - refactor/**
     tags:
       - 'v*'
-  pull_request:
-    branches: [ main, feature, debug ]
 
 jobs:
   golangci:
