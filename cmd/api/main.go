@@ -49,8 +49,8 @@ const (
 	DefaultDbPath              = "/data/api.db"
 	DefaultControllerAddr      = "http://controller:8081"
 	DefaultFortunaAddr         = "http://fortuna:8082"
-	DefaultTRNGQueueSize       = 100000
-	DefaultFortunaQueueSize    = 100000
+	DefaultTRNGQueueSize       = 1000000
+	DefaultFortunaQueueSize    = 1000000
 	DefaultTRNGPollInterval    = 100 * time.Millisecond
 	DefaultFortunaPollInterval = 100 * time.Millisecond
 )

@@ -29,8 +29,8 @@ type Server struct {
 
 // QueueConfig represents the queue configuration
 type QueueConfig struct {
-	TRNGQueueSize    int `json:"trng_queue_size" validate:"required,min=10,max=10000"`
-	FortunaQueueSize int `json:"fortuna_queue_size" validate:"required,min=10,max=10000"`
+	TRNGQueueSize    int `json:"trng_queue_size" validate:"required,min=10,max=100000"`
+	FortunaQueueSize int `json:"fortuna_queue_size" validate:"required,min=10,max=100000"`
 }
 
 // DataRequest represents a request for random data
