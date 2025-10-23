@@ -2,12 +2,14 @@ package atecc608a
 
 import (
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"sync"
 	"time"
 
 	"github.com/d2r2/go-i2c"
+	goi2clogger "github.com/d2r2/go-logger"
 )
 
 const (
@@ -101,25 +103,44 @@ type Controller struct {
 // NewController creates a new ATECC608A controller
 func NewController(busNumber int) (*Controller, error) {
 	// Set log level from environment
-	if logLevelStr := os.Getenv("LOG_LEVEL"); logLevelStr != "" {
+	logLevelStr := os.Getenv("LOG_LEVEL")
+	if logLevelStr != "" {
 		switch logLevelStr {
 		case "DEBUG":
 			SetLogLevel(LogLevelDebug)
+			goi2clogger.ChangePackageLogLevel("i2c", goi2clogger.DebugLevel)
 		case "INFO":
 			SetLogLevel(LogLevelInfo)
+			goi2clogger.ChangePackageLogLevel("i2c", goi2clogger.InfoLevel)
 		case "WARN":
 			SetLogLevel(LogLevelWarn)
+			goi2clogger.ChangePackageLogLevel("i2c", goi2clogger.WarnLevel)
 		case "ERROR":
 			SetLogLevel(LogLevelError)
+			goi2clogger.ChangePackageLogLevel("i2c", goi2clogger.ErrorLevel)
 		default:
 			SetLogLevel(LogLevelInfo)
+			goi2clogger.ChangePackageLogLevel("i2c", goi2clogger.InfoLevel)
 		}
+	} else {
+		// Disable i2c library logging by default in production
+		goi2clogger.ChangePackageLogLevel("i2c", goi2clogger.FatalLevel)
+	}
+
+	// Optionally disable i2c logging output completely for production
+	var logOutput *os.File
+	if logLevelStr == "ERROR" || logLevelStr == "WARN" {
+		logOutput = os.Stderr
+		log.SetOutput(io.Discard)
 	}
 
 	logDebug("Container I2C Debug - UID: %d, GID: %d", os.Getuid(), os.Getgid())
 
 	// Check if I2C device exists
 	if _, err := os.Stat("/dev/i2c-1"); os.IsNotExist(err) {
+		if logOutput != nil {
+			log.SetOutput(logOutput)
+		}
 		return nil, fmt.Errorf("I2C device /dev/i2c-1 does not exist in container")
 	}
 
@@ -132,7 +153,15 @@ func NewController(busNumber int) (*Controller, error) {
 	logInfo("Initializing I2C connection to 0x%02x on bus %d", DefaultI2CAddress, busNumber)
 	i2c, err := i2c.NewI2C(DefaultI2CAddress, busNumber)
 	if err != nil {
+		if logOutput != nil {
+			log.SetOutput(logOutput)
+		}
 		return nil, fmt.Errorf("failed to initialize I2C: %w", err)
+	}
+
+	// Restore log output after i2c init
+	if logOutput != nil {
+		log.SetOutput(logOutput)
 	}
 
 	controller := &Controller{

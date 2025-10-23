@@ -89,6 +89,7 @@ services:
     <<: *controller-common
     environment:
       <<: *controller-env
+      GIN_MODE: release
       LOG_LEVEL: WARN
     profiles:
       - production
@@ -99,6 +100,7 @@ services:
       - controller
     environment:
       <<: *fortuna-env
+      GIN_MODE: release
       LOG_LEVEL: WARN
     profiles:
       - production
@@ -121,6 +123,7 @@ services:
     <<: *controller-common
     environment:
       <<: *controller-env
+      GIN_MODE: debug
       LOG_LEVEL: DEBUG
     ports:
       - '8081:8081'
@@ -133,6 +136,7 @@ services:
       - controller-debug
     environment:
       <<: *fortuna-env
+      GIN_MODE: debug
       LOG_LEVEL: DEBUG
     ports:
       - '8082:8082'

@@ -33,17 +33,6 @@ func NewController(i2cBusNumber int, port int) (*Controller, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize ATECC608A: %w", err)
 	}
-
-	// Set Gin mode based on LOG_LEVEL
-	logLevel := os.Getenv("LOG_LEVEL")
-	if logLevel == "ERROR" || logLevel == "WARN" {
-		gin.SetMode(gin.ReleaseMode)
-	} else if logLevel == "DEBUG" {
-		gin.SetMode(gin.DebugMode)
-	} else {
-		gin.SetMode(gin.ReleaseMode)
-	}
-
 	// Initialize router
 	router := gin.Default()
 
