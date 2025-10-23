@@ -27,14 +27,57 @@ type Controller struct {
 	router *gin.Engine
 }
 
+// customLogger only logs non-200 responses
+func customLogger() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		start := time.Now()
+		path := c.Request.URL.Path
+		raw := c.Request.URL.RawQuery
+
+		// Process request
+		c.Next()
+
+		// Only log if status is not 200
+		if c.Writer.Status() != http.StatusOK {
+			end := time.Now()
+			latency := end.Sub(start)
+
+			if raw != "" {
+				path = path + "?" + raw
+			}
+
+			log.Printf("[GIN] %v | %3d | %13v | %15s | %-7s %s",
+				end.Format("2006/01/02 - 15:04:05"),
+				c.Writer.Status(),
+				latency,
+				c.ClientIP(),
+				c.Request.Method,
+				path,
+			)
+		}
+	}
+}
+
 func NewController(i2cBusNumber int, port int) (*Controller, error) {
 	// Initialize ATECC608A controller
 	device, err := atecc608a.NewController(i2cBusNumber)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize ATECC608A: %w", err)
 	}
-	// Initialize router
-	router := gin.Default()
+
+	// Initialize router based on log level
+	var router *gin.Engine
+	logLevel := os.Getenv("LOG_LEVEL")
+
+	if logLevel == "WARN" || logLevel == "ERROR" {
+		// Production mode: no default middleware, only log errors
+		router = gin.New()
+		router.Use(gin.Recovery())
+		router.Use(customLogger()) // Only logs non-200
+	} else {
+		// Debug/Info mode: use default logger
+		router = gin.Default()
+	}
 
 	return &Controller{
 		device: device,
@@ -61,8 +104,12 @@ func (c *Controller) Start() error {
 		Handler: c.router,
 	}
 
+	logLevel := os.Getenv("LOG_LEVEL")
+
 	go func() {
-		log.Printf("[INFO] Starting controller server on port %d", c.port)
+		if logLevel == "DEBUG" || logLevel == "INFO" || logLevel == "" {
+			log.Printf("[INFO] Starting controller server on port %d", c.port)
+		}
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			serverErr <- err
 		}
@@ -76,7 +123,9 @@ func (c *Controller) Start() error {
 	case err := <-serverErr:
 		return fmt.Errorf("server error: %w", err)
 	case sig := <-sigCh:
-		log.Printf("[INFO] Received signal %s, shutting down", sig)
+		if logLevel == "DEBUG" || logLevel == "INFO" || logLevel == "" {
+			log.Printf("[INFO] Received signal %s, shutting down", sig)
+		}
 	}
 
 	// Graceful shutdown
@@ -180,15 +229,20 @@ func main() {
 		log.Fatalf("[ERROR] Failed to create controller: %v", err)
 	}
 
-	log.Printf("[INFO] Starting TRNG controller with configuration:")
-	log.Printf("[INFO]   I2C Bus Number: %d", i2cBusNumber)
-	log.Printf("[INFO]   Port: %d", port)
-	log.Printf("[INFO]   Log Level: %s", os.Getenv("LOG_LEVEL"))
+	logLevel := os.Getenv("LOG_LEVEL")
+	if logLevel == "DEBUG" || logLevel == "INFO" || logLevel == "" {
+		log.Printf("[INFO] Starting TRNG controller with configuration:")
+		log.Printf("[INFO]   I2C Bus Number: %d", i2cBusNumber)
+		log.Printf("[INFO]   Port: %d", port)
+		log.Printf("[INFO]   Log Level: %s", logLevel)
+	}
 
 	err = controller.Start()
 	if err != nil {
 		log.Fatalf("[ERROR] Controller error: %v", err)
 	}
 
-	log.Println("[INFO] Controller gracefully shut down")
+	if logLevel == "DEBUG" || logLevel == "INFO" || logLevel == "" {
+		log.Println("[INFO] Controller gracefully shut down")
+	}
 }

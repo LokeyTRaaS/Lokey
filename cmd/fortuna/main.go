@@ -29,9 +29,51 @@ type FortunaProcessor struct {
 	lastReseedTime      time.Time
 }
 
+// customLogger only logs non-200 responses
+func customLogger() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		start := time.Now()
+		path := c.Request.URL.Path
+		raw := c.Request.URL.RawQuery
+
+		// Process request
+		c.Next()
+
+		// Only log if status is not 200
+		if c.Writer.Status() != http.StatusOK {
+			end := time.Now()
+			latency := end.Sub(start)
+
+			if raw != "" {
+				path = path + "?" + raw
+			}
+
+			log.Printf("[GIN] %v | %3d | %13v | %15s | %-7s %s",
+				end.Format("2006/01/02 - 15:04:05"),
+				c.Writer.Status(),
+				latency,
+				c.ClientIP(),
+				c.Request.Method,
+				path,
+			)
+		}
+	}
+}
+
 func NewFortunaProcessor(port int, amplificationFactor int) (*FortunaProcessor, error) {
-	// Initialize router
-	router := gin.Default()
+	// Initialize router based on log level
+	var router *gin.Engine
+	logLevel := os.Getenv("LOG_LEVEL")
+
+	if logLevel == "WARN" || logLevel == "ERROR" {
+		// Production mode: no default middleware, only log errors
+		router = gin.New()
+		router.Use(gin.Recovery())
+		router.Use(customLogger()) // Only logs non-200
+	} else {
+		// Debug/Info mode: use default logger
+		router = gin.Default()
+	}
 
 	// Initialize Fortuna with a temporary seed (will be reseeded by API service)
 	initialSeed := make([]byte, 32)
@@ -73,8 +115,12 @@ func (p *FortunaProcessor) Start() error {
 		Handler: p.router,
 	}
 
+	logLevel := os.Getenv("LOG_LEVEL")
+
 	go func() {
-		log.Printf("Starting Fortuna processor server on port %d", p.port)
+		if logLevel == "DEBUG" || logLevel == "INFO" || logLevel == "" {
+			log.Printf("Starting Fortuna processor server on port %d", p.port)
+		}
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			serverErr <- err
 		}
@@ -88,7 +134,9 @@ func (p *FortunaProcessor) Start() error {
 	case err := <-serverErr:
 		return fmt.Errorf("server error: %w", err)
 	case sig := <-sigCh:
-		log.Printf("Received signal %s, shutting down", sig)
+		if logLevel == "DEBUG" || logLevel == "INFO" || logLevel == "" {
+			log.Printf("Received signal %s, shutting down", sig)
+		}
 	}
 
 	// Graceful shutdown
@@ -270,15 +318,20 @@ func main() {
 		log.Fatalf("Failed to create Fortuna processor: %v", err)
 	}
 
-	log.Printf("Starting Fortuna processor with configuration:")
-	log.Printf("  Port: %d", port)
-	log.Printf("  Amplification Factor: %d", amplificationFactor)
-	log.Printf("Note: Fortuna will be seeded by the API service via /seed endpoint")
+	logLevel := os.Getenv("LOG_LEVEL")
+	if logLevel == "DEBUG" || logLevel == "INFO" || logLevel == "" {
+		log.Printf("Starting Fortuna processor with configuration:")
+		log.Printf("  Port: %d", port)
+		log.Printf("  Amplification Factor: %d", amplificationFactor)
+		log.Printf("Note: Fortuna will be seeded by the API service via /seed endpoint")
+	}
 
 	err = processor.Start()
 	if err != nil {
 		log.Fatalf("Fortuna processor error: %v", err)
 	}
 
-	log.Println("Fortuna processor gracefully shut down")
+	if logLevel == "DEBUG" || logLevel == "INFO" || logLevel == "" {
+		log.Println("Fortuna processor gracefully shut down")
+	}
 }
