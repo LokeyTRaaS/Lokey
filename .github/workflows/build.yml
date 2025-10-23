@@ -58,8 +58,8 @@ jobs:
   build-binaries:
     name: Build ${{ matrix.service }} Binary (${{ matrix.arch }})
     runs-on: ubuntu-latest
-    # Only API service needs to wait for swagger docs
-    needs: ${{ matrix.service == 'api' && 'generate-swagger' || '' }}
+    # All builds wait for swagger to be generated
+    needs: generate-swagger
     strategy:
       fail-fast: false
       matrix:
