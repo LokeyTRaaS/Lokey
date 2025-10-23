@@ -33,7 +33,9 @@ COPY --from=builder /app/controller /app/controller
 
 # Set environment variables
 ENV PORT=8081 \
-    I2C_BUS_NUMBER=1
+    I2C_BUS_NUMBER=1 \
+    FORCE_CONFIG=false \
+    LOG_LEVEL=INFO
 
 # Expose the port
 EXPOSE 8081

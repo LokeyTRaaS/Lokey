@@ -36,7 +36,7 @@ type QueueConfig struct {
 // DataRequest represents a request for random data
 type DataRequest struct {
 	Format string `json:"format" validate:"required,oneof=int8 int16 int32 int64 uint8 uint16 uint32 uint64 binary"`
-	Count  int    `json:"limit" validate:"required,min=1,max=100000"`
+	Count  int    `json:"limit" validate:"required,min=1,max=10000"`
 	Offset int    `json:"offset" validate:"min=0"`
 	Source string `json:"source" validate:"required,oneof=trng fortuna"`
 }

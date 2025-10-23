@@ -32,6 +32,50 @@ const (
 	writeExecTime  = 26 * time.Millisecond // Write command timing
 )
 
+// LogLevel represents the logging verbosity level
+type LogLevel int
+
+const (
+	LogLevelError LogLevel = iota
+	LogLevelWarn
+	LogLevelInfo
+	LogLevelDebug
+)
+
+var (
+	currentLogLevel = LogLevelInfo // Default to Info
+)
+
+// SetLogLevel configures the logging verbosity
+func SetLogLevel(level LogLevel) {
+	currentLogLevel = level
+}
+
+// Log helper functions
+func logDebug(format string, args ...interface{}) {
+	if currentLogLevel >= LogLevelDebug {
+		log.Printf("[DEBUG] "+format, args...)
+	}
+}
+
+func logInfo(format string, args ...interface{}) {
+	if currentLogLevel >= LogLevelInfo {
+		log.Printf("[INFO] "+format, args...)
+	}
+}
+
+func logWarn(format string, args ...interface{}) {
+	if currentLogLevel >= LogLevelWarn {
+		log.Printf("[WARN] "+format, args...)
+	}
+}
+
+func logError(format string, args ...interface{}) {
+	if currentLogLevel >= LogLevelError {
+		log.Printf("[ERROR] "+format, args...)
+	}
+}
+
 // TLS configuration template based on Adafruit implementation
 var CFG_TLS = []byte{
 	0x01, 0x23, 0x00, 0x00, 0x00, 0x00, 0x50, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xC0, 0x71, 0x00,
@@ -56,10 +100,23 @@ type Controller struct {
 
 // NewController creates a new ATECC608A controller
 func NewController(busNumber int) (*Controller, error) {
-	// Debug: Check container environment
-	fmt.Printf("=== Container I2C Debug ===\n")
-	fmt.Printf("Running as UID: %d\n", os.Getuid())
-	fmt.Printf("Running as GID: %d\n", os.Getgid())
+	// Set log level from environment
+	if logLevelStr := os.Getenv("LOG_LEVEL"); logLevelStr != "" {
+		switch logLevelStr {
+		case "DEBUG":
+			SetLogLevel(LogLevelDebug)
+		case "INFO":
+			SetLogLevel(LogLevelInfo)
+		case "WARN":
+			SetLogLevel(LogLevelWarn)
+		case "ERROR":
+			SetLogLevel(LogLevelError)
+		default:
+			SetLogLevel(LogLevelInfo)
+		}
+	}
+
+	logDebug("Container I2C Debug - UID: %d, GID: %d", os.Getuid(), os.Getgid())
 
 	// Check if I2C device exists
 	if _, err := os.Stat("/dev/i2c-1"); os.IsNotExist(err) {
@@ -69,11 +126,10 @@ func NewController(busNumber int) (*Controller, error) {
 	// Check I2C device permissions
 	info, err := os.Stat("/dev/i2c-1")
 	if err == nil {
-		fmt.Printf("I2C device permissions: %s\n", info.Mode())
+		logDebug("I2C device permissions: %s", info.Mode())
 	}
 
-	// Initialize I2C device with explicit logging
-	fmt.Printf("Attempting to create I2C connection to 0x%02x on bus %d\n", DefaultI2CAddress, busNumber)
+	logInfo("Initializing I2C connection to 0x%02x on bus %d", DefaultI2CAddress, busNumber)
 	i2c, err := i2c.NewI2C(DefaultI2CAddress, busNumber)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize I2C: %w", err)
@@ -90,16 +146,16 @@ func NewController(busNumber int) (*Controller, error) {
 	// Read environment variable to check if auto-config is disabled
 	if val, ok := os.LookupEnv("DISABLE_AUTO_CONFIG"); ok && val == "true" {
 		controller.autoConfig = false
-		log.Printf("Auto-configuration disabled by environment variable")
+		logInfo("Auto-configuration disabled by environment variable")
 	}
 
 	// Initialize the device
 	if err := controller.initialize(); err != nil {
-		log.Printf("WARNING: Device initialization failed: %v", err)
-		log.Printf("Will fall back to time-based random generation")
+		logWarn("Device initialization failed: %v", err)
+		logInfo("Will fall back to time-based random generation")
 	} else {
 		controller.initialized = true
-		log.Printf("ATECC608A device initialized successfully")
+		logInfo("ATECC608A device initialized successfully")
 	}
 
 	return controller, nil
@@ -114,7 +170,7 @@ func (c *Controller) initialize() error {
 	c.wakeup()
 
 	// Check device info
-	log.Printf("Checking device information...")
+	logInfo("Checking device information...")
 	if err := c.sendCommand(cmdInfo, 0x00, 0x0000, nil); err != nil {
 		return fmt.Errorf("failed to send info command: %w", err)
 	}
@@ -128,39 +184,39 @@ func (c *Controller) initialize() error {
 		return fmt.Errorf("info response too short: %d bytes", len(infoResponse))
 	}
 
-	log.Printf("Device info: %x", infoResponse)
+	logDebug("Device info: %x", infoResponse)
 
 	// Check if device is locked by reading config zone lock bytes
 	isLocked, err := c.isDeviceLocked()
 	if err != nil {
-		log.Printf("Warning: Could not determine lock status: %v", err)
+		logWarn("Could not determine lock status: %v", err)
 	}
 
 	// Try to read the device's current configuration
-	log.Printf("Reading device configuration...")
+	logInfo("Reading device configuration...")
 	if err := c.sendCommand(cmdConfig, 0x02, 0x0000, nil); err != nil {
 		return fmt.Errorf("failed to send config read command: %w", err)
 	}
 
 	configResponse, err := c.getResponse(32, configExecTime)
 	if err != nil {
-		log.Printf("Failed to read configuration: %v", err)
+		logWarn("Failed to read configuration: %v", err)
 		// Continue anyway, we'll try to configure
 	} else {
-		log.Printf("Current configuration: %x", configResponse)
+		logDebug("Current configuration: %x", configResponse)
 	}
 
 	// If device is not locked and auto-config is enabled, try to configure it
 	if !isLocked && c.autoConfig {
-		log.Printf("Device not locked. Auto-configuration is enabled.")
+		logInfo("Device not locked. Auto-configuration is enabled.")
 		if err := c.configureDevice(); err != nil {
-			log.Printf("WARNING: Failed to auto-configure device: %v", err)
-			log.Printf("The device will continue to operate in fallback mode")
+			logWarn("Failed to auto-configure device: %v", err)
+			logInfo("The device will continue to operate in fallback mode")
 		} else {
-			log.Printf("Device successfully configured and locked!")
+			logInfo("Device successfully configured and locked!")
 		}
 	} else if !isLocked {
-		log.Printf("Device not locked but auto-configuration is disabled. Using fallback mode.")
+		logInfo("Device not locked but auto-configuration is disabled. Using fallback mode.")
 	}
 
 	// Put device in idle
@@ -187,20 +243,20 @@ func (c *Controller) isDeviceLocked() (bool, error) {
 
 // configureDevice configures and locks the device
 func (c *Controller) configureDevice() error {
-	log.Printf("Starting device configuration...")
+	logInfo("Starting device configuration...")
 
 	// Ask for user confirmation to protect against accidental locking
-	log.Printf("WARNING: About to configure and lock the ATECC608A device.")
-	log.Printf("This operation is IRREVERSIBLE and will permanently configure the device.")
-	log.Printf("If you want to proceed, set FORCE_CONFIG=true in environment variables.")
+	logWarn("About to configure and lock the ATECC608A device.")
+	logWarn("This operation is IRREVERSIBLE and will permanently configure the device.")
+	logInfo("If you want to proceed, set FORCE_CONFIG=true in environment variables.")
 
 	// Check for force configuration environment variable
 	if val, ok := os.LookupEnv("FORCE_CONFIG"); !ok || val != "true" {
-		log.Printf("Configuration aborted. FORCE_CONFIG environment variable not set to 'true'.")
+		logInfo("Configuration aborted. FORCE_CONFIG environment variable not set to 'true'.")
 		return fmt.Errorf("configuration aborted due to missing confirmation")
 	}
 
-	log.Printf("FORCE_CONFIG is set. Proceeding with device configuration...")
+	logInfo("FORCE_CONFIG is set. Proceeding with device configuration...")
 
 	// Write configuration (skipping first 16 bytes which are read-only)
 	for i := 16; i < 128; i += 4 {
@@ -219,7 +275,7 @@ func (c *Controller) configureDevice() error {
 
 		// Write the block - safe conversion as i/4 is always < 32
 		addr := uint16(i / 4) // #nosec G115 - i is bounded 16-128, i/4 always fits in uint16
-		log.Printf("Writing block at address %d: %x", i, blockData)
+		logDebug("Writing block at address %d: %x", i, blockData)
 		if err := c.sendCommand(cmdWrite, 0x00, addr, blockData); err != nil {
 			return fmt.Errorf("failed to write configuration block: %w", err)
 		}
@@ -239,7 +295,7 @@ func (c *Controller) configureDevice() error {
 	}
 
 	// Lock the configuration zone
-	log.Printf("Configuration written. Now locking the configuration zone...")
+	logInfo("Configuration written. Now locking the configuration zone...")
 
 	// Send lock command for config zone (0x00)
 	if err := c.sendCommand(cmdLock, 0x80, 0x0000, nil); err != nil {
@@ -259,7 +315,7 @@ func (c *Controller) configureDevice() error {
 		return fmt.Errorf("lock failed with status: %x", status[0])
 	}
 
-	log.Printf("Device configuration zone successfully locked!")
+	logInfo("Device configuration zone successfully locked!")
 	return nil
 }
 
@@ -268,13 +324,9 @@ func (c *Controller) wakeup() {
 	// Adafruit approach: try general call but ignore errors
 	wakeupI2C, err := i2c.NewI2C(0x00, c.busNumber)
 	if err == nil {
-		// Try to send wakeup, log if it fails
-		if _, writeErr := wakeupI2C.WriteBytes([]byte{0x00}); writeErr != nil {
-			log.Printf("Debug: wakeup write returned error (expected): %v", writeErr)
-		}
-		if closeErr := wakeupI2C.Close(); closeErr != nil {
-			log.Printf("Warning: failed to close wakeup I2C connection: %v", closeErr)
-		}
+		// Try to send wakeup, error is expected and can be ignored
+		_, _ = wakeupI2C.WriteBytes([]byte{0x00})
+		_ = wakeupI2C.Close()
 	}
 	// Always wait after wakeup attempt
 	time.Sleep(wakeupDelay)
@@ -282,17 +334,13 @@ func (c *Controller) wakeup() {
 
 // idle puts device in idle mode (following Adafruit)
 func (c *Controller) idle() {
-	if _, err := c.i2c.WriteBytes([]byte{cmdIdle}); err != nil {
-		log.Printf("Debug: idle command returned error: %v", err)
-	}
+	_, _ = c.i2c.WriteBytes([]byte{cmdIdle})
 	time.Sleep(wakeupDelay)
 }
 
 // sleep puts device in sleep mode (following Adafruit)
 func (c *Controller) sleep() {
-	if _, err := c.i2c.WriteBytes([]byte{cmdSleep}); err != nil {
-		log.Printf("Debug: sleep command returned error: %v", err)
-	}
+	_, _ = c.i2c.WriteBytes([]byte{cmdSleep})
 	time.Sleep(wakeupDelay)
 }
 
@@ -324,7 +372,7 @@ func (c *Controller) sendCommand(opcode byte, param1 byte, param2 uint16, data [
 	// Always wake up before sending command
 	c.wakeup()
 
-	fmt.Printf("Sending command packet: %x\n", commandPacket)
+	logDebug("Sending command packet: %x", commandPacket)
 
 	// Send command
 	_, err := c.i2c.WriteBytes(commandPacket)
@@ -345,15 +393,15 @@ func (c *Controller) getResponse(expectedLength int, execTime time.Duration) ([]
 	response := make([]byte, expectedLength+3) // +3 for length byte and 2 CRC bytes
 	var err error
 
-	fmt.Printf("Attempting to read %d byte response...\n", len(response))
+	logDebug("Attempting to read %d byte response", len(response))
 
 	for retry := 0; retry < 20; retry++ {
 		_, err = c.i2c.ReadBytes(response)
 		if err == nil {
-			fmt.Printf("Read successful on retry %d: %x\n", retry, response)
+			logDebug("Read successful on retry %d: %x", retry, response)
 			break
 		}
-		fmt.Printf("Retry %d failed: %v\n", retry, err)
+		logDebug("Retry %d failed: %v", retry, err)
 		time.Sleep(wakeupDelay)
 	}
 
@@ -361,7 +409,6 @@ func (c *Controller) getResponse(expectedLength int, execTime time.Duration) ([]
 		return nil, fmt.Errorf("failed to read response after retries: %w", err)
 	}
 
-	// For now, skip CRC verification to test basic communication
 	// Return data portion (skip length byte and CRC)
 	return response[1 : len(response)-2], nil
 }
@@ -391,17 +438,13 @@ func (c *Controller) calculateAdafruitCRC(data []byte) uint16 {
 }
 
 // GenerateRandom generates random bytes following Adafruit's approach
-
-// GenerateRandom generates random bytes following Adafruit's approach
 func (c *Controller) GenerateRandom() ([]byte, error) {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
 
-	fmt.Printf("=== Generating Random Data ===\n")
-
 	// If device wasn't initialized properly, use time-based fallback immediately
 	if !c.initialized {
-		fmt.Printf("Using time-based fallback (device not initialized)\n")
+		logDebug("Using time-based fallback (device not initialized)")
 		timeStr := fmt.Sprintf("%d-%d-%d", time.Now().UnixNano(), time.Now().Unix(), os.Getpid())
 		return []byte(timeStr)[:32], nil
 	}
@@ -418,32 +461,18 @@ func (c *Controller) GenerateRandom() ([]byte, error) {
 		return nil, fmt.Errorf("failed to get random response: %w", err)
 	}
 
-	// DEBUG: Analyze the response
-	fmt.Printf("=== Response Analysis ===\n")
-	fmt.Printf("Total response length: %d\n", len(response))
-	fmt.Printf("First 10 bytes: %x\n", response[:min(10, len(response))])
+	logDebug("Random response length: %d bytes", len(response))
 
-	// According to Adafruit's Python implementation, we should:
-	// 1. Skip the status byte (index 0)
-	// 2. Use the rest as random data, regardless of what the status byte contains
-	// The status byte is logged for debugging but not treated as an error condition
-
-	if len(response) > 0 {
-		// Log the status byte but don't treat it as an error
-		fmt.Printf("Status byte: 0x%02x (ignoring for random data generation)\n", response[0])
-
-		// Check if we have at least 2 bytes (status byte + at least 1 byte of data)
-		if len(response) > 1 {
-			// Skip the status byte and use the rest as random data
-			randomData := response[1:]
-			c.idle()
-			return randomData, nil
-		}
+	if len(response) > 1 {
+		// Skip the status byte and use the rest as random data
+		randomData := response[1:]
+		c.idle()
+		return randomData, nil
 	}
 
 	// Response too short or empty, use fallback
 	c.idle()
-	fmt.Printf("Using time-based fallback due to insufficient data\n")
+	logWarn("Using time-based fallback due to insufficient data")
 	timeStr := fmt.Sprintf("%d-%d-%d", time.Now().UnixNano(), time.Now().Unix(), os.Getpid())
 	return []byte(timeStr)[:32], nil
 }
