@@ -1,3 +1,4 @@
+
 name: Build Multi-Architecture Binaries and Containers
 
 on:
@@ -16,10 +17,49 @@ env:
   LICENSE: MIT
 
 jobs:
+  # Generate Swagger docs first (API service only)
+  generate-swagger:
+    name: Generate Swagger Documentation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Install Swag
+        run: go install github.com/swaggo/swag/cmd/swag@latest
+
+      - name: Generate Swagger documentation
+        run: |
+          echo "=== Generating Swagger documentation ==="
+          swag init --parseDependency --parseInternal \
+            --generalInfo main.go \
+            --dir ./cmd/api/,./pkg/api \
+            --output ./pkg/api/docs
+          
+          echo ""
+          echo "=== Generated Swagger files ==="
+          ls -lah ./pkg/api/docs/
+
+      - name: Upload Swagger documentation
+        uses: actions/upload-artifact@v4
+        with:
+          name: swagger-docs
+          path: pkg/api/docs/
+          retention-days: 30
+          compression-level: 6
+
   # Build native binaries for multiple architectures in parallel
   build-binaries:
     name: Build ${{ matrix.service }} Binary (${{ matrix.arch }})
     runs-on: ubuntu-latest
+    # Only API service needs to wait for swagger docs
+    needs: ${{ matrix.service == 'api' && 'generate-swagger' || '' }}
     strategy:
       fail-fast: false
       matrix:
@@ -64,38 +104,9 @@ jobs:
             sudo apt-get install -y gcc-arm-linux-gnueabihf
           fi
 
-      # Install Swag for API service only (amd64 - the one that generates docs)
-      - name: Install Swag for API service
-        if: matrix.service == 'api' && matrix.arch == 'amd64'
-        run: go install github.com/swaggo/swag/cmd/swag@latest
-
-      # Generate Swagger docs once (for API service, amd64 only)
-      - name: Generate Swagger documentation
-        if: matrix.service == 'api' && matrix.arch == 'amd64'
-        run: |
-          echo "=== Generating Swagger documentation ==="
-          swag init --parseDependency --parseInternal \
-            --generalInfo main.go \
-            --dir ./cmd/api/,./pkg/api \
-            --output ./pkg/api/docs
-          
-          echo ""
-          echo "=== Generated Swagger files ==="
-          ls -lah ./pkg/api/docs/
-
-      # Upload Swagger docs as artifact (API service, once)
-      - name: Upload Swagger documentation
-        if: matrix.service == 'api' && matrix.arch == 'amd64'
-        uses: actions/upload-artifact@v4
-        with:
-          name: swagger-docs
-          path: pkg/api/docs/
-          retention-days: 30
-          compression-level: 6
-
-      # Download swagger docs for ALL API builds (not just amd64)
+      # Download swagger docs for ALL API builds
       - name: Download Swagger documentation for API builds
-        if: matrix.service == 'api' && matrix.arch != 'amd64'
+        if: matrix.service == 'api'
         uses: actions/download-artifact@v4
         with:
           name: swagger-docs
@@ -310,7 +321,7 @@ jobs:
   create-release:
     name: Create Release
     runs-on: ubuntu-latest
-    needs: [build-binaries, build-containers]
+    needs: [generate-swagger, build-binaries, build-containers]
     if: startsWith(github.ref, 'refs/tags/v')
     permissions:
       contents: write
@@ -547,7 +558,7 @@ jobs:
   build-summary:
     name: Build Summary
     runs-on: ubuntu-latest
-    needs: [build-binaries, build-containers]
+    needs: [generate-swagger, build-binaries, build-containers]
     if: always()
     steps:
       - name: Download all artifacts
