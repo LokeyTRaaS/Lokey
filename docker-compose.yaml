@@ -13,7 +13,7 @@ x-api-common: &api-common
   deploy:
     resources:
       limits:
-        memory: 64M
+        memory: 192M # accounts for the serivce AND tmpfs! so 64M + 128M = 192M
   networks:
     - lokey-internal
   image: ghcr.io/lokeytraas/lokey/api:prerelease-major-refactor-arm64
