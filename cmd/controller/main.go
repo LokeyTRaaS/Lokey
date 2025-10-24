@@ -27,6 +27,37 @@ type Controller struct {
 	router *gin.Engine
 }
 
+// customLogger only logs non-200 responses
+func customLogger() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		start := time.Now()
+		path := c.Request.URL.Path
+		raw := c.Request.URL.RawQuery
+
+		// Process request
+		c.Next()
+
+		// Only log if status is not 200
+		if c.Writer.Status() != http.StatusOK {
+			end := time.Now()
+			latency := end.Sub(start)
+
+			if raw != "" {
+				path = path + "?" + raw
+			}
+
+			log.Printf("[GIN] %v | %3d | %13v | %15s | %-7s %s",
+				end.Format("2006/01/02 - 15:04:05"),
+				c.Writer.Status(),
+				latency,
+				c.ClientIP(),
+				c.Request.Method,
+				path,
+			)
+		}
+	}
+}
+
 func NewController(i2cBusNumber int, port int) (*Controller, error) {
 	// Initialize ATECC608A controller
 	device, err := atecc608a.NewController(i2cBusNumber)
@@ -34,8 +65,19 @@ func NewController(i2cBusNumber int, port int) (*Controller, error) {
 		return nil, fmt.Errorf("failed to initialize ATECC608A: %w", err)
 	}
 
-	// Initialize router
-	router := gin.Default()
+	// Initialize router based on log level
+	var router *gin.Engine
+	logLevel := os.Getenv("LOG_LEVEL")
+
+	if logLevel == "WARN" || logLevel == "ERROR" {
+		// Production mode: no default middleware, only log errors
+		router = gin.New()
+		router.Use(gin.Recovery())
+		router.Use(customLogger()) // Only logs non-200
+	} else {
+		// Debug/Info mode: use default logger
+		router = gin.Default()
+	}
 
 	return &Controller{
 		device: device,
@@ -62,8 +104,12 @@ func (c *Controller) Start() error {
 		Handler: c.router,
 	}
 
+	logLevel := os.Getenv("LOG_LEVEL")
+
 	go func() {
-		log.Printf("Starting controller server on port %d", c.port)
+		if logLevel == "DEBUG" || logLevel == "INFO" || logLevel == "" {
+			log.Printf("[INFO] Starting controller server on port %d", c.port)
+		}
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			serverErr <- err
 		}
@@ -77,7 +123,9 @@ func (c *Controller) Start() error {
 	case err := <-serverErr:
 		return fmt.Errorf("server error: %w", err)
 	case sig := <-sigCh:
-		log.Printf("Received signal %s, shutting down", sig)
+		if logLevel == "DEBUG" || logLevel == "INFO" || logLevel == "" {
+			log.Printf("[INFO] Received signal %s, shutting down", sig)
+		}
 	}
 
 	// Graceful shutdown
@@ -90,13 +138,11 @@ func (c *Controller) Start() error {
 
 	// Close resources
 	if err := c.device.Close(); err != nil {
-		log.Printf("Error closing ATECC608A: %v", err)
+		log.Printf("[WARN] Error closing ATECC608A: %v", err)
 	}
 
 	return nil
 }
-
-// Background processing methods removed as they're no longer needed in the stateless design
 
 // HTTP Handlers
 
@@ -137,9 +183,10 @@ func (c *Controller) generateHandler(ctx *gin.Context) {
 	data := make([]string, 0, count)
 
 	for i := 0; i < count; i++ {
-		// Change this line: call GenerateRandom() instead of GenerateHashFromRandom()
+		// Call GenerateRandom() to get raw random data
 		randomData, err := c.device.GenerateRandom()
 		if err != nil {
+			log.Printf("[ERROR] Failed to generate random data: %v", err)
 			ctx.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate random data"})
 			return
 		}
@@ -149,11 +196,11 @@ func (c *Controller) generateHandler(ctx *gin.Context) {
 	// Return single data or array based on count
 	if count == 1 {
 		ctx.JSON(http.StatusOK, gin.H{
-			"data": data[0], // Changed from "hash" to "data"
+			"data": data[0],
 		})
 	} else {
 		ctx.JSON(http.StatusOK, gin.H{
-			"data": data, // Changed from "hashes" to "data"
+			"data": data,
 		})
 	}
 }
@@ -163,7 +210,7 @@ func main() {
 	i2cBusNumber := DefaultI2CBusNumber
 	if val, ok := os.LookupEnv("I2C_BUS_NUMBER"); ok {
 		if n, err := fmt.Sscanf(val, "%d", &i2cBusNumber); n != 1 || err != nil {
-			log.Printf("Invalid I2C_BUS_NUMBER, using default: %d", DefaultI2CBusNumber)
+			log.Printf("[WARN] Invalid I2C_BUS_NUMBER, using default: %d", DefaultI2CBusNumber)
 			i2cBusNumber = DefaultI2CBusNumber
 		}
 	}
@@ -171,7 +218,7 @@ func main() {
 	port := DefaultPort
 	if val, ok := os.LookupEnv("PORT"); ok {
 		if n, err := fmt.Sscanf(val, "%d", &port); n != 1 || err != nil {
-			log.Printf("Invalid PORT, using default: %d", DefaultPort)
+			log.Printf("[WARN] Invalid PORT, using default: %d", DefaultPort)
 			port = DefaultPort
 		}
 	}
@@ -179,17 +226,23 @@ func main() {
 	// Create and start controller
 	controller, err := NewController(i2cBusNumber, port)
 	if err != nil {
-		log.Fatalf("Failed to create controller: %v", err)
+		log.Fatalf("[ERROR] Failed to create controller: %v", err)
 	}
 
-	log.Printf("Starting TRNG controller with configuration:")
-	log.Printf("  I2C Bus Number: %d", i2cBusNumber)
-	log.Printf("  Port: %d", port)
+	logLevel := os.Getenv("LOG_LEVEL")
+	if logLevel == "DEBUG" || logLevel == "INFO" || logLevel == "" {
+		log.Printf("[INFO] Starting TRNG controller with configuration:")
+		log.Printf("[INFO]   I2C Bus Number: %d", i2cBusNumber)
+		log.Printf("[INFO]   Port: %d", port)
+		log.Printf("[INFO]   Log Level: %s", logLevel)
+	}
 
 	err = controller.Start()
 	if err != nil {
-		log.Fatalf("Controller error: %v", err)
+		log.Fatalf("[ERROR] Controller error: %v", err)
 	}
 
-	log.Println("Controller gracefully shut down")
+	if logLevel == "DEBUG" || logLevel == "INFO" || logLevel == "" {
+		log.Println("[INFO] Controller gracefully shut down")
+	}
 }

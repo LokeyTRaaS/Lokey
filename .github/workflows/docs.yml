@@ -1,0 +1,106 @@
+name: Generate and Deploy API Documentation
+
+on:
+  push:
+    branches:
+      - main
+      - prerelease/**
+      - refactor/**
+    paths:
+      - 'pkg/api/**'
+      - 'cmd/api/**'
+      - 'docs/**'
+      - '.github/workflows/docs.yml'
+  workflow_dispatch:  # Allow manual trigger
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Allow only one concurrent deployment
+concurrency:
+  group: "pages"
+  cancel-in-progress: true
+
+jobs:
+  generate-docs:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache: true
+
+      - name: Install Swag
+        run: go install github.com/swaggo/swag/cmd/swag@latest
+
+      - name: Generate Swagger specification
+        run: |
+          cd pkg/api
+          swag init \
+            --parseDependency \
+            --parseInternal \
+            --generalInfo server.go \
+            --dir ./ \
+            --output ./docs
+          
+          echo "Generated Swagger files:"
+          ls -la ./docs/
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Generate ReDoc HTML
+        run: |
+          npx @redocly/cli build-docs \
+            pkg/api/docs/swagger.json \
+            -o docs/api-reference.html
+          
+          echo "Generated API reference at docs/api-reference.html"
+
+      - name: Copy swagger.json for direct access
+        run: |
+          cp pkg/api/docs/swagger.json docs/swagger.json
+          cp pkg/api/docs/swagger.yaml docs/swagger.yaml
+
+      - name: Create index redirect
+        run: |
+          cat > docs/index.html << 'EOF'
+          <!DOCTYPE html>
+          <html>
+          <head>
+              <meta charset="utf-8">
+              <title>LoKey Documentation</title>
+              <meta http-equiv="refresh" content="0; url=./api-reference.html">
+              <link rel="canonical" href="./api-reference.html">
+          </head>
+          <body>
+              <p>Redirecting to <a href="./api-reference.html">API documentation</a>...</p>
+          </body>
+          </html>
+          EOF
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v4
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: './docs'
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
+
+      - name: Output deployment URL
+        run: |
+          echo "📚 Documentation deployed to: ${{ steps.deployment.outputs.page_url }}"
+          echo "API Reference: ${{ steps.deployment.outputs.page_url }}api-reference.html"
+          echo "Swagger JSON: ${{ steps.deployment.outputs.page_url }}swagger.json"

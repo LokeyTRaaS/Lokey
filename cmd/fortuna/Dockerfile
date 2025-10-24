@@ -31,15 +31,16 @@ WORKDIR /app
 # Copy the binary from the builder stage
 COPY --from=builder /app/fortuna /app/fortuna
 
-# Create data directory
-RUN mkdir -p /data
-
 # Set environment variables
 ENV PORT=8082 \
     CONTROLLER_URL="http://controller:8081"
 
 # Expose the port
 EXPOSE 8082
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+  CMD wget --no-verbose --tries=1 -O /dev/null http://localhost:8082/health || exit 1
 
 # Run the application
 CMD ["/app/fortuna"]

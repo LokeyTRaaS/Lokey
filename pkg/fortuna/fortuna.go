@@ -10,6 +10,15 @@ import (
 	"time"
 )
 
+const (
+	// MinimumSeedLength is the minimum required seed length in bytes
+	MinimumSeedLength = 32
+	// MaxPoolSize is the maximum size of an entropy pool
+	MaxPoolSize = 1024
+	// NumberOfPools is the number of entropy pools
+	NumberOfPools = 32
+)
+
 // Generator implements the Fortuna algorithm for random number generation
 type Generator struct {
 	key        []byte
@@ -18,22 +27,22 @@ type Generator struct {
 	cipher     cipher.Block
 	mutex      sync.Mutex
 	lastReseed time.Time
-	pools      [32][]byte // 32 entropy pools
+	pools      [NumberOfPools][]byte
 	isHealthy  bool
 }
 
 // NewGenerator creates a new Fortuna generator
 func NewGenerator(seed []byte) (*Generator, error) {
-	if len(seed) < 32 {
-		return nil, fmt.Errorf("seed must be at least 32 bytes long")
+	if len(seed) < MinimumSeedLength {
+		return nil, fmt.Errorf("seed must be at least %d bytes long, got %d", MinimumSeedLength, len(seed))
 	}
 
 	// Initialize with zero key
-	initKey := make([]byte, 32)
+	initKey := make([]byte, MinimumSeedLength)
 	copy(initKey, seed)
 
 	// Create AES cipher
-	cipher, err := aes.NewCipher(initKey)
+	aesCipher, err := aes.NewCipher(initKey)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create AES cipher: %w", err)
 	}
@@ -41,15 +50,15 @@ func NewGenerator(seed []byte) (*Generator, error) {
 	g := &Generator{
 		key:        initKey,
 		counter:    0,
-		blockSize:  cipher.BlockSize(),
-		cipher:     cipher,
+		blockSize:  aesCipher.BlockSize(),
+		cipher:     aesCipher,
 		mutex:      sync.Mutex{},
 		lastReseed: time.Now(),
 		isHealthy:  true,
 	}
 
 	// Initialize pools
-	for i := 0; i < 32; i++ {
+	for i := 0; i < NumberOfPools; i++ {
 		g.pools[i] = make([]byte, 0, 64)
 	}
 
@@ -57,23 +66,33 @@ func NewGenerator(seed []byte) (*Generator, error) {
 }
 
 // AddRandomEvent adds random data to the entropy pools
-func (g *Generator) AddRandomEvent(source byte, value []byte) {
+func (g *Generator) AddRandomEvent(source byte, value []byte) error {
+	if len(value) == 0 {
+		return fmt.Errorf("cannot add empty random event")
+	}
+
 	g.mutex.Lock()
 	defer g.mutex.Unlock()
 
-	poolIndex := source % 32
+	poolIndex := source % NumberOfPools
 
 	// Add to the selected pool
 	g.pools[poolIndex] = append(g.pools[poolIndex], value...)
 
 	// Trim pool if it grows too large
-	if len(g.pools[poolIndex]) > 1024 {
-		g.pools[poolIndex] = g.pools[poolIndex][len(g.pools[poolIndex])-1024:]
+	if len(g.pools[poolIndex]) > MaxPoolSize {
+		g.pools[poolIndex] = g.pools[poolIndex][len(g.pools[poolIndex])-MaxPoolSize:]
 	}
+
+	return nil
 }
 
 // Reseed reseeds the generator using available entropy
 func (g *Generator) Reseed(seeds [][]byte) error {
+	if len(seeds) == 0 {
+		return fmt.Errorf("cannot reseed with empty seed list")
+	}
+
 	g.mutex.Lock()
 	defer g.mutex.Unlock()
 
@@ -82,20 +101,22 @@ func (g *Generator) Reseed(seeds [][]byte) error {
 	h.Write(g.key) // Include current key
 
 	for _, seed := range seeds {
-		h.Write(seed)
+		if len(seed) > 0 {
+			h.Write(seed)
+		}
 	}
 
 	// Update the key
 	newKey := h.Sum(nil)
 
 	// Create new cipher with updated key
-	cipher, err := aes.NewCipher(newKey)
+	aesCipher, err := aes.NewCipher(newKey)
 	if err != nil {
 		return fmt.Errorf("failed to create AES cipher: %w", err)
 	}
 
 	g.key = newKey
-	g.cipher = cipher
+	g.cipher = aesCipher
 	g.counter++ // Increment counter on reseed
 	g.lastReseed = time.Now()
 
@@ -104,6 +125,10 @@ func (g *Generator) Reseed(seeds [][]byte) error {
 
 // GenerateRandomData generates random data of the specified length
 func (g *Generator) GenerateRandomData(length int) ([]byte, error) {
+	if length <= 0 {
+		return nil, fmt.Errorf("length must be positive, got %d", length)
+	}
+
 	g.mutex.Lock()
 	defer g.mutex.Unlock()
 
@@ -142,11 +167,12 @@ func (g *Generator) GenerateRandomData(length int) ([]byte, error) {
 
 // ReseedFromPools reseeds using available entropy pools
 func (g *Generator) ReseedFromPools() error {
+	g.mutex.Lock()
 	// Determine which pools to use based on the reseed count
 	reseedCount := g.counter
 	var poolsToUse [][]byte
 
-	for i := 0; i < 32; i++ {
+	for i := 0; i < NumberOfPools; i++ {
 		// Use a pool if its corresponding bit in reseedCount is 1
 		if (reseedCount & (1 << i)) != 0 {
 			if len(g.pools[i]) > 0 {
@@ -160,17 +186,26 @@ func (g *Generator) ReseedFromPools() error {
 			}
 		}
 	}
+	g.mutex.Unlock()
 
 	// Only reseed if we have entropy
 	if len(poolsToUse) > 0 {
 		return g.Reseed(poolsToUse)
 	}
 
-	return nil
+	return fmt.Errorf("no entropy available in pools for reseeding")
 }
 
 // AmplifyRandomData takes a seed and generates a larger random output
 func (g *Generator) AmplifyRandomData(seed []byte, outputLength int) ([]byte, error) {
+	if len(seed) == 0 {
+		return nil, fmt.Errorf("seed cannot be empty")
+	}
+
+	if outputLength <= 0 {
+		return nil, fmt.Errorf("output length must be positive, got %d", outputLength)
+	}
+
 	// Add the seed to pools
 	seedLen := len(seed)
 	for i := 0; i < seedLen; i += 32 {
@@ -178,12 +213,13 @@ func (g *Generator) AmplifyRandomData(seed []byte, outputLength int) ([]byte, er
 		if end > seedLen {
 			end = seedLen
 		}
-		g.AddRandomEvent(byte(i%32), seed[i:end])
+		if err := g.AddRandomEvent(byte(i%NumberOfPools), seed[i:end]); err != nil {
+			return nil, fmt.Errorf("failed to add random event: %w", err)
+		}
 	}
 
 	// Reseed from pools
-	err := g.ReseedFromPools()
-	if err != nil {
+	if err := g.ReseedFromPools(); err != nil {
 		return nil, fmt.Errorf("failed to reseed from pools: %w", err)
 	}
 
@@ -204,4 +240,18 @@ func (g *Generator) HealthCheck() bool {
 	}
 
 	return g.isHealthy
+}
+
+// GetLastReseedTime returns the time of the last reseed operation
+func (g *Generator) GetLastReseedTime() time.Time {
+	g.mutex.Lock()
+	defer g.mutex.Unlock()
+	return g.lastReseed
+}
+
+// GetCounter returns the current counter value
+func (g *Generator) GetCounter() uint64 {
+	g.mutex.Lock()
+	defer g.mutex.Unlock()
+	return g.counter
 }
