@@ -32,8 +32,8 @@ x-api-env: &api-env
   DB_PATH: /data/api.db
   CONTROLLER_ADDR: http://controller:8081
   FORTUNA_ADDR: http://fortuna:8082
-  TRNG_QUEUE_SIZE: 100000
-  FORTUNA_QUEUE_SIZE: 100000
+  TRNG_QUEUE_SIZE: 100000 #For raspberry pi zero 2 max 100.000 of 31 bit items
+  FORTUNA_QUEUE_SIZE: 1000 #For raspberry pi zero 2 max 1000 of 256 bit items
   TRNG_POLL_INTERVAL_MS: 100
   FORTUNA_POLL_INTERVAL_MS: 100
 

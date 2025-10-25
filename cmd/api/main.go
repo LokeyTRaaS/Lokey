@@ -33,10 +33,11 @@ import (
 // @description     Supports multiple output formats: int8, int16, int32, int64, uint8, uint16, uint32, uint64, and raw binary data with configurable chunk sizes and pagination.
 // @description
 // @description     ## Repository & Support
-// @description     For issues, feature requests, contributions, and detailed hardware setup instructions, visit: https://github.com/psmgeelen/lokey
+// @description     For issues, feature requests, contributions, and detailed hardware setup instructions, visit: https://github.com/LokeyTRaaS/Lokey
+// @description     For more information about the OSS initiative, please visit our website: https://lokey.cloud
 
 // @contact.name    GitHub Repository
-// @contact.url     https://github.com/psmgeelen/lokey
+// @contact.url     https://github.com/LokeyTRaaS/Lokey
 
 // @license.name    MIT License
 // @license.url     https://opensource.org/licenses/MIT
