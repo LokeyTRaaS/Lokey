@@ -30,6 +30,7 @@ x-api-common: &api-common
 x-api-env: &api-env
   PORT: 8080
   DB_PATH: /data/api.db
+  DB_IMPLEMENTATION: channel
   CONTROLLER_ADDR: http://controller:8081
   FORTUNA_ADDR: http://fortuna:8082
   TRNG_QUEUE_SIZE: 100000 #For raspberry pi zero 2 max 100.000 of 31 bit items

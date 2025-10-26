@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -25,12 +26,19 @@ type Server struct {
 	router         *gin.Engine
 	validate       *validator.Validate
 	metrics        *Metrics
+	consumeMode    bool         // Global consume setting
+	consumeMutex   sync.RWMutex // Protects consumeMode
 }
 
 // QueueConfig represents the queue configuration
 type QueueConfig struct {
 	TRNGQueueSize    int `json:"trng_queue_size" validate:"required,min=10,max=100000"`
 	FortunaQueueSize int `json:"fortuna_queue_size" validate:"required,min=10,max=1000"`
+}
+
+// ConsumeConfig represents the consume mode configuration
+type ConsumeConfig struct {
+	Consume bool `json:"consume"`
 }
 
 // DataRequest represents a request for random data
@@ -149,6 +157,7 @@ func NewServer(db database.DBHandler, controllerAddr, fortunaAddr string, port i
 		router:         router,
 		validate:       validate,
 		metrics:        metrics,
+		consumeMode:    false, // Default: don't consume (read-only mode)
 	}
 
 	server.setupRoutes()
@@ -183,6 +192,8 @@ func (s *Server) setupRoutes() {
 		// Configuration endpoints
 		api.GET("/config/queue", s.GetQueueConfig)
 		api.PUT("/config/queue", s.UpdateQueueConfig)
+		api.GET("/config/consume", s.GetConsumeConfig)
+		api.PUT("/config/consume", s.UpdateConsumeConfig)
 
 		// Data retrieval endpoints
 		api.POST("/data", s.GetRandomData)
@@ -259,6 +270,48 @@ func (s *Server) UpdateQueueConfig(c *gin.Context) {
 	c.JSON(http.StatusOK, config)
 }
 
+// @Summary         Get consume configuration
+// @Description     Get current consume mode setting (true = delete-on-read, false = keep data in queue)
+// @Tags            configuration
+// @Accept          json
+// @Produce         json
+// @Success         200 {object} ConsumeConfig
+// @Router          /config/consume [get]
+func (s *Server) GetConsumeConfig(c *gin.Context) {
+	s.consumeMutex.RLock()
+	consumeMode := s.consumeMode
+	s.consumeMutex.RUnlock()
+
+	c.JSON(http.StatusOK, ConsumeConfig{
+		Consume: consumeMode,
+	})
+}
+
+// @Summary         Update consume configuration
+// @Description     Update consume mode setting (true = delete-on-read, false = keep data in queue)
+// @Tags            configuration
+// @Accept          json
+// @Produce         json
+// @Param           config body ConsumeConfig true "Consume configuration"
+// @Success         200 {object} ConsumeConfig
+// @Failure         400 {object} map[string]string "Invalid request"
+// @Router          /config/consume [put]
+func (s *Server) UpdateConsumeConfig(c *gin.Context) {
+	var config ConsumeConfig
+	if err := c.ShouldBindJSON(&config); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request body"})
+		return
+	}
+
+	s.consumeMutex.Lock()
+	s.consumeMode = config.Consume
+	s.consumeMutex.Unlock()
+
+	log.Printf("Consume mode updated to: %v", config.Consume)
+
+	c.JSON(http.StatusOK, config)
+}
+
 // @Summary Get random data
 // @Description Retrieve random data in various formats with pagination
 // @Tags data
@@ -283,8 +336,10 @@ func (s *Server) GetRandomData(c *gin.Context) {
 		return
 	}
 
-	// Always consume data (delete-on-read)
-	consumeData := true
+	// Use global consume mode setting
+	s.consumeMutex.RLock()
+	consumeData := s.consumeMode
+	s.consumeMutex.RUnlock()
 
 	// Calculate chunks needed
 	bytesPerValue := getBytesPerValue(request.Format)
