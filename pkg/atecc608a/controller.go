@@ -471,11 +471,9 @@ func (c *Controller) GenerateRandom() ([]byte, error) {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
 
-	// If device wasn't initialized properly, use time-based fallback immediately
+	// If device wasn't initialized properly, fail immediately
 	if !c.initialized {
-		logDebug("Using time-based fallback (device not initialized)")
-		timeStr := fmt.Sprintf("%d-%d-%d", time.Now().UnixNano(), time.Now().Unix(), os.Getpid())
-		return []byte(timeStr)[:32], nil
+		return nil, fmt.Errorf("ATECC608A device not initialized - cannot generate random data")
 	}
 
 	// Send random command (opcode 0x1B, param1 0x00, param2 0x0000)
@@ -495,15 +493,55 @@ func (c *Controller) GenerateRandom() ([]byte, error) {
 	if len(response) > 1 {
 		// Skip the status byte and use the rest as random data
 		randomData := response[1:]
+
+		// VALIDATION: Check if data is actually random (not error patterns)
+		if isRepeatingPattern(randomData) {
+			c.idle()
+			return nil, fmt.Errorf("ATECC608A returned invalid/repeating pattern - hardware failure detected")
+		}
+
 		c.idle()
 		return randomData, nil
 	}
 
-	// Response too short or empty, use fallback
+	// Response too short
 	c.idle()
-	logWarn("Using time-based fallback due to insufficient data")
-	timeStr := fmt.Sprintf("%d-%d-%d", time.Now().UnixNano(), time.Now().Unix(), os.Getpid())
-	return []byte(timeStr)[:32], nil
+	return nil, fmt.Errorf("ATECC608A response too short: %d bytes", len(response))
+}
+
+// isRepeatingPattern checks if data has suspicious repeating patterns
+func isRepeatingPattern(data []byte) bool {
+	if len(data) < 4 {
+		return false
+	}
+
+	// Check if all bytes are the same (common error pattern)
+	allSame := true
+	firstByte := data[0]
+	for _, b := range data {
+		if b != firstByte {
+			allSame = false
+			break
+		}
+	}
+	if allSame {
+		logError("Hardware failure: all bytes identical (0x%02x)", firstByte)
+		return true
+	}
+
+	// Check for 0xFF repeating (common I2C error - bus not responding)
+	ffCount := 0
+	for _, b := range data {
+		if b == 0xFF {
+			ffCount++
+		}
+	}
+	if float64(ffCount)/float64(len(data)) > 0.9 {
+		logError("Hardware failure: 0xFF pattern detected (%d/%d bytes)", ffCount, len(data))
+		return true
+	}
+
+	return false
 }
 
 // Close closes the I2C connection

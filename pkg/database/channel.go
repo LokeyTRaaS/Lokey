@@ -65,6 +65,9 @@ func (q *CircularQueue) Push(item DataItem) {
 // Get retrieves items with pagination
 // If consume=true, items are removed from queue
 // If consume=false, items are copied (read-only)
+// Get retrieves items with pagination
+// If consume=true, items are removed from queue (including offset items)
+// If consume=false, items are copied (read-only)
 func (q *CircularQueue) Get(limit, offset int, consume bool) [][]byte {
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -81,20 +84,32 @@ func (q *CircularQueue) Get(limit, offset int, consume bool) [][]byte {
 	result := make([][]byte, 0, end-offset)
 
 	if consume {
-		// Consume mode: remove items from queue
-		for i := 0; i < end-offset; i++ {
+		// Consume mode: skip offset items, then return limit items
+		// All items (offset + returned) are removed from queue
+
+		// Skip offset items
+		for i := 0; i < offset; i++ {
 			if q.size == 0 {
 				break
 			}
-			idx := (q.head + offset) % q.capacity
-			result = append(result, q.items[idx].Data)
+			q.stats.consumedCount.Add(1)
+			q.head = (q.head + 1) % q.capacity
+			q.size--
+		}
+
+		// Get and consume the requested items
+		itemsToReturn := end - offset
+		for i := 0; i < itemsToReturn; i++ {
+			if q.size == 0 {
+				break
+			}
+			// Always read from current head position
+			result = append(result, q.items[q.head].Data)
 			q.stats.consumedCount.Add(1)
 
-			// Only remove if offset is 0 (consuming from front)
-			if offset == 0 {
-				q.head = (q.head + 1) % q.capacity
-				q.size--
-			}
+			// Move head forward and decrease size
+			q.head = (q.head + 1) % q.capacity
+			q.size--
 		}
 	} else {
 		// Non-consume mode: just read without removing
