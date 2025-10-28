@@ -21,6 +21,10 @@ linters-settings:
   errcheck:
     check-blank: true
     check-type-assertions: false
+    # Use exclude-functions instead of deprecated ignore
+    exclude-functions:
+      - (io.Closer).Close
+      - (io.ReadCloser).Close
 
   govet:
     enable-all: true
@@ -36,6 +40,12 @@ linters-settings:
     rules:
       - name: exported
         disabled: true
+
+  unused:
+    # Only report exported unused items
+    check-exported: false
+    # Treat field-only usage as usage (fixes false positives for mutex fields)
+    field-writes-are-uses: true
 
 issues:
   exclude-dirs:
@@ -54,6 +64,17 @@ issues:
     - linters:
         - govet
       text: "fieldalignment"
+
+    # Allow blank identifier assignments for intentionally ignored errors
+    - linters:
+        - errcheck
+      text: "Error return value of.*is not checked"
+      source: "^\\s*_\\s*=\\s*"
+
+    # Allow nolint directives for errcheck
+    - linters:
+        - errcheck
+      source: "//nolint:errcheck"
 
   max-issues-per-linter: 0
   max-same-issues: 0

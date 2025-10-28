@@ -140,7 +140,8 @@ type ChannelDBHandler struct {
 	fortunaQueue  *CircularQueue
 	nextTRNGID    atomic.Uint64
 	nextFortunaID atomic.Uint64
-	mu            sync.RWMutex
+	// Note: No mutex needed here - CircularQueue handles its own synchronization
+	// and atomic fields are self-synchronized
 }
 
 // NewChannelDBHandler creates a new channel-based database handler

@@ -108,23 +108,29 @@ func NewController(busNumber int) (*Controller, error) {
 		switch logLevelStr {
 		case "DEBUG":
 			SetLogLevel(LogLevelDebug)
-			_ = goi2clogger.ChangePackageLogLevel("i2c", goi2clogger.DebugLevel)
+			//nolint:errcheck // Logging configuration errors are non-critical
+			goi2clogger.ChangePackageLogLevel("i2c", goi2clogger.DebugLevel)
 		case "INFO":
 			SetLogLevel(LogLevelInfo)
-			_ = goi2clogger.ChangePackageLogLevel("i2c", goi2clogger.InfoLevel)
+			//nolint:errcheck // Logging configuration errors are non-critical
+			goi2clogger.ChangePackageLogLevel("i2c", goi2clogger.InfoLevel)
 		case "WARN":
 			SetLogLevel(LogLevelWarn)
-			_ = goi2clogger.ChangePackageLogLevel("i2c", goi2clogger.WarnLevel)
+			//nolint:errcheck // Logging configuration errors are non-critical
+			goi2clogger.ChangePackageLogLevel("i2c", goi2clogger.WarnLevel)
 		case "ERROR":
 			SetLogLevel(LogLevelError)
-			_ = goi2clogger.ChangePackageLogLevel("i2c", goi2clogger.ErrorLevel)
+			//nolint:errcheck // Logging configuration errors are non-critical
+			goi2clogger.ChangePackageLogLevel("i2c", goi2clogger.ErrorLevel)
 		default:
 			SetLogLevel(LogLevelInfo)
-			_ = goi2clogger.ChangePackageLogLevel("i2c", goi2clogger.InfoLevel)
+			//nolint:errcheck // Logging configuration errors are non-critical
+			goi2clogger.ChangePackageLogLevel("i2c", goi2clogger.InfoLevel)
 		}
 	} else {
 		// Disable i2c library logging by default in production
-		_ = goi2clogger.ChangePackageLogLevel("i2c", goi2clogger.FatalLevel)
+		//nolint:errcheck // Logging configuration errors are non-critical
+		goi2clogger.ChangePackageLogLevel("i2c", goi2clogger.FatalLevel)
 	}
 
 	// Optionally disable i2c logging output completely for production
@@ -354,7 +360,8 @@ func (c *Controller) wakeup() {
 	wakeupI2C, err := i2c.NewI2C(0x00, c.busNumber)
 	if err == nil {
 		// Try to send wakeup, error is expected and can be ignored
-		_, _ = wakeupI2C.WriteBytes([]byte{0x00})
+		//nolint:errcheck // Wakeup errors are expected and non-critical
+		wakeupI2C.WriteBytes([]byte{0x00})
 		_ = wakeupI2C.Close()
 	}
 	// Always wait after wakeup attempt
@@ -363,13 +370,15 @@ func (c *Controller) wakeup() {
 
 // idle puts device in idle mode (following Adafruit)
 func (c *Controller) idle() {
-	_, _ = c.i2c.WriteBytes([]byte{cmdIdle})
+	//nolint:errcheck // Idle command errors are non-critical
+	c.i2c.WriteBytes([]byte{cmdIdle})
 	time.Sleep(wakeupDelay)
 }
 
 // sleep puts device in sleep mode (following Adafruit)
 func (c *Controller) sleep() {
-	_, _ = c.i2c.WriteBytes([]byte{cmdSleep})
+	//nolint:errcheck // Sleep command errors are non-critical
+	c.i2c.WriteBytes([]byte{cmdSleep})
 	time.Sleep(wakeupDelay)
 }
 
