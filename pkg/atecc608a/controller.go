@@ -108,23 +108,23 @@ func NewController(busNumber int) (*Controller, error) {
 		switch logLevelStr {
 		case "DEBUG":
 			SetLogLevel(LogLevelDebug)
-			goi2clogger.ChangePackageLogLevel("i2c", goi2clogger.DebugLevel)
+			_ = goi2clogger.ChangePackageLogLevel("i2c", goi2clogger.DebugLevel)
 		case "INFO":
 			SetLogLevel(LogLevelInfo)
-			goi2clogger.ChangePackageLogLevel("i2c", goi2clogger.InfoLevel)
+			_ = goi2clogger.ChangePackageLogLevel("i2c", goi2clogger.InfoLevel)
 		case "WARN":
 			SetLogLevel(LogLevelWarn)
-			goi2clogger.ChangePackageLogLevel("i2c", goi2clogger.WarnLevel)
+			_ = goi2clogger.ChangePackageLogLevel("i2c", goi2clogger.WarnLevel)
 		case "ERROR":
 			SetLogLevel(LogLevelError)
-			goi2clogger.ChangePackageLogLevel("i2c", goi2clogger.ErrorLevel)
+			_ = goi2clogger.ChangePackageLogLevel("i2c", goi2clogger.ErrorLevel)
 		default:
 			SetLogLevel(LogLevelInfo)
-			goi2clogger.ChangePackageLogLevel("i2c", goi2clogger.InfoLevel)
+			_ = goi2clogger.ChangePackageLogLevel("i2c", goi2clogger.InfoLevel)
 		}
 	} else {
 		// Disable i2c library logging by default in production
-		goi2clogger.ChangePackageLogLevel("i2c", goi2clogger.FatalLevel)
+		_ = goi2clogger.ChangePackageLogLevel("i2c", goi2clogger.FatalLevel)
 	}
 
 	// Optionally disable i2c logging output completely for production
@@ -604,12 +604,4 @@ func (c *Controller) SetAutoConfig(enabled bool) {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
 	c.autoConfig = enabled
-}
-
-// min is a helper function for Go versions < 1.21
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }
