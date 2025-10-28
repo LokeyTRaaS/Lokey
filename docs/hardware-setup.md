@@ -368,7 +368,56 @@ docker-compose up -d
 docker-compose ps
 curl http://localhost:8080/api/v1/health
 ```
+## Resource Management on Raspberry Pi Zero 2 (W)
 
+So the Raspberry Pi Zero 2 W has limited resources. In order to obtain "good enough performance" we need to consider following:
+* Resources of Raspberry Pi Zero 2 W:
+  * 1.0 GHz Quadcore
+  * 512 MB RAM
+  * MicroSD Card that is SLOOW
+
+Any writing to disk behaviour is detrenmental for performance therefore. There are potential Disk operations that have been optimized;
+* Logging. If we use the production profile in the docker-compose.yaml then we already have heavily reduced logging.
+  * Controller and Fortuna Service have custom loggers that only write Errors. Default GIN (API) logs are reduced to Errors too.
+  * The API Service has reduced logging too
+* Database/State
+  * The API maintains a buffer of data, for both TRNG (Raw ATECC608a data) and Fortuna (Seeded with ATECC608a, but amplified to 256 Bits) data.
+  * We can choose the queue in the docker-compose.yaml to our preferred size. 
+  * We choose the method by which we manage this queue of data. The fastest option in a Go-Native option, in which we use a GO - channel. We also have the option of using BoltDB (Key-Value) Database. In future we are considering porting the BoltDB implementation to a Redis(like) database. The Go-Native option is in-memory and the fastest option. Note that this also considerably raises memory consumption.
+
+### Advised Configuration
+```bash
+  PORT: 8080
+  DB_PATH: /data/api.db
+  DB_IMPLEMENTATION: channel
+  CONTROLLER_ADDR: http://controller:8081
+  FORTUNA_ADDR: http://fortuna:8082
+  TRNG_QUEUE_SIZE: 500000 #For raspberry pi zero 2 max 100.000 of 31 bit items
+  FORTUNA_QUEUE_SIZE: 10000 #For raspberry pi zero 2 max 1000 of 256 bit items
+  TRNG_POLL_INTERVAL_MS: 100
+  FORTUNA_POLL_INTERVAL_MS: 100
+```
+
+In which we set:
+* Polling rate to 100 ms for both TRNG and Fortuna.
+* Queue sizes to 100000 and 1000 respectively.
+* DB_IMPLEMENTATION to channel, for in-memory storage and fastest processing.
+
+In a steady state, the API Service will consume approximately 82 MB of RAM. The Controller and Fortuna Services will consume approximately 10 MB of RAM.
+
+![Resource consumption](assets/resources.png)
+
+When we hammer down the API Service, we can expect an additional 30-40 MB of RAM to be consumed.
+
+![img.png](assets/resources_api_loaded.png)
+
+We can see the increase in RAM consumption when we hammer down the API Service from 82 MB to 115 MB. We can also see that we have a massive increase in Disk I/O and that it presents itself as peak loads. Note that this API has not been called back-to-back, but instead allowed for a sleep of 0.1 ms between calls. We also note that we have about 50 MB of RAM left in this case, which is really not much. 
+
+The data that was stored in the queue was as noted above 500k items for Raw ATECC608a (31 Bytes) data and 10k items for Fortuna data (256 Bytes). Extraction of the raw TRNG (ATECC608a) data was done with the PythonSDK and took about 6 mins with the 0.1 sleep and provided about 20 MB of TRNG data in binary format. The setting was to consume the data. Note that conversion to specific datatypes like int64, int32, will yield a increase in RAM consumption on the LoKey device.
+
+### Limitations (of Hardware)
+
+We still produce some Logs, and we are able to get a callback every 30 ms or so. This can stutter sometimes, as logs accumulate and need to be written to disk, which is the slow MicroSD card as mentioned before. For now we accept this limitation as a feature of the low-budget option.
 
 ## Troubleshooting
 
