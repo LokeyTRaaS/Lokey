@@ -32,8 +32,8 @@ type Server struct {
 
 // QueueConfig represents the queue configuration
 type QueueConfig struct {
-	TRNGQueueSize    int `json:"trng_queue_size" validate:"required,min=10,max=100000"`
-	FortunaQueueSize int `json:"fortuna_queue_size" validate:"required,min=10,max=1000"`
+	TRNGQueueSize    int `json:"trng_queue_size" validate:"required,min=10,max=1000000"`
+	FortunaQueueSize int `json:"fortuna_queue_size" validate:"required,min=10,max=1000000"`
 }
 
 // ConsumeConfig represents the consume mode configuration
@@ -44,7 +44,7 @@ type ConsumeConfig struct {
 // DataRequest represents a request for random data
 type DataRequest struct {
 	Format string `json:"format" validate:"required,oneof=int8 int16 int32 int64 uint8 uint16 uint32 uint64 binary"`
-	Count  int    `json:"limit" validate:"required,min=1,max=10000"`
+	Count  int    `json:"limit" validate:"required,min=1,max=100000"`
 	Offset int    `json:"offset" validate:"min=0"`
 	Source string `json:"source" validate:"required,oneof=trng fortuna"`
 }
