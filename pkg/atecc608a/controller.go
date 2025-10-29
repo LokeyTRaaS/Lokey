@@ -506,7 +506,9 @@ func (c *Controller) GenerateRandom() ([]byte, error) {
 		// VALIDATION: Check if data is actually random (not error patterns)
 		if isRepeatingPattern(randomData) {
 			c.idle()
-			return nil, fmt.Errorf("ATECC608A returned invalid/repeating pattern - hardware failure detected")
+			logError("CRITICAL: Hardware failure detected - terminating application!")
+			// Exit immediately to trigger container restart
+			os.Exit(1)
 		}
 
 		c.idle()
