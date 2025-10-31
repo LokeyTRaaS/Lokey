@@ -32,6 +32,10 @@ const (
 	configExecTime = 35 * time.Millisecond // Config command timing
 	lockExecTime   = 32 * time.Millisecond // Lock command timing
 	writeExecTime  = 26 * time.Millisecond // Write command timing
+
+	// Retry constants
+	maxRetries        = 10
+	initialRetryDelay = 100 * time.Millisecond
 )
 
 // LogLevel represents the logging verbosity level
@@ -42,6 +46,16 @@ const (
 	LogLevelWarn
 	LogLevelInfo
 	LogLevelDebug
+)
+
+// DeviceState represents the current health state of the device
+type DeviceState int
+
+const (
+	DeviceStateUnknown DeviceState = iota
+	DeviceStateHealthy
+	DeviceStateFailed
+	DeviceStateRecovering
 )
 
 var (
@@ -92,12 +106,14 @@ var CFG_TLS = []byte{
 
 // Controller represents the ATECC608A device controller
 type Controller struct {
-	i2c         *i2c.I2C
-	LastError   error
-	mutex       sync.Mutex
-	busNumber   int
-	initialized bool
-	autoConfig  bool
+	i2c              *i2c.I2C
+	LastError        error
+	mutex            sync.Mutex
+	busNumber        int
+	state            DeviceState
+	autoConfig       bool
+	recoveryInFlight bool
+	recoveryMutex    sync.Mutex
 }
 
 // NewController creates a new ATECC608A controller
@@ -165,11 +181,12 @@ func NewController(busNumber int) (*Controller, error) {
 	}
 
 	controller := &Controller{
-		i2c:         i2c,
-		LastError:   nil,
-		busNumber:   busNumber,
-		initialized: false,
-		autoConfig:  true, // Enable auto-configuration by default
+		i2c:              i2c,
+		LastError:        nil,
+		busNumber:        busNumber,
+		state:            DeviceStateUnknown,
+		autoConfig:       true, // Enable auto-configuration by default
+		recoveryInFlight: false,
 	}
 
 	// Read environment variable to check if auto-config is disabled
@@ -181,13 +198,109 @@ func NewController(busNumber int) (*Controller, error) {
 	// Initialize the device
 	if err := controller.initialize(); err != nil {
 		logError("Device initialization failed: %v", err)
-		logError("Will fall back to time-based random generation")
+		controller.setState(DeviceStateFailed)
+		// Start recovery in background
+		go controller.startRecovery()
+		// Don't return error - let the controller exist but in failed state
 	} else {
-		controller.initialized = true
+		controller.setState(DeviceStateHealthy)
 		logWarn("ATECC608A device initialized successfully")
 	}
 
 	return controller, nil
+}
+
+// setState changes the device state and logs only on state changes
+func (c *Controller) setState(newState DeviceState) {
+	c.mutex.Lock()
+	oldState := c.state
+	c.state = newState
+	c.mutex.Unlock()
+
+	if oldState != newState {
+		switch newState {
+		case DeviceStateHealthy:
+			logWarn("ATECC608A device state changed to HEALTHY")
+		case DeviceStateFailed:
+			logError("ATECC608A device state changed to FAILED")
+		case DeviceStateRecovering:
+			logWarn("ATECC608A device state changed to RECOVERING")
+		case DeviceStateUnknown:
+			logWarn("ATECC608A device state changed to UNKNOWN")
+		}
+	}
+}
+
+// getState returns the current device state
+func (c *Controller) getState() DeviceState {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+	return c.state
+}
+
+// startRecovery initiates the recovery process with exponential backoff
+func (c *Controller) startRecovery() {
+	c.recoveryMutex.Lock()
+	if c.recoveryInFlight {
+		c.recoveryMutex.Unlock()
+		return
+	}
+	c.recoveryInFlight = true
+	c.recoveryMutex.Unlock()
+
+	c.setState(DeviceStateRecovering)
+
+	delay := initialRetryDelay
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		logWarn("ATECC608A recovery attempt %d/%d (delay: %v)", attempt, maxRetries, delay)
+		time.Sleep(delay)
+
+		// Try to reinitialize
+		if err := c.reinitialize(); err != nil {
+			logWarn("ATECC608A recovery attempt %d/%d failed: %v", attempt, maxRetries, err)
+			delay *= 2 // Exponential backoff
+		} else {
+			logWarn("ATECC608A recovery successful on attempt %d/%d", attempt, maxRetries)
+			c.setState(DeviceStateHealthy)
+			c.recoveryMutex.Lock()
+			c.recoveryInFlight = false
+			c.recoveryMutex.Unlock()
+			return
+		}
+	}
+
+	// All retries exhausted
+	logError("ATECC608A recovery failed after %d attempts. Exiting.", maxRetries)
+	c.setState(DeviceStateFailed)
+	c.recoveryMutex.Lock()
+	c.recoveryInFlight = false
+	c.recoveryMutex.Unlock()
+
+	// Exit the process
+	os.Exit(1)
+}
+
+// reinitialize attempts to reinitialize the device
+func (c *Controller) reinitialize() error {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+
+	// Close existing connection if any
+	if c.i2c != nil {
+		c.sleep()
+		_ = c.i2c.Close()
+	}
+
+	// Recreate I2C connection
+	i2c, err := i2c.NewI2C(DefaultI2CAddress, c.busNumber)
+	if err != nil {
+		return fmt.Errorf("failed to reinitialize I2C: %w", err)
+	}
+
+	c.i2c = i2c
+
+	// Initialize the device
+	return c.initializeUnlocked()
 }
 
 // initialize configures the device for random number generation
@@ -195,6 +308,11 @@ func (c *Controller) initialize() error {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
 
+	return c.initializeUnlocked()
+}
+
+// initializeUnlocked performs initialization without acquiring the mutex
+func (c *Controller) initializeUnlocked() error {
 	// Wake up the device first
 	c.wakeup()
 
@@ -216,7 +334,7 @@ func (c *Controller) initialize() error {
 	logDebug("Device info: %x", infoResponse)
 
 	// Check if device is locked by reading config zone lock bytes
-	isLocked, err := c.isDeviceLocked()
+	isLocked, err := c.isDeviceLockedUnlocked()
 	if err != nil {
 		logWarn("Could not determine lock status: %v", err)
 	}
@@ -238,14 +356,14 @@ func (c *Controller) initialize() error {
 	// If device is not locked and auto-config is enabled, try to configure it
 	if !isLocked && c.autoConfig {
 		logInfo("Device not locked. Auto-configuration is enabled.")
-		if err := c.configureDevice(); err != nil {
+		if err := c.configureDeviceUnlocked(); err != nil {
 			logWarn("Failed to auto-configure device: %v", err)
-			logInfo("The device will continue to operate in fallback mode")
+			logInfo("The device will continue to operate without being locked")
 		} else {
 			logInfo("Device successfully configured and locked!")
 		}
 	} else if !isLocked {
-		logInfo("Device not locked but auto-configuration is disabled. Using fallback mode.")
+		logInfo("Device not locked but auto-configuration is disabled.")
 	}
 
 	// Put device in idle
@@ -256,6 +374,13 @@ func (c *Controller) initialize() error {
 
 // isDeviceLocked checks if the device configuration zone is locked
 func (c *Controller) isDeviceLocked() (bool, error) {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+	return c.isDeviceLockedUnlocked()
+}
+
+// isDeviceLockedUnlocked checks lock status without acquiring mutex
+func (c *Controller) isDeviceLockedUnlocked() (bool, error) {
 	// Read the lock bytes from config zone (address 0x15)
 	if err := c.sendCommand(cmdConfig, 0x02, 0x0015, nil); err != nil {
 		return false, fmt.Errorf("failed to send config read command: %w", err)
@@ -272,16 +397,23 @@ func (c *Controller) isDeviceLocked() (bool, error) {
 
 // configureDevice configures and locks the device
 func (c *Controller) configureDevice() error {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+	return c.configureDeviceUnlocked()
+}
+
+// configureDeviceUnlocked configures without acquiring mutex
+func (c *Controller) configureDeviceUnlocked() error {
 	logInfo("Starting device configuration...")
 
 	// Ask for user confirmation to protect against accidental locking
 	logWarn("About to configure and lock the ATECC608A device.")
 	logWarn("This operation is IRREVERSIBLE and will permanently configure the device.")
-	logInfo("If you want to proceed, set FORCE_CONFIG=true in environment variables.")
+	logWarn("If you want to proceed, set FORCE_CONFIG=true in environment variables.")
 
 	// Check for force configuration environment variable
 	if val, ok := os.LookupEnv("FORCE_CONFIG"); !ok || val != "true" {
-		logInfo("Configuration aborted. FORCE_CONFIG environment variable not set to 'true'.")
+		logWarn("Configuration aborted. FORCE_CONFIG environment variable not set to 'true'.")
 		return fmt.Errorf("configuration aborted due to missing confirmation")
 	}
 
@@ -466,26 +598,32 @@ func (c *Controller) calculateAdafruitCRC(data []byte) uint16 {
 	return crc & 0xFFFF
 }
 
-// GenerateRandom generates random bytes following Adafruit's approach
+// GenerateRandom generates random bytes - ONLY from ATECC608A, no fallback
 func (c *Controller) GenerateRandom() ([]byte, error) {
+	// Check device state first - fail fast if not healthy
+	if c.getState() != DeviceStateHealthy {
+		return nil, fmt.Errorf("ATECC608A device not healthy (state: %d)", c.getState())
+	}
+
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
-
-	// If device wasn't initialized properly, fail immediately
-	if !c.initialized {
-		return nil, fmt.Errorf("ATECC608A device not initialized - cannot generate random data")
-	}
 
 	// Send random command (opcode 0x1B, param1 0x00, param2 0x0000)
 	err := c.sendCommand(cmdRandom, 0x00, 0x0000, nil)
 	if err != nil {
-		return nil, fmt.Errorf("failed to send random command: %w", err)
+		c.LastError = fmt.Errorf("failed to send random command: %w", err)
+		// Trigger recovery
+		go c.handleDeviceFailure()
+		return nil, c.LastError
 	}
 
 	// Get response (32 bytes of random data)
 	response, err := c.getResponse(32, randomExecTime)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get random response: %w", err)
+		c.LastError = fmt.Errorf("failed to get random response: %w", err)
+		// Trigger recovery
+		go c.handleDeviceFailure()
+		return nil, c.LastError
 	}
 
 	logDebug("Random response length: %d bytes", len(response))
@@ -497,7 +635,10 @@ func (c *Controller) GenerateRandom() ([]byte, error) {
 		// VALIDATION: Check if data is actually random (not error patterns)
 		if isRepeatingPattern(randomData) {
 			c.idle()
-			return nil, fmt.Errorf("ATECC608A returned invalid/repeating pattern - hardware failure detected")
+			c.LastError = fmt.Errorf("ATECC608A returned invalid/repeating pattern - hardware failure detected")
+			// Trigger recovery
+			go c.handleDeviceFailure()
+			return nil, c.LastError
 		}
 
 		c.idle()
@@ -506,7 +647,18 @@ func (c *Controller) GenerateRandom() ([]byte, error) {
 
 	// Response too short
 	c.idle()
-	return nil, fmt.Errorf("ATECC608A response too short: %d bytes", len(response))
+	c.LastError = fmt.Errorf("ATECC608A response too short: %d bytes", len(response))
+	// Trigger recovery
+	go c.handleDeviceFailure()
+	return nil, c.LastError
+}
+
+// handleDeviceFailure marks device as failed and starts recovery
+func (c *Controller) handleDeviceFailure() {
+	if c.getState() == DeviceStateHealthy {
+		c.setState(DeviceStateFailed)
+		c.startRecovery()
+	}
 }
 
 // isRepeatingPattern checks if data has suspicious repeating patterns
@@ -557,6 +709,11 @@ func (c *Controller) Close() error {
 
 // HealthCheck verifies the device is responsive
 func (c *Controller) HealthCheck() bool {
+	// Check state first
+	if c.getState() != DeviceStateHealthy {
+		return false
+	}
+
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
 
@@ -567,6 +724,8 @@ func (c *Controller) HealthCheck() bool {
 	err := c.sendCommand(cmdInfo, 0x00, 0x0000, nil)
 	if err != nil {
 		c.LastError = fmt.Errorf("health check failed (send): %w", err)
+		// Trigger recovery
+		go c.handleDeviceFailure()
 		return false
 	}
 
@@ -574,6 +733,8 @@ func (c *Controller) HealthCheck() bool {
 	_, err = c.getResponse(4, infoExecTime)
 	if err != nil {
 		c.LastError = fmt.Errorf("health check failed (receive): %w", err)
+		// Trigger recovery
+		go c.handleDeviceFailure()
 		return false
 	}
 
@@ -583,25 +744,19 @@ func (c *Controller) HealthCheck() bool {
 	return true
 }
 
-// WakeUp is kept for compatibility
-func (c *Controller) WakeUp() error {
-	c.mutex.Lock()
-	defer c.mutex.Unlock()
-	c.wakeup()
-	return nil
-}
-
-// Sleep is kept for compatibility
-func (c *Controller) Sleep() error {
-	c.mutex.Lock()
-	defer c.mutex.Unlock()
-	c.sleep()
-	return nil
-}
-
 // SetAutoConfig enables or disables auto-configuration
 func (c *Controller) SetAutoConfig(enabled bool) {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
 	c.autoConfig = enabled
+}
+
+// GetState returns the current device state (for API exposure)
+func (c *Controller) GetState() DeviceState {
+	return c.getState()
+}
+
+// IsHealthy returns true if device is in healthy state
+func (c *Controller) IsHealthy() bool {
+	return c.getState() == DeviceStateHealthy
 }
