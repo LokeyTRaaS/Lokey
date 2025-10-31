@@ -25,13 +25,19 @@ const (
 	cmdConfig = 0x47 // Config command
 	cmdWrite  = 0x12 // Write command
 
-	// Timing constants (from Adafruit implementation)
-	wakeupDelay    = 1 * time.Millisecond  // 1ms like Adafruit
-	randomExecTime = 23 * time.Millisecond // 23ms for random command
-	infoExecTime   = 1 * time.Millisecond  // 1ms for info command
-	configExecTime = 35 * time.Millisecond // Config command timing
-	lockExecTime   = 32 * time.Millisecond // Lock command timing
-	writeExecTime  = 26 * time.Millisecond // Write command timing
+	// Timing constants - made more conservative for I2C timing sensitivity
+	powerOnDelay       = 50 * time.Millisecond  // Initial power-on stabilization
+	wakeupDelay        = 2 * time.Millisecond   // Increased from 1ms for reliability
+	postWakeupDelay    = 5 * time.Millisecond   // Time after wakeup before first command
+	interCommandDelay  = 2 * time.Millisecond   // Between different command types
+	randomExecTime     = 23 * time.Millisecond  // 23ms for random command
+	infoExecTime       = 1 * time.Millisecond   // 1ms for info command
+	configExecTime     = 35 * time.Millisecond  // Config command timing
+	lockExecTime       = 32 * time.Millisecond  // Lock command timing
+	writeExecTime      = 26 * time.Millisecond  // Write command timing
+	initRetryBaseDelay = 100 * time.Millisecond // Base delay for exponential backoff
+	maxInitRetries     = 10                     // Maximum initialization attempts
+	maxGenerateRetries = 10                     // Maximum random generation attempts
 )
 
 // LogLevel represents the logging verbosity level
@@ -92,12 +98,13 @@ var CFG_TLS = []byte{
 
 // Controller represents the ATECC608A device controller
 type Controller struct {
-	i2c         *i2c.I2C
-	LastError   error
-	mutex       sync.Mutex
-	busNumber   int
-	initialized bool
-	autoConfig  bool
+	i2c                 *i2c.I2C
+	LastError           error
+	mutex               sync.Mutex
+	busNumber           int
+	initialized         bool
+	autoConfig          bool
+	consecutiveFailures int
 }
 
 // NewController creates a new ATECC608A controller
@@ -156,6 +163,10 @@ func NewController(busNumber int) (*Controller, error) {
 		logDebug("I2C device permissions: %s", info.Mode())
 	}
 
+	// CRITICAL: Add power-on stabilization delay before any I2C communication
+	logInfo("Waiting for I2C bus stabilization (%v)...", powerOnDelay)
+	time.Sleep(powerOnDelay)
+
 	logInfo("Initializing I2C connection to 0x%02x on bus %d", DefaultI2CAddress, busNumber)
 	i2c, err := i2c.NewI2C(DefaultI2CAddress, busNumber)
 	if err != nil {
@@ -171,11 +182,12 @@ func NewController(busNumber int) (*Controller, error) {
 	}
 
 	controller := &Controller{
-		i2c:         i2c,
-		LastError:   nil,
-		busNumber:   busNumber,
-		initialized: false,
-		autoConfig:  true, // Enable auto-configuration by default
+		i2c:                 i2c,
+		LastError:           nil,
+		busNumber:           busNumber,
+		initialized:         false,
+		autoConfig:          true, // Enable auto-configuration by default
+		consecutiveFailures: 0,
 	}
 
 	// Read environment variable to check if auto-config is disabled
@@ -184,16 +196,50 @@ func NewController(busNumber int) (*Controller, error) {
 		logInfo("Auto-configuration disabled by environment variable")
 	}
 
-	// Initialize the device
-	if err := controller.initialize(); err != nil {
-		logWarn("Device initialization failed: %v", err)
-		logInfo("Will fall back to time-based random generation")
-	} else {
-		controller.initialized = true
-		logInfo("ATECC608A device initialized successfully")
+	// Initialize the device with retry logic
+	if err := controller.initializeWithRetry(); err != nil {
+		logError("Device initialization failed after all retries: %v", err)
+		return nil, fmt.Errorf("failed to initialize ATECC608A: %w", err)
 	}
 
+	controller.initialized = true
+	logInfo("ATECC608A device initialized successfully")
+
 	return controller, nil
+}
+
+// initializeWithRetry attempts initialization with exponential backoff
+func (c *Controller) initializeWithRetry() error {
+	var lastErr error
+
+	for attempt := 0; attempt < maxInitRetries; attempt++ {
+		if attempt > 0 {
+			// Exponential backoff with jitter
+			backoffDelay := initRetryBaseDelay * time.Duration(1<<uint(attempt-1))
+			// Add some variability to prevent synchronization issues
+			jitter := time.Duration(attempt*10) * time.Millisecond
+			totalDelay := backoffDelay + jitter
+
+			logWarn("Initialization attempt %d/%d failed, retrying after %v...", attempt, maxInitRetries, totalDelay)
+			time.Sleep(totalDelay)
+		} else {
+			logInfo("Attempting device initialization (attempt %d/%d)...", attempt+1, maxInitRetries)
+		}
+
+		// Try to initialize
+		err := c.initialize()
+		if err == nil {
+			if attempt > 0 {
+				logInfo("Initialization succeeded on attempt %d/%d", attempt+1, maxInitRetries)
+			}
+			return nil
+		}
+
+		lastErr = err
+		logWarn("Initialization attempt %d/%d failed: %v", attempt+1, maxInitRetries, err)
+	}
+
+	return fmt.Errorf("initialization failed after %d attempts: %w", maxInitRetries, lastErr)
 }
 
 // initialize configures the device for random number generation
@@ -201,8 +247,13 @@ func (c *Controller) initialize() error {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
 
-	// Wake up the device first
-	c.wakeup()
+	// Wake up the device with verification
+	if err := c.wakeupWithVerification(); err != nil {
+		return fmt.Errorf("failed to wake device: %w", err)
+	}
+
+	// Allow device to stabilize after wakeup
+	time.Sleep(postWakeupDelay)
 
 	// Check device info
 	logInfo("Checking device information...")
@@ -221,11 +272,17 @@ func (c *Controller) initialize() error {
 
 	logDebug("Device info: %x", infoResponse)
 
+	// Allow time between command types
+	time.Sleep(interCommandDelay)
+
 	// Check if device is locked by reading config zone lock bytes
 	isLocked, err := c.isDeviceLocked()
 	if err != nil {
 		logWarn("Could not determine lock status: %v", err)
 	}
+
+	// Allow time between command types
+	time.Sleep(interCommandDelay)
 
 	// Try to read the device's current configuration
 	logInfo("Reading device configuration...")
@@ -240,6 +297,9 @@ func (c *Controller) initialize() error {
 	} else {
 		logDebug("Current configuration: %x", configResponse)
 	}
+
+	// Allow time between command types
+	time.Sleep(interCommandDelay)
 
 	// If device is not locked and auto-config is enabled, try to configure it
 	if !isLocked && c.autoConfig {
@@ -257,7 +317,44 @@ func (c *Controller) initialize() error {
 	// Put device in idle
 	c.idle()
 
+	// Perform mandatory health check before declaring initialization successful
+	time.Sleep(interCommandDelay)
+	if !c.performHealthCheckLocked() {
+		return fmt.Errorf("device failed post-initialization health check")
+	}
+
+	logInfo("Device passed health check")
 	return nil
+}
+
+// wakeupWithVerification wakes the device and verifies it's responsive
+func (c *Controller) wakeupWithVerification() error {
+	// Try wakeup with retries
+	for retry := 0; retry < 5; retry++ {
+		if retry > 0 {
+			logDebug("Wakeup verification retry %d/5", retry)
+			time.Sleep(wakeupDelay * time.Duration(retry+1)) // Progressive delay
+		}
+
+		// Perform wakeup sequence
+		c.wakeup()
+
+		// Verify with a simple info command
+		if err := c.sendCommand(cmdInfo, 0x00, 0x0000, nil); err != nil {
+			logDebug("Wakeup verification failed (send): %v", err)
+			continue
+		}
+
+		_, err := c.getResponse(4, infoExecTime)
+		if err == nil {
+			logDebug("Wakeup verification successful on attempt %d", retry+1)
+			return nil
+		}
+
+		logDebug("Wakeup verification failed (receive): %v", err)
+	}
+
+	return fmt.Errorf("wakeup verification failed after retries")
 }
 
 // isDeviceLocked checks if the device configuration zone is locked
@@ -327,6 +424,9 @@ func (c *Controller) configureDevice() error {
 		if len(status) > 0 && status[0] != 0x00 {
 			return fmt.Errorf("write failed with status: %x", status[0])
 		}
+
+		// Small delay between writes for I2C timing
+		time.Sleep(interCommandDelay)
 	}
 
 	// Lock the configuration zone
@@ -475,7 +575,7 @@ func (c *Controller) calculateAdafruitCRC(data []byte) uint16 {
 	return crc & 0xFFFF
 }
 
-// GenerateRandom generates random bytes following Adafruit's approach
+// GenerateRandom generates random bytes with retry logic and failure tracking
 func (c *Controller) GenerateRandom() ([]byte, error) {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
@@ -485,39 +585,83 @@ func (c *Controller) GenerateRandom() ([]byte, error) {
 		return nil, fmt.Errorf("ATECC608A device not initialized - cannot generate random data")
 	}
 
-	// Send random command (opcode 0x1B, param1 0x00, param2 0x0000)
-	err := c.sendCommand(cmdRandom, 0x00, 0x0000, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to send random command: %w", err)
-	}
+	var lastErr error
+	for attempt := 0; attempt < maxGenerateRetries; attempt++ {
+		if attempt > 0 {
+			// Exponential backoff for retries
+			backoffDelay := wakeupDelay * time.Duration(1<<uint(attempt-1))
+			logWarn("Random generation attempt %d/%d, retrying after %v...", attempt+1, maxGenerateRetries, backoffDelay)
+			time.Sleep(backoffDelay)
 
-	// Get response (32 bytes of random data)
-	response, err := c.getResponse(32, randomExecTime)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get random response: %w", err)
-	}
-
-	logDebug("Random response length: %d bytes", len(response))
-
-	if len(response) > 1 {
-		// Skip the status byte and use the rest as random data
-		randomData := response[1:]
-
-		// VALIDATION: Check if data is actually random (not error patterns)
-		if isRepeatingPattern(randomData) {
-			c.idle()
-			logError("CRITICAL: Hardware failure detected - terminating application!")
-			// Exit immediately to trigger container restart
-			os.Exit(1)
+			// Re-verify device health before retry
+			if !c.performHealthCheckLocked() {
+				lastErr = fmt.Errorf("device health check failed during retry")
+				continue
+			}
 		}
 
-		c.idle()
-		return randomData, nil
+		// Send random command (opcode 0x1B, param1 0x00, param2 0x0000)
+		err := c.sendCommand(cmdRandom, 0x00, 0x0000, nil)
+		if err != nil {
+			lastErr = fmt.Errorf("failed to send random command: %w", err)
+			logWarn("Attempt %d/%d failed: %v", attempt+1, maxGenerateRetries, lastErr)
+			continue
+		}
+
+		// Get response (32 bytes of random data)
+		response, err := c.getResponse(32, randomExecTime)
+		if err != nil {
+			lastErr = fmt.Errorf("failed to get random response: %w", err)
+			logWarn("Attempt %d/%d failed: %v", attempt+1, maxGenerateRetries, lastErr)
+			continue
+		}
+
+		logDebug("Random response length: %d bytes", len(response))
+
+		if len(response) > 1 {
+			// Skip the status byte and use the rest as random data
+			randomData := response[1:]
+
+			// VALIDATION: Check if data is actually random (not error patterns)
+			if isRepeatingPattern(randomData) {
+				c.idle()
+				c.consecutiveFailures++
+				logError("Hardware failure detected - repeating pattern (failure %d/%d)", c.consecutiveFailures, maxGenerateRetries)
+
+				// If we've hit max consecutive failures, terminate
+				if c.consecutiveFailures >= maxGenerateRetries {
+					logError("CRITICAL: Maximum consecutive hardware failures reached - terminating application!")
+					os.Exit(1)
+				}
+
+				lastErr = fmt.Errorf("hardware failure: repeating pattern detected")
+				continue
+			}
+
+			// Success - reset failure counter
+			c.consecutiveFailures = 0
+			c.idle()
+			return randomData, nil
+		}
+
+		// Response too short
+		lastErr = fmt.Errorf("ATECC608A response too short: %d bytes", len(response))
+		logWarn("Attempt %d/%d failed: %v", attempt+1, maxGenerateRetries, lastErr)
 	}
 
-	// Response too short
+	// All retries exhausted
 	c.idle()
-	return nil, fmt.Errorf("ATECC608A response too short: %d bytes", len(response))
+	c.consecutiveFailures++
+
+	logError("Random generation failed after %d attempts (consecutive failures: %d/%d)", maxGenerateRetries, c.consecutiveFailures, maxGenerateRetries)
+
+	// If we've hit max consecutive failures, terminate
+	if c.consecutiveFailures >= maxGenerateRetries {
+		logError("CRITICAL: Maximum consecutive hardware failures reached - terminating application!")
+		os.Exit(1)
+	}
+
+	return nil, fmt.Errorf("random generation failed after %d attempts: %w", maxGenerateRetries, lastErr)
 }
 
 // isRepeatingPattern checks if data has suspicious repeating patterns
@@ -552,6 +696,18 @@ func isRepeatingPattern(data []byte) bool {
 		return true
 	}
 
+	// Check for 0x00 repeating (another common I2C error)
+	zeroCount := 0
+	for _, b := range data {
+		if b == 0x00 {
+			zeroCount++
+		}
+	}
+	if float64(zeroCount)/float64(len(data)) > 0.9 {
+		logError("Hardware failure: 0x00 pattern detected (%d/%d bytes)", zeroCount, len(data))
+		return true
+	}
+
 	return false
 }
 
@@ -566,18 +722,19 @@ func (c *Controller) Close() error {
 	return c.i2c.Close()
 }
 
-// HealthCheck verifies the device is responsive
-func (c *Controller) HealthCheck() bool {
-	c.mutex.Lock()
-	defer c.mutex.Unlock()
-
+// performHealthCheckLocked performs health check without acquiring mutex (internal use)
+func (c *Controller) performHealthCheckLocked() bool {
 	// Wake up the device
 	c.wakeup()
+
+	// Allow device to stabilize
+	time.Sleep(postWakeupDelay)
 
 	// Send info command
 	err := c.sendCommand(cmdInfo, 0x00, 0x0000, nil)
 	if err != nil {
 		c.LastError = fmt.Errorf("health check failed (send): %w", err)
+		logDebug("Health check send failed: %v", err)
 		return false
 	}
 
@@ -585,6 +742,7 @@ func (c *Controller) HealthCheck() bool {
 	_, err = c.getResponse(4, infoExecTime)
 	if err != nil {
 		c.LastError = fmt.Errorf("health check failed (receive): %w", err)
+		logDebug("Health check receive failed: %v", err)
 		return false
 	}
 
@@ -592,6 +750,14 @@ func (c *Controller) HealthCheck() bool {
 	c.idle()
 
 	return true
+}
+
+// HealthCheck verifies the device is responsive
+func (c *Controller) HealthCheck() bool {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+
+	return c.performHealthCheckLocked()
 }
 
 // WakeUp is kept for compatibility
