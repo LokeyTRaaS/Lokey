@@ -180,11 +180,11 @@ func NewController(busNumber int) (*Controller, error) {
 
 	// Initialize the device
 	if err := controller.initialize(); err != nil {
-		logWarn("Device initialization failed: %v", err)
-		logInfo("Will fall back to time-based random generation")
+		logError("Device initialization failed: %v", err)
+		logError("Will fall back to time-based random generation")
 	} else {
 		controller.initialized = true
-		logInfo("ATECC608A device initialized successfully")
+		logWarn("ATECC608A device initialized successfully")
 	}
 
 	return controller, nil
