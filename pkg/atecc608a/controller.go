@@ -454,31 +454,22 @@ func (c *Controller) configureDevice() error {
 	return nil
 }
 
-// wakeup follows Adafruit's approach - always wake before operations
 func (c *Controller) wakeup() {
-	// Adafruit approach: try general call but ignore errors
 	wakeupI2C, err := i2c.NewI2C(0x00, c.busNumber)
 	if err == nil {
-		// Try to send wakeup, error is expected and can be ignored
-		//nolint:errcheck // Wakeup errors are expected and non-critical
-		wakeupI2C.WriteBytes([]byte{0x00})
+		_, _ = wakeupI2C.WriteBytes([]byte{0x00})
 		_ = wakeupI2C.Close()
 	}
-	// Always wait after wakeup attempt
 	time.Sleep(wakeupDelay)
 }
 
-// idle puts device in idle mode (following Adafruit)
 func (c *Controller) idle() {
-	//nolint:errcheck // Idle command errors are non-critical
-	c.i2c.WriteBytes([]byte{cmdIdle})
+	_, _ = c.i2c.WriteBytes([]byte{cmdIdle})
 	time.Sleep(wakeupDelay)
 }
 
-// sleep puts device in sleep mode (following Adafruit)
 func (c *Controller) sleep() {
-	//nolint:errcheck // Sleep command errors are non-critical
-	c.i2c.WriteBytes([]byte{cmdSleep})
+	_, _ = c.i2c.WriteBytes([]byte{cmdSleep})
 	time.Sleep(wakeupDelay)
 }
 
