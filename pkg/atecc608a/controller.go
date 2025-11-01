@@ -27,7 +27,7 @@ const (
 
 	// Timing constants (from Adafruit implementation)
 	wakeupDelay    = 1 * time.Millisecond  // 1ms like Adafruit
-	randomExecTime = 23 * time.Millisecond // 23ms for random command
+	randomExecTime = 50 * time.Millisecond // 50ms for random command
 	infoExecTime   = 1 * time.Millisecond  // 1ms for info command
 	configExecTime = 35 * time.Millisecond // Config command timing
 	lockExecTime   = 32 * time.Millisecond // Lock command timing
