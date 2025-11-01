@@ -10,7 +10,7 @@ require (
 	github.com/prometheus/client_golang v1.23.2
 	github.com/swaggo/files v1.0.1
 	github.com/swaggo/gin-swagger v1.6.1
-	go.etcd.io/bbolt v1.4.2
+	go.etcd.io/bbolt v1.4.3
 )
 
 require (
