@@ -1,0 +1,255 @@
+name: Cleanup Container Images
+
+on:
+  schedule:
+    # Run daily at 2 AM UTC
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run (do not delete)'
+        required: false
+        type: boolean
+        default: true
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  cleanup:
+    name: Cleanup Old Images
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+      contents: read
+    strategy:
+      matrix:
+        service: [controller, api, fortuna]
+        arch: [amd64, arm64, armv7]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install GitHub CLI
+        run: |
+          type -p gh >/dev/null || {
+            curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
+            sudo chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg
+            echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+            sudo apt-get update
+            sudo apt-get install -y gh
+          }
+
+      - name: Cleanup images for ${{ matrix.service }}-${{ matrix.arch }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DRY_RUN: ${{ inputs.dry_run || 'false' }}
+        run: |
+          set -e
+          
+          PACKAGE_NAME="${{ matrix.service }}"
+          ARCH="${{ matrix.arch }}"
+          REPO_OWNER="${{ github.repository_owner }}"
+          REPO_LOWER=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]' | cut -d'/' -f2)
+          
+          echo "=================================================="
+          echo "Cleaning up: ${PACKAGE_NAME} (${ARCH})"
+          echo "Dry run: ${DRY_RUN}"
+          echo "=================================================="
+          echo ""
+          
+          # Get all versions for this package
+          VERSIONS=$(gh api \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "/orgs/${REPO_OWNER}/packages/container/${REPO_LOWER}%2F${PACKAGE_NAME}/versions" \
+            --paginate | jq -r '.[] | @json')
+          
+          if [ -z "$VERSIONS" ]; then
+            echo "No versions found for ${PACKAGE_NAME}"
+            exit 0
+          fi
+          
+          # Arrays to store versions by category
+          declare -a RELEASE_VERSIONS=()
+          declare -a PRERELEASE_VERSIONS=()
+          declare -a BRANCH_VERSIONS=()
+          declare -a LATEST_VERSIONS=()
+          declare -a UNTAGGED_VERSIONS=()
+          
+          # Categorize versions
+          while IFS= read -r version_json; do
+            VERSION_ID=$(echo "$version_json" | jq -r '.id')
+            TAGS=$(echo "$version_json" | jq -r '.metadata.container.tags[]?' 2>/dev/null || echo "")
+            CREATED_AT=$(echo "$version_json" | jq -r '.created_at')
+          
+            if [ -z "$TAGS" ]; then
+              UNTAGGED_VERSIONS+=("${VERSION_ID}|untagged|${CREATED_AT}")
+              continue
+            fi
+          
+            # Check each tag for this version
+            CATEGORIZED=false
+            for tag in $TAGS; do
+              # Skip if tag doesn't match our architecture
+              if [[ ! "$tag" =~ -${ARCH}$ ]]; then
+                continue
+              fi
+          
+              # Release version (v1.2.3-arch)
+              if [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-${ARCH}$ ]]; then
+                RELEASE_VERSIONS+=("${VERSION_ID}|${tag}|${CREATED_AT}")
+                CATEGORIZED=true
+                break
+              fi
+          
+              # Latest tag
+              if [[ "$tag" == "latest-${ARCH}" ]]; then
+                LATEST_VERSIONS+=("${VERSION_ID}|${tag}|${CREATED_AT}")
+                CATEGORIZED=true
+                break
+              fi
+          
+              # Pre-release branches (prerelease/**-arch)
+              if [[ "$tag" =~ ^prerelease- ]]; then
+                PRERELEASE_VERSIONS+=("${VERSION_ID}|${tag}|${CREATED_AT}")
+                CATEGORIZED=true
+                break
+              fi
+          
+              # Branch builds (main-arch, feature-xyz-arch, etc.)
+              BRANCH_VERSIONS+=("${VERSION_ID}|${tag}|${CREATED_AT}")
+              CATEGORIZED=true
+              break
+            done
+          
+            # If not categorized, it's untagged for this arch
+            if [ "$CATEGORIZED" = false ]; then
+              UNTAGGED_VERSIONS+=("${VERSION_ID}|${TAGS}|${CREATED_AT}")
+            fi
+          done <<< "$VERSIONS"
+          
+          echo "📊 Summary for ${PACKAGE_NAME}-${ARCH}:"
+          echo "  - Release versions: ${#RELEASE_VERSIONS[@]} (keeping all)"
+          echo "  - Pre-release versions: ${#PRERELEASE_VERSIONS[@]} (keeping latest 3)"
+          echo "  - Branch versions: ${#BRANCH_VERSIONS[@]} (keeping latest 3)"
+          echo "  - Latest tags: ${#LATEST_VERSIONS[@]} (keeping all)"
+          echo "  - Untagged versions: ${#UNTAGGED_VERSIONS[@]} (deleting all)"
+          echo ""
+          
+          # Function to delete a version
+          delete_version() {
+            local version_id=$1
+            local tag=$2
+            local created=$3
+          
+            if [ "${DRY_RUN}" = "true" ]; then
+              echo "  [DRY RUN] Would delete: ${tag} (ID: ${version_id}, created: ${created})"
+            else
+              echo "  🗑️  Deleting: ${tag} (ID: ${version_id}, created: ${created})"
+              gh api \
+                --method DELETE \
+                -H "Accept: application/vnd.github+json" \
+                -H "X-GitHub-Api-Version: 2022-11-28" \
+                "/orgs/${REPO_OWNER}/packages/container/${REPO_LOWER}%2F${PACKAGE_NAME}/versions/${version_id}" \
+                || echo "  ⚠️  Failed to delete version ${version_id}"
+            fi
+          }
+          
+          # Keep all release versions
+          echo "✅ Keeping all ${#RELEASE_VERSIONS[@]} release versions"
+          for version in "${RELEASE_VERSIONS[@]}"; do
+            IFS='|' read -r id tag created <<< "$version"
+            echo "  ✓ ${tag} (created: ${created})"
+          done
+          echo ""
+          
+          # Keep latest tag
+          echo "✅ Keeping all ${#LATEST_VERSIONS[@]} latest tags"
+          for version in "${LATEST_VERSIONS[@]}"; do
+            IFS='|' read -r id tag created <<< "$version"
+            echo "  ✓ ${tag} (created: ${created})"
+          done
+          echo ""
+          
+          # Keep only latest 3 pre-release versions
+          if [ ${#PRERELEASE_VERSIONS[@]} -gt 0 ]; then
+            echo "🔍 Processing pre-release versions..."
+            # Sort by creation date (newest first)
+            IFS=$'\n' SORTED_PRERELEASE=($(sort -t'|' -k3 -r <<< "${PRERELEASE_VERSIONS[*]}"))
+            unset IFS
+          
+            KEEP_COUNT=3
+            for i in "${!SORTED_PRERELEASE[@]}"; do
+              IFS='|' read -r id tag created <<< "${SORTED_PRERELEASE[$i]}"
+              if [ $i -lt $KEEP_COUNT ]; then
+                echo "  ✓ Keeping: ${tag} (created: ${created})"
+              else
+                delete_version "$id" "$tag" "$created"
+              fi
+            done
+            echo ""
+          fi
+          
+          # Keep only latest 3 branch versions
+          if [ ${#BRANCH_VERSIONS[@]} -gt 0 ]; then
+            echo "🔍 Processing branch versions..."
+            # Sort by creation date (newest first)
+            IFS=$'\n' SORTED_BRANCH=($(sort -t'|' -k3 -r <<< "${BRANCH_VERSIONS[*]}"))
+            unset IFS
+          
+            KEEP_COUNT=3
+            for i in "${!SORTED_BRANCH[@]}"; do
+              IFS='|' read -r id tag created <<< "${SORTED_BRANCH[$i]}"
+              if [ $i -lt $KEEP_COUNT ]; then
+                echo "  ✓ Keeping: ${tag} (created: ${created})"
+              else
+                delete_version "$id" "$tag" "$created"
+              fi
+            done
+            echo ""
+          fi
+          
+          # Delete all untagged versions
+          if [ ${#UNTAGGED_VERSIONS[@]} -gt 0 ]; then
+            echo "🗑️  Deleting ${#UNTAGGED_VERSIONS[@]} untagged versions..."
+            for version in "${UNTAGGED_VERSIONS[@]}"; do
+              IFS='|' read -r id tag created <<< "$version"
+              delete_version "$id" "$tag" "$created"
+            done
+            echo ""
+          fi
+          
+          echo "=================================================="
+          echo "✅ Cleanup complete for ${PACKAGE_NAME}-${ARCH}"
+          echo "=================================================="
+
+  cleanup-summary:
+    name: Cleanup Summary
+    runs-on: ubuntu-latest
+    needs: cleanup
+    if: always()
+    steps:
+      - name: Generate summary
+        run: |
+          echo "# 🧹 Container Image Cleanup Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Dry Run**: ${{ inputs.dry_run || 'false' }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Retention Policy" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ **Keep**: All release versions (v*.*.*)" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ **Keep**: Latest 3 pre-release versions per architecture" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ **Keep**: Latest 3 branch builds per architecture" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ **Keep**: All 'latest' tags" >> $GITHUB_STEP_SUMMARY
+          echo "- 🗑️ **Delete**: Untagged/dangling images" >> $GITHUB_STEP_SUMMARY
+          echo "- 🗑️ **Delete**: Older pre-release versions beyond 3 most recent" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Check job logs for detailed information about deleted images." >> $GITHUB_STEP_SUMMARY
