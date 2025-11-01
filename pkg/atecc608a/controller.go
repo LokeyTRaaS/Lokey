@@ -124,23 +124,35 @@ func NewController(busNumber int) (*Controller, error) {
 		switch logLevelStr {
 		case "DEBUG":
 			SetLogLevel(LogLevelDebug)
-			goi2clogger.ChangePackageLogLevel("i2c", goi2clogger.DebugLevel)
+			if err := goi2clogger.ChangePackageLogLevel("i2c", goi2clogger.DebugLevel); err != nil {
+				logInfo("Failed to set i2c logger level: %v", err)
+			}
 		case "INFO":
 			SetLogLevel(LogLevelInfo)
-			goi2clogger.ChangePackageLogLevel("i2c", goi2clogger.InfoLevel)
+			if err := goi2clogger.ChangePackageLogLevel("i2c", goi2clogger.InfoLevel); err != nil {
+				logInfo("Failed to set i2c logger level: %v", err)
+			}
 		case "WARN":
 			SetLogLevel(LogLevelWarn)
-			goi2clogger.ChangePackageLogLevel("i2c", goi2clogger.WarnLevel)
+			if err := goi2clogger.ChangePackageLogLevel("i2c", goi2clogger.WarnLevel); err != nil {
+				logInfo("Failed to set i2c logger level: %v", err)
+			}
 		case "ERROR":
 			SetLogLevel(LogLevelError)
-			goi2clogger.ChangePackageLogLevel("i2c", goi2clogger.ErrorLevel)
+			if err := goi2clogger.ChangePackageLogLevel("i2c", goi2clogger.ErrorLevel); err != nil {
+				logInfo("Failed to set i2c logger level: %v", err)
+			}
 		default:
 			SetLogLevel(LogLevelInfo)
-			goi2clogger.ChangePackageLogLevel("i2c", goi2clogger.InfoLevel)
+			if err := goi2clogger.ChangePackageLogLevel("i2c", goi2clogger.InfoLevel); err != nil {
+				logInfo("Failed to set i2c logger level: %v", err)
+			}
 		}
 	} else {
 		// Disable i2c library logging by default in production
-		goi2clogger.ChangePackageLogLevel("i2c", goi2clogger.FatalLevel)
+		if err := goi2clogger.ChangePackageLogLevel("i2c", goi2clogger.FatalLevel); err != nil {
+			logInfo("Failed to set i2c logger level: %v", err)
+		}
 	}
 
 	// Optionally disable i2c logging output completely for production
@@ -372,13 +384,6 @@ func (c *Controller) initializeUnlocked() error {
 	return nil
 }
 
-// isDeviceLocked checks if the device configuration zone is locked
-func (c *Controller) isDeviceLocked() (bool, error) {
-	c.mutex.Lock()
-	defer c.mutex.Unlock()
-	return c.isDeviceLockedUnlocked()
-}
-
 // isDeviceLockedUnlocked checks lock status without acquiring mutex
 func (c *Controller) isDeviceLockedUnlocked() (bool, error) {
 	// Read the lock bytes from config zone (address 0x15)
@@ -393,13 +398,6 @@ func (c *Controller) isDeviceLockedUnlocked() (bool, error) {
 
 	// Check lock bytes (0x00 = locked)
 	return response[2] == 0x00 && response[3] == 0x00, nil
-}
-
-// configureDevice configures and locks the device
-func (c *Controller) configureDevice() error {
-	c.mutex.Lock()
-	defer c.mutex.Unlock()
-	return c.configureDeviceUnlocked()
 }
 
 // configureDeviceUnlocked configures without acquiring mutex
@@ -485,9 +483,13 @@ func (c *Controller) wakeup() {
 	// Adafruit approach: try general call but ignore errors
 	wakeupI2C, err := i2c.NewI2C(0x00, c.busNumber)
 	if err == nil {
-		// Try to send wakeup, error is expected and can be ignored
-		_, _ = wakeupI2C.WriteBytes([]byte{0x00})
-		_ = wakeupI2C.Close()
+		// Try to send wakeup, error is expected and can be ignored per Adafruit implementation
+		if _, err := wakeupI2C.WriteBytes([]byte{0x00}); err != nil {
+			logInfo("Wakeup signal error (expected): %v", err)
+		}
+		if err := wakeupI2C.Close(); err != nil {
+			logInfo("Wakeup I2C close error: %v", err)
+		}
 	}
 	// Always wait after wakeup attempt
 	time.Sleep(wakeupDelay)
@@ -495,13 +497,17 @@ func (c *Controller) wakeup() {
 
 // idle puts device in idle mode (following Adafruit)
 func (c *Controller) idle() {
-	_, _ = c.i2c.WriteBytes([]byte{cmdIdle})
+	if _, err := c.i2c.WriteBytes([]byte{cmdIdle}); err != nil {
+		logError("I2C idle command failed: %v", err)
+	}
 	time.Sleep(wakeupDelay)
 }
 
 // sleep puts device in sleep mode (following Adafruit)
 func (c *Controller) sleep() {
-	_, _ = c.i2c.WriteBytes([]byte{cmdSleep})
+	if _, err := c.i2c.WriteBytes([]byte{cmdSleep}); err != nil {
+		logError("I2C sleep command failed: %v", err)
+	}
 	time.Sleep(wakeupDelay)
 }
 
