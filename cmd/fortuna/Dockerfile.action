@@ -1,0 +1,36 @@
+FROM alpine:latest
+
+# OCI Labels
+LABEL org.opencontainers.image.title="LoKey Fortuna"
+LABEL org.opencontainers.image.description="Fortuna CSPRNG amplifier service for high-throughput cryptographic random number generation"
+LABEL org.opencontainers.image.url="https://lokey.cloud"
+LABEL org.opencontainers.image.source="https://github.com/LokeyTRaaS/Lokey"
+LABEL org.opencontainers.image.licenses="MIT"
+LABEL org.opencontainers.image.vendor="LoKey TRaaS"
+LABEL org.opencontainers.image.documentation="https://github.com/LokeyTRaaS/Lokey/blob/main/README.md"
+
+# Add runtime dependencies
+# ca-certificates: HTTPS support
+# libc6-compat: glibc compatibility for CGO binaries
+# wget: for healthcheck
+RUN apk --no-cache add ca-certificates libc6-compat wget
+
+WORKDIR /app
+
+# Copy pre-built binary (standardized name created in CI)
+COPY build/lokey-fortuna /app/lokey-fortuna
+
+# Set environment variables
+ENV PORT=8082 \
+    CONTROLLER_URL=http://controller:8081 \
+    AMPLIFICATION_FACTOR=4
+
+# Expose the port
+EXPOSE 8082
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+  CMD wget --no-verbose --tries=1 -O /dev/null http://localhost:8082/health || exit 1
+
+# Run the application
+CMD ["/app/lokey-fortuna"]

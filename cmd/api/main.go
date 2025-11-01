@@ -33,10 +33,11 @@ import (
 // @description     Supports multiple output formats: int8, int16, int32, int64, uint8, uint16, uint32, uint64, and raw binary data with configurable chunk sizes and pagination.
 // @description
 // @description     ## Repository & Support
-// @description     For issues, feature requests, contributions, and detailed hardware setup instructions, visit: https://github.com/psmgeelen/lokey
+// @description     For issues, feature requests, contributions, and detailed hardware setup instructions, visit: https://github.com/LokeyTRaaS/Lokey
+// @description     For more information about the OSS initiative, please visit our website: https://lokey.cloud
 
 // @contact.name    GitHub Repository
-// @contact.url     https://github.com/psmgeelen/lokey
+// @contact.url     https://github.com/LokeyTRaaS/Lokey
 
 // @license.name    MIT License
 // @license.url     https://opensource.org/licenses/MIT
@@ -44,17 +45,15 @@ import (
 // @BasePath        /api/v1
 // @schemes         http https
 
-// Server represents the API server
-
 const (
 	DefaultPort                = 8080
 	DefaultDbPath              = "/data/api.db"
 	DefaultControllerAddr      = "http://controller:8081"
 	DefaultFortunaAddr         = "http://fortuna:8082"
-	DefaultTRNGQueueSize       = 100
-	DefaultFortunaQueueSize    = 100
-	DefaultTRNGPollInterval    = 1 * time.Second
-	DefaultFortunaPollInterval = 5 * time.Second
+	DefaultTRNGQueueSize       = 1000000
+	DefaultFortunaQueueSize    = 1000000
+	DefaultTRNGPollInterval    = 100 * time.Millisecond
+	DefaultFortunaPollInterval = 100 * time.Millisecond
 )
 
 func main() {
@@ -116,14 +115,14 @@ func main() {
 	}
 	fortunaPollInterval := time.Duration(fortunaPollIntervalMs) * time.Millisecond
 
-	// Initialize database
+	// Initialize database using the factory function
 	db, err := database.NewDBHandler(dbPath, trngQueueSize, fortunaQueueSize)
 	if err != nil {
 		log.Fatalf("Failed to initialize database: %v", err)
 	}
 	defer db.Close()
 
-	// Create and start API server
+	// Create API server
 	server := api.NewServer(db, controllerAddr, fortunaAddr, port)
 
 	// Create context for polling that can be cancelled
@@ -139,10 +138,11 @@ func main() {
 
 	go func() {
 		sig := <-sigCh
-		log.Printf("Received signal %s, shutting down", sig)
+		log.Printf("Received signal %s, shutting down gracefully", sig)
 		cancel() // Stop polling
 		// Give polling goroutines time to shut down
 		time.Sleep(500 * time.Millisecond)
+		os.Exit(0)
 	}()
 
 	log.Printf("Starting API server with configuration:")

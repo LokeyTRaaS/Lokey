@@ -31,15 +31,18 @@ WORKDIR /app
 # Copy the binary from the builder stage
 COPY --from=builder /app/controller /app/controller
 
-# Create data directory
-RUN mkdir -p /data
-
 # Set environment variables
 ENV PORT=8081 \
-    I2C_BUS_NUMBER=1
+    I2C_BUS_NUMBER=1 \
+    FORCE_CONFIG=false \
+    LOG_LEVEL=INFO
 
 # Expose the port
 EXPOSE 8081
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+  CMD wget --no-verbose --tries=1 -O /dev/null http://localhost:8081/health || exit 1
 
 # Run the application
 CMD ["/app/controller"]

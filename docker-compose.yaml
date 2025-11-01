@@ -1,68 +1,145 @@
 ---
+networks:
+  lokey-internal:
+    driver: bridge
+
+x-logging: &logging-common
+  driver: "json-file"
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+x-api-common: &api-common
+  deploy:
+    resources:
+      limits:
+        memory: 192M # accounts for the serivce AND tmpfs! so 64M + 128M = 192M
+  networks:
+    - lokey-internal
+  image: ghcr.io/lokeytraas/lokey/api:prerelease-major-refactor-arm64
+  restart: unless-stopped
+  logging: *logging-common
+  ports:
+    - '8080:8080'
+  volumes:
+    - type: tmpfs
+      target: /data
+      tmpfs:
+        size: 128M
+
+x-api-env: &api-env
+  PORT: 8080
+  DB_PATH: /data/api.db
+  DB_IMPLEMENTATION: channel
+  CONTROLLER_ADDR: http://controller:8081
+  FORTUNA_ADDR: http://fortuna:8082
+  TRNG_QUEUE_SIZE: 500000 #For raspberry pi zero 2 max 500.000 of 31 bit items
+  FORTUNA_QUEUE_SIZE: 10000 #For raspberry pi zero 2 max 1000 of 256 bit items, note that these settings are optimistic and assume the device to solely be used for random number generation.
+  TRNG_POLL_INTERVAL_MS: 100
+  FORTUNA_POLL_INTERVAL_MS: 100
+
+x-controller-common: &controller-common
+  deploy:
+    resources:
+      limits:
+        memory: 20M
+  networks:
+    - lokey-internal
+  devices:
+    - /dev/i2c-1:/dev/i2c-1
+  image: ghcr.io/lokeytraas/lokey/controller:prerelease-major-refactor-arm64
+  privileged: true
+  restart: unless-stopped
+  logging: *logging-common
+
+x-controller-env: &controller-env
+  PORT: 8081
+  I2C_BUS_NUMBER: 1
+  FORCE_CONFIG: false
+
+x-fortuna-common: &fortuna-common
+  deploy:
+    resources:
+      limits:
+        memory: 20M
+  networks:
+    - lokey-internal
+  image: ghcr.io/lokeytraas/lokey/fortuna:prerelease-major-refactor-arm64
+  restart: unless-stopped
+  logging: *logging-common
+
+x-fortuna-env: &fortuna-env
+  PORT: 8082
+  AMPLIFICATION_FACTOR: 4
+
 services:
+
   api:
+    <<: *api-common
     depends_on:
       - controller
       - fortuna
-    deploy:
-      resources:
-        limits:
-          memory: 128M
     environment:
-      - PORT=8080
-      - DB_PATH=/data/api.db
-      - CONTROLLER_ADDR=http://controller:8081
-      - FORTUNA_ADDR=http://fortuna:8082
-      - TRNG_QUEUE_SIZE=1000000
-      - FORTUNA_QUEUE_SIZE=1000000
-      - TRNG_POLL_INTERVAL_MS=100
-      - FORTUNA_POLL_INTERVAL_MS=100
-    image: ${DEV_MACHINE_IP:-localhost}:5000/lokey-api:latest
-    ports:
-      - '8080:8080'
-    restart: unless-stopped
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
-    volumes:
-      - api-data:/data
+      <<: *api-env
+      GIN_MODE: release
+      LOG_LEVEL: WARN
+    profiles:
+      - production
+
   controller:
-    deploy:
-      resources:
-        limits:
-          memory: 128M
-    devices:
-      - /dev/i2c-1:/dev/i2c-1
+    <<: *controller-common
     environment:
-      - PORT=8081
-      - I2C_BUS_NUMBER=1
-      - FORCE_CONFIG=false
-    image: ${DEV_MACHINE_IP:-localhost}:5000/lokey-controller:latest
-    privileged: true
-    restart: unless-stopped
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
+      <<: *controller-env
+      GIN_MODE: release
+      LOG_LEVEL: WARN
+    profiles:
+      - production
+
   fortuna:
+    <<: *fortuna-common
     depends_on:
       - controller
-    deploy:
-      resources:
-        limits:
-          memory: 128M
     environment:
-      - PORT=8082
-      - AMPLIFICATION_FACTOR=4
-    image: ${DEV_MACHINE_IP:-localhost}:5000/lokey-fortuna:latest
-    restart: unless-stopped
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
-volumes:
-  api-data: null
+      <<: *fortuna-env
+      GIN_MODE: release
+      LOG_LEVEL: WARN
+    profiles:
+      - production
+
+  api-debug:
+    <<: *api-common
+    depends_on:
+      - controller-debug
+      - fortuna-debug
+    environment:
+      <<: *api-env
+      CONTROLLER_ADDR: http://controller-debug:8081
+      FORTUNA_ADDR: http://fortuna-debug:8082
+      GIN_MODE: debug
+      LOG_LEVEL: DEBUG
+    profiles:
+      - debug
+
+  controller-debug:
+    <<: *controller-common
+    environment:
+      <<: *controller-env
+      GIN_MODE: debug
+      LOG_LEVEL: DEBUG
+    ports:
+      - '8081:8081'
+    profiles:
+      - debug
+
+  fortuna-debug:
+    <<: *fortuna-common
+    depends_on:
+      - controller-debug
+    environment:
+      <<: *fortuna-env
+      GIN_MODE: debug
+      LOG_LEVEL: DEBUG
+    ports:
+      - '8082:8082'
+    profiles:
+      - debug

@@ -1,0 +1,47 @@
+FROM alpine:latest
+
+# OCI Labels
+LABEL org.opencontainers.image.title="LoKey API"
+LABEL org.opencontainers.image.description="Main REST API service with BoltDB storage, queue management, and Swagger documentation"
+LABEL org.opencontainers.image.url="https://lokey.cloud"
+LABEL org.opencontainers.image.source="https://github.com/LokeyTRaaS/Lokey"
+LABEL org.opencontainers.image.licenses="MIT"
+LABEL org.opencontainers.image.vendor="LoKey TRaaS"
+LABEL org.opencontainers.image.documentation="https://github.com/LokeyTRaaS/Lokey/blob/main/README.md"
+
+# Add runtime dependencies
+# ca-certificates: HTTPS support
+# libc6-compat: glibc compatibility for CGO binaries
+# wget: for healthcheck
+RUN apk --no-cache add ca-certificates libc6-compat wget
+
+WORKDIR /app
+
+# Copy pre-built binary (standardized name created in CI)
+COPY build/lokey-api /app/lokey-api
+
+# Copy Swagger documentation (required for /swagger endpoint)
+COPY pkg/api/docs /app/pkg/api/docs
+
+# Create data directory for BoltDB
+RUN mkdir -p /data
+
+# Set environment variables
+ENV PORT=8080 \
+    DB_PATH=/data/api.db \
+    CONTROLLER_ADDR=http://controller:8081 \
+    FORTUNA_ADDR=http://fortuna:8082 \
+    TRNG_QUEUE_SIZE=100000 \
+    FORTUNA_QUEUE_SIZE=100000 \
+    TRNG_POLL_INTERVAL_MS=100 \
+    FORTUNA_POLL_INTERVAL_MS=100
+
+# Expose the port
+EXPOSE 8080
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
+  CMD wget --no-verbose --tries=1 -O /dev/null http://localhost:8080/api/v1/health || exit 1
+
+# Run the application
+CMD ["/app/lokey-api"]

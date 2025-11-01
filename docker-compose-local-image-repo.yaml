@@ -13,8 +13,8 @@ services:
       - DB_PATH=/data/api.db
       - CONTROLLER_ADDR=http://controller:8081
       - FORTUNA_ADDR=http://fortuna:8082
-      - TRNG_QUEUE_SIZE=100000
-      - FORTUNA_QUEUE_SIZE=100000
+      - TRNG_QUEUE_SIZE=10000
+      - FORTUNA_QUEUE_SIZE=10000
       - TRNG_POLL_INTERVAL_MS=100
       - FORTUNA_POLL_INTERVAL_MS=100
     image: ${DEV_MACHINE_IP:-localhost}:5000/lokey-api:latest
