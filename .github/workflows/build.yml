@@ -537,8 +537,8 @@ jobs:
           EOF
           
           # Substitute variables
-          sed -i "s/\${VERSION}/${VERSION}/g" release_notes.md
-          sed -i "s/\${REPO_LOWER}/${REPO_LOWER}/g" release_notes.md
+          sed -i "s|\${VERSION}|${VERSION}|g" release_notes.md
+          sed -i "s|\${REPO_LOWER}|${REPO_LOWER}|g" release_notes.md  
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
