@@ -92,5 +92,4 @@ LoKey is production-ready with active development:
 - 🚧 Performance optimizations in progress
 
 ## License
-
 LoKey is open source software licensed under the [MIT License](../LICENSE).
