@@ -1,3 +1,4 @@
+// Package api provides HTTP API endpoints for random number generation services.
 package api
 
 import (
@@ -14,24 +15,24 @@ import (
 // StartPolling initiates background polling of external services for random data
 func (s *Server) StartPolling(ctx context.Context, trngPollInterval, fortunaPollInterval time.Duration) {
 	// Start TRNG polling
-	go s.pollTRNGService(ctx, trngPollInterval)
+	go s.PollTRNGService(ctx, trngPollInterval)
 
 	// Start Fortuna polling
-	go s.pollFortunaService(ctx, fortunaPollInterval)
+	go s.PollFortunaService(ctx, fortunaPollInterval)
 
 	// Start Fortuna seeding with TRNG data
-	go s.seedFortunaWithTRNG(ctx, 30*time.Second)
+	go s.SeedFortunaWithTRNG(ctx, 30*time.Second)
 
 	log.Printf("Started polling services - TRNG interval: %s, Fortuna interval: %s, Fortuna seeding: every 30s",
 		trngPollInterval, fortunaPollInterval)
 }
 
 // pollTRNGService periodically polls the hardware TRNG controller service for new random data
-func (s *Server) pollTRNGService(ctx context.Context, interval time.Duration) {
+func (s *Server) PollTRNGService(ctx context.Context, interval time.Duration) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
-	log.Printf("Starting TRNG polling from %s with interval %s", s.controllerAddr, interval)
+	log.Printf("Starting TRNG polling from %s with interval %s", s.ControllerAddr, interval)
 
 	for {
 		select {
@@ -39,7 +40,7 @@ func (s *Server) pollTRNGService(ctx context.Context, interval time.Duration) {
 			log.Printf("TRNG polling stopped")
 			return
 		case <-ticker.C:
-			if err := s.fetchAndStoreTRNGData(); err != nil {
+			if err := s.FetchAndStoreTRNGData(); err != nil {
 				log.Printf("TRNG polling error: %v", err)
 			}
 		}
@@ -47,9 +48,9 @@ func (s *Server) pollTRNGService(ctx context.Context, interval time.Duration) {
 }
 
 // fetchAndStoreTRNGData fetches and stores TRNG data from the controller
-func (s *Server) fetchAndStoreTRNGData() error {
+func (s *Server) FetchAndStoreTRNGData() error {
 	// Attempt to fetch data from the controller service
-	resp, err := http.Get(s.controllerAddr + "/generate")
+	resp, err := http.Get(s.ControllerAddr + "/generate")
 	if err != nil {
 		return fmt.Errorf("error connecting to TRNG controller: %w", err)
 	}
@@ -79,12 +80,12 @@ func (s *Server) fetchAndStoreTRNGData() error {
 	}
 
 	// Store the data in database
-	if err := s.db.StoreTRNGData(dataBytes); err != nil {
+	if err := s.DB.StoreTRNGData(dataBytes); err != nil {
 		return fmt.Errorf("error storing TRNG data: %w", err)
 	}
 
 	// Increment polling count only on successful storage
-	if err := s.db.IncrementPollingCount("trng"); err != nil {
+	if err := s.DB.IncrementPollingCount("trng"); err != nil {
 		log.Printf("Warning: failed to increment TRNG polling count: %v", err)
 	}
 
@@ -92,11 +93,11 @@ func (s *Server) fetchAndStoreTRNGData() error {
 }
 
 // pollFortunaService periodically polls the Fortuna PRNG service for new random data
-func (s *Server) pollFortunaService(ctx context.Context, interval time.Duration) {
+func (s *Server) PollFortunaService(ctx context.Context, interval time.Duration) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
-	log.Printf("Starting Fortuna polling from %s with interval %s", s.fortunaAddr, interval)
+	log.Printf("Starting Fortuna polling from %s with interval %s", s.FortunaAddr, interval)
 
 	for {
 		select {
@@ -104,7 +105,7 @@ func (s *Server) pollFortunaService(ctx context.Context, interval time.Duration)
 			log.Printf("Fortuna polling stopped")
 			return
 		case <-ticker.C:
-			if err := s.fetchAndStoreFortunaData(); err != nil {
+			if err := s.FetchAndStoreFortunaData(); err != nil {
 				log.Printf("Fortuna polling error: %v", err)
 			}
 		}
@@ -112,10 +113,10 @@ func (s *Server) pollFortunaService(ctx context.Context, interval time.Duration)
 }
 
 // fetchAndStoreFortunaData fetches and stores Fortuna data from the service
-func (s *Server) fetchAndStoreFortunaData() error {
+func (s *Server) FetchAndStoreFortunaData() error {
 	// Attempt to fetch data from the Fortuna service using the correct endpoint
 	// Specify size=256 for a reasonable amount of random data
-	resp, err := http.Get(s.fortunaAddr + "/generate?size=256")
+	resp, err := http.Get(s.FortunaAddr + "/generate?size=256")
 	if err != nil {
 		return fmt.Errorf("error connecting to Fortuna service: %w", err)
 	}
@@ -126,7 +127,7 @@ func (s *Server) fetchAndStoreFortunaData() error {
 	}()
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("Fortuna service returned status %d", resp.StatusCode)
+		return fmt.Errorf("fortuna service returned status %d", resp.StatusCode)
 	}
 
 	// Parse response which contains a data field with hex-encoded random data
@@ -146,12 +147,12 @@ func (s *Server) fetchAndStoreFortunaData() error {
 	}
 
 	// Store the data in database
-	if err := s.db.StoreFortunaData(randomData); err != nil {
+	if err := s.DB.StoreFortunaData(randomData); err != nil {
 		return fmt.Errorf("error storing Fortuna data: %w", err)
 	}
 
 	// Increment polling count only on successful storage
-	if err := s.db.IncrementPollingCount("fortuna"); err != nil {
+	if err := s.DB.IncrementPollingCount("fortuna"); err != nil {
 		log.Printf("Warning: failed to increment Fortuna polling count: %v", err)
 	}
 
@@ -159,7 +160,7 @@ func (s *Server) fetchAndStoreFortunaData() error {
 }
 
 // seedFortunaWithTRNG periodically seeds Fortuna generator with hardware TRNG data
-func (s *Server) seedFortunaWithTRNG(ctx context.Context, interval time.Duration) {
+func (s *Server) SeedFortunaWithTRNG(ctx context.Context, interval time.Duration) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
@@ -171,7 +172,7 @@ func (s *Server) seedFortunaWithTRNG(ctx context.Context, interval time.Duration
 			log.Printf("Fortuna seeding stopped")
 			return
 		case <-ticker.C:
-			if err := s.seedFortuna(); err != nil {
+			if err := s.SeedFortuna(); err != nil {
 				log.Printf("Fortuna seeding error: %v", err)
 			}
 		}
@@ -179,9 +180,9 @@ func (s *Server) seedFortunaWithTRNG(ctx context.Context, interval time.Duration
 }
 
 // seedFortuna fetches TRNG data and seeds the Fortuna generator
-func (s *Server) seedFortuna() error {
+func (s *Server) SeedFortuna() error {
 	// Fetch multiple TRNG samples from controller for good entropy
-	resp, err := http.Get(s.controllerAddr + "/generate?count=5")
+	resp, err := http.Get(s.ControllerAddr + "/generate?count=5")
 	if err != nil {
 		return fmt.Errorf("error fetching TRNG data for seeding: %w", err)
 	}
@@ -221,7 +222,7 @@ func (s *Server) seedFortuna() error {
 	}
 
 	seedResp, err := http.Post(
-		s.fortunaAddr+"/seed",
+		s.FortunaAddr+"/seed",
 		"application/json",
 		bytes.NewBuffer(seedData),
 	)
@@ -235,7 +236,7 @@ func (s *Server) seedFortuna() error {
 	}()
 
 	if seedResp.StatusCode != http.StatusOK {
-		return fmt.Errorf("Fortuna seeding failed with status: %d", seedResp.StatusCode)
+		return fmt.Errorf("fortuna seeding failed with status: %d", seedResp.StatusCode)
 	}
 
 	log.Printf("Successfully seeded Fortuna with %d TRNG samples", len(result.Data))

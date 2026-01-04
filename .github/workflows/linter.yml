@@ -1,4 +1,4 @@
-name: Lint
+name: Lint and Test
 
 on:
   push:
@@ -10,6 +10,9 @@ on:
       - refactor/**
     tags:
       - 'v*'
+  pull_request:
+    branches:
+      - main
 
 jobs:
   golangci:
@@ -25,7 +28,6 @@ jobs:
           go-version: '1.24'
           cache: true
 
-      # Add this step to download dependencies
       - name: Download dependencies
         run: |
           go mod download
@@ -39,9 +41,7 @@ jobs:
         with:
           version: latest
           args: --timeout=5m
-          # Remove --out-format to use config file settings
 
-  # Optional: separate job for running tests
   test:
     name: Run Tests
     runs-on: ubuntu-latest
@@ -59,10 +59,12 @@ jobs:
         run: |
           go mod download
           go mod tidy
+          cd cmd/api && go mod download && go mod tidy && cd ../..
+          cd cmd/controller && go mod download && go mod tidy && cd ../..
+          cd cmd/fortuna && go mod download && go mod tidy && cd ../..
 
       - name: Run tests
-        run: go test -v -race -coverprofile=coverage.out ./...
-        continue-on-error: true  # Don't fail if no tests exist yet
+        run: go test -race -coverprofile=coverage.out ./...
 
       - name: Upload coverage
         uses: codecov/codecov-action@v3

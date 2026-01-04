@@ -1,3 +1,4 @@
+// Package atecc608a provides hardware controller for ATECC608A cryptographic chip.
 package atecc608a
 
 import (
@@ -13,6 +14,7 @@ import (
 )
 
 const (
+	// DefaultI2CAddress is the default I2C address for ATECC608A.
 	DefaultI2CAddress = 0x60 // Default I2C address for ATECC608A
 
 	// ATECC608A commands (following Adafruit implementation)
@@ -42,9 +44,13 @@ const (
 type LogLevel int
 
 const (
+	// LogLevelError represents error-level logging.
 	LogLevelError LogLevel = iota
+	// LogLevelWarn represents warning-level logging.
 	LogLevelWarn
+	// LogLevelInfo represents info-level logging.
 	LogLevelInfo
+	// LogLevelDebug represents debug-level logging.
 	LogLevelDebug
 )
 
@@ -52,9 +58,13 @@ const (
 type DeviceState int
 
 const (
+	// DeviceStateUnknown represents an unknown device state.
 	DeviceStateUnknown DeviceState = iota
+	// DeviceStateHealthy represents a healthy device state.
 	DeviceStateHealthy
+	// DeviceStateFailed represents a failed device state.
 	DeviceStateFailed
+	// DeviceStateRecovering represents a recovering device state.
 	DeviceStateRecovering
 )
 
@@ -92,8 +102,8 @@ func logError(format string, args ...interface{}) {
 	}
 }
 
-// TLS configuration template based on Adafruit implementation
-var CFG_TLS = []byte{
+// CfgTLS is a TLS configuration template based on Adafruit implementation.
+var CfgTLS = []byte{
 	0x01, 0x23, 0x00, 0x00, 0x00, 0x00, 0x50, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xC0, 0x71, 0x00,
 	0xC0, 0x00, 0x55, 0x00, 0x83, 0x20, 0x87, 0x20, 0x87, 0x20, 0x87, 0x2F, 0x87, 0x2F, 0x8F, 0x8F,
 	0x9F, 0x8F, 0xAF, 0x8F, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
@@ -427,10 +437,10 @@ func (c *Controller) configureDeviceUnlocked() error {
 		// Get the 4-byte block to write
 		blockData := make([]byte, 4)
 		end := i + 4
-		if end > len(CFG_TLS) {
-			end = len(CFG_TLS)
+		if end > len(CfgTLS) {
+			end = len(CfgTLS)
 		}
-		copy(blockData, CFG_TLS[i:end])
+		copy(blockData, CfgTLS[i:end])
 
 		// Write the block - safe conversion as i/4 is always < 32
 		addr := uint16(i / 4) // #nosec G115 - i is bounded 16-128, i/4 always fits in uint16
@@ -532,7 +542,7 @@ func (c *Controller) sendCommand(opcode byte, param1 byte, param2 uint16, data [
 	copy(commandPacket[6:], data)
 
 	// Calculate CRC on everything except word address and CRC itself
-	crc := c.calculateAdafruitCRC(commandPacket[1 : len(commandPacket)-2])
+	crc := c.CalculateAdafruitCRC(commandPacket[1 : len(commandPacket)-2])
 	commandPacket[len(commandPacket)-2] = byte(crc & 0xFF)
 	commandPacket[len(commandPacket)-1] = byte(crc >> 8)
 
@@ -581,7 +591,7 @@ func (c *Controller) getResponse(expectedLength int, execTime time.Duration) ([]
 }
 
 // calculateAdafruitCRC implements Adafruit's exact CRC calculation
-func (c *Controller) calculateAdafruitCRC(data []byte) uint16 {
+func (c *Controller) CalculateAdafruitCRC(data []byte) uint16 {
 	if len(data) == 0 {
 		return 0
 	}

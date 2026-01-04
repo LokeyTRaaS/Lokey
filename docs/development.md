@@ -8,6 +8,7 @@ Guide for developers contributing to LoKey.
 - [Project Structure](#project-structure)
 - [Building from Source](#building-from-source)
 - [Code Quality](#code-quality)
+- [Testing](#testing)
 - [Using Task](#using-task)
 - [Contributing](#contributing)
 
@@ -226,6 +227,31 @@ swag init --parseDependency --parseInternal \
 ```
 
 
+## Testing
+
+### Running Tests
+
+```shell script
+# Run all tests with summary
+task test
+
+# Run tests for specific package
+go test ./pkg/api
+
+# Run specific test
+go test ./pkg/api -run TestServer_GetRandomData
+
+# Run with coverage
+go test ./pkg/api -cover
+
+# Run with race detection
+go test ./pkg/api -race
+```
+
+The `task test` command provides clean output showing only failures, errors, and a summary with test statistics.
+
+For comprehensive testing documentation, see **[Testing Guide](tests.md)**.
+
 ## Using Task
 
 Task is the recommended build tool. View available tasks:
@@ -241,12 +267,13 @@ task --list
 task build                      # Build all services
 task fmt                        # Format code
 task lint                       # Run linter
+task test                       # Run tests with summary
 task generate_swagger           # Generate API docs
 task dev_up                     # Start development environment
 task dev_down                   # Stop development environment
 task dev_logs                   # View logs
 task build_images_and_registry  # Build for Raspberry Pi
-task all                        # Format, lint, and build
+task all                        # Format, lint, test, and build
 ```
 
 
@@ -309,6 +336,8 @@ git push origin feature/my-feature
 
 - [ ] Code follows Go best practices
 - [ ] No linter warnings
+- [ ] Tests added/updated for new features
+- [ ] All tests pass (`task test`)
 - [ ] Documentation updated
 - [ ] Swagger annotations added (for API changes)
 - [ ] Backwards compatible
@@ -366,6 +395,7 @@ LoKey uses [Semantic Versioning](https://semver.org/):
 - [API Reference](https://lokeytraas.github.io/Lokey/api-reference.html)
 - [Architecture Guide](architecture.md)
 - [Deployment Guide](deployment.md)
+- [Testing Guide](tests.md)
 
 ### Go Resources
 - [Effective Go](https://go.dev/doc/effective_go)
@@ -385,6 +415,7 @@ LoKey uses [Semantic Versioning](https://semver.org/):
 - **[Quickstart](quickstart.md)** - Run LoKey locally
 - **[Architecture](architecture.md)** - Understand the system
 - **[API Examples](api-examples.md)** - Learn the API
+- **[Testing Guide](tests.md)** - Run and write tests
 - **[Deployment](deployment.md)** - Deploy to production
 
 Thank you for contributing to LoKey! 🎲

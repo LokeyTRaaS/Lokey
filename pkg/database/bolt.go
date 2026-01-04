@@ -24,9 +24,9 @@ var (
 
 // BoltDBHandler implements the database interface using BoltDB
 type BoltDBHandler struct {
-	db               *bolt.DB
-	trngQueueSize    int
-	fortunaQueueSize int
+	DB               *bolt.DB
+	TRNGQueueSize    int
+	FortunaQueueSize int
 	mu               sync.RWMutex // For safe concurrent access to queue sizes
 }
 
@@ -42,7 +42,7 @@ func NewBoltDBHandler(dbPath string, trngQueueSize, fortunaQueueSize int) (*Bolt
 
 	// Create directory if it doesn't exist
 	dir := filepath.Dir(dbPath)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0750); err != nil {
 		return nil, fmt.Errorf("failed to create database directory: %w", err)
 	}
 
@@ -117,20 +117,22 @@ func NewBoltDBHandler(dbPath string, trngQueueSize, fortunaQueueSize int) (*Bolt
 	})
 
 	if err != nil {
-		db.Close()
+		if closeErr := db.Close(); closeErr != nil {
+			log.Printf("Warning: failed to close database during error handling: %v", closeErr)
+		}
 		return nil, fmt.Errorf("failed to initialize database: %w", err)
 	}
 
 	return &BoltDBHandler{
-		db:               db,
-		trngQueueSize:    trngQueueSize,
-		fortunaQueueSize: fortunaQueueSize,
+		DB:               db,
+		TRNGQueueSize:    trngQueueSize,
+		FortunaQueueSize: fortunaQueueSize,
 	}, nil
 }
 
 // Close closes the database connection
 func (h *BoltDBHandler) Close() error {
-	return h.db.Close()
+	return h.DB.Close()
 }
 
 // Helper functions for counters
@@ -172,7 +174,7 @@ func (h *BoltDBHandler) getNextID(tx *bolt.Tx, counterKey []byte) (uint64, error
 
 // StoreTRNGData stores raw TRNG data
 func (h *BoltDBHandler) StoreTRNGData(data []byte) error {
-	return h.db.Update(func(tx *bolt.Tx) error {
+	return h.DB.Update(func(tx *bolt.Tx) error {
 		// Get next ID
 		id, err := h.getNextID(tx, []byte("trng_next_id"))
 		if err != nil {
@@ -211,7 +213,7 @@ func (h *BoltDBHandler) GetTRNGData(limit, offset int, consume bool) ([][]byte, 
 	var dataSlices [][]byte
 	consumedCount := int64(0)
 
-	err := h.db.Update(func(tx *bolt.Tx) error {
+	err := h.DB.Update(func(tx *bolt.Tx) error {
 		b := tx.Bucket(trngDataBucket)
 
 		// Collect all unconsumed items
@@ -287,7 +289,7 @@ func (h *BoltDBHandler) trimTRNGDataIfNeeded(tx *bolt.Tx) error {
 	var oldestKeys [][]byte
 
 	h.mu.RLock()
-	maxSize := h.trngQueueSize
+	maxSize := h.TRNGQueueSize
 	h.mu.RUnlock()
 
 	cursor := b.Cursor()
@@ -326,7 +328,7 @@ func (h *BoltDBHandler) trimTRNGDataIfNeeded(tx *bolt.Tx) error {
 
 // StoreFortunaData stores Fortuna-generated data
 func (h *BoltDBHandler) StoreFortunaData(data []byte) error {
-	return h.db.Update(func(tx *bolt.Tx) error {
+	return h.DB.Update(func(tx *bolt.Tx) error {
 		// Get next ID
 		id, err := h.getNextID(tx, []byte("fortuna_next_id"))
 		if err != nil {
@@ -365,7 +367,7 @@ func (h *BoltDBHandler) GetFortunaData(limit, offset int, consume bool) ([][]byt
 	var dataSlices [][]byte
 	consumedCount := int64(0)
 
-	err := h.db.Update(func(tx *bolt.Tx) error {
+	err := h.DB.Update(func(tx *bolt.Tx) error {
 		b := tx.Bucket(fortunaDataBucket)
 
 		// Collect all unconsumed items
@@ -441,7 +443,7 @@ func (h *BoltDBHandler) trimFortunaDataIfNeeded(tx *bolt.Tx) error {
 	var oldestKeys [][]byte
 
 	h.mu.RLock()
-	maxSize := h.fortunaQueueSize
+	maxSize := h.FortunaQueueSize
 	h.mu.RUnlock()
 
 	cursor := b.Cursor()
@@ -483,7 +485,7 @@ func (h *BoltDBHandler) trimFortunaDataIfNeeded(tx *bolt.Tx) error {
 
 // IncrementPollingCount increments the polling counter for a data source
 func (h *BoltDBHandler) IncrementPollingCount(source string) error {
-	return h.db.Update(func(tx *bolt.Tx) error {
+	return h.DB.Update(func(tx *bolt.Tx) error {
 		b := tx.Bucket(countersBucket)
 		key := []byte(source + "_polling_count")
 
@@ -501,7 +503,7 @@ func (h *BoltDBHandler) IncrementPollingCount(source string) error {
 
 // IncrementDroppedCount increments the dropped counter for a data source
 func (h *BoltDBHandler) IncrementDroppedCount(source string) error {
-	return h.db.Update(func(tx *bolt.Tx) error {
+	return h.DB.Update(func(tx *bolt.Tx) error {
 		b := tx.Bucket(countersBucket)
 		key := []byte(source + "_dropped_count")
 
@@ -532,7 +534,7 @@ func (h *BoltDBHandler) getCounterValue(tx *bolt.Tx, key string) int64 {
 func (h *BoltDBHandler) GetDetailedStats() (*DetailedStats, error) {
 	stats := &DetailedStats{}
 
-	err := h.db.View(func(tx *bolt.Tx) error {
+	err := h.DB.View(func(tx *bolt.Tx) error {
 		// TRNG stats
 		stats.TRNG.PollingCount = h.getCounterValue(tx, "trng_polling_count")
 		stats.TRNG.QueueDropped = h.getCounterValue(tx, "trng_dropped_count")
@@ -552,7 +554,7 @@ func (h *BoltDBHandler) GetDetailedStats() (*DetailedStats, error) {
 		}
 
 		h.mu.RLock()
-		stats.TRNG.QueueCapacity = h.trngQueueSize
+		stats.TRNG.QueueCapacity = h.TRNGQueueSize
 		h.mu.RUnlock()
 
 		stats.TRNG.QueueCurrent = trngUnconsumed
@@ -581,7 +583,7 @@ func (h *BoltDBHandler) GetDetailedStats() (*DetailedStats, error) {
 		}
 
 		h.mu.RLock()
-		stats.Fortuna.QueueCapacity = h.fortunaQueueSize
+		stats.Fortuna.QueueCapacity = h.FortunaQueueSize
 		h.mu.RUnlock()
 
 		stats.Fortuna.QueueCurrent = fortunaUnconsumed
@@ -614,7 +616,7 @@ func (h *BoltDBHandler) GetDetailedStats() (*DetailedStats, error) {
 // GetDatabaseSize returns the size of the database file in bytes
 func (h *BoltDBHandler) GetDatabaseSize() (int64, error) {
 	var size int64
-	err := h.db.View(func(tx *bolt.Tx) error {
+	err := h.DB.View(func(tx *bolt.Tx) error {
 		size = tx.Size()
 		return nil
 	})
@@ -623,7 +625,7 @@ func (h *BoltDBHandler) GetDatabaseSize() (int64, error) {
 
 // GetDatabasePath returns the path to the database file
 func (h *BoltDBHandler) GetDatabasePath() string {
-	return h.db.Path()
+	return h.DB.Path()
 }
 
 // formatBytes formats bytes into human-readable string
@@ -644,7 +646,7 @@ func formatBytes(bytes int64) string {
 
 // RecordRNGUsage records usage statistics for RNG data
 func (h *BoltDBHandler) RecordRNGUsage(source string, bytesUsed int64) error {
-	return h.db.Update(func(tx *bolt.Tx) error {
+	return h.DB.Update(func(tx *bolt.Tx) error {
 		b := tx.Bucket(usageStatsBucket)
 
 		stat := UsageStat{
@@ -669,7 +671,7 @@ func (h *BoltDBHandler) RecordRNGUsage(source string, bytesUsed int64) error {
 func (h *BoltDBHandler) GetRNGStatistics(source string, start, end time.Time) ([]UsageStat, error) {
 	var stats []UsageStat
 
-	err := h.db.View(func(tx *bolt.Tx) error {
+	err := h.DB.View(func(tx *bolt.Tx) error {
 		b := tx.Bucket(usageStatsBucket)
 		cursor := b.Cursor()
 
@@ -694,7 +696,7 @@ func (h *BoltDBHandler) GetRNGStatistics(source string, start, end time.Time) ([
 func (h *BoltDBHandler) GetStats() (map[string]interface{}, error) {
 	stats := make(map[string]interface{})
 
-	err := h.db.View(func(tx *bolt.Tx) error {
+	err := h.DB.View(func(tx *bolt.Tx) error {
 		// Count TRNG data
 		trngBucket := tx.Bucket(trngDataBucket)
 		trngCount := 0
@@ -730,12 +732,12 @@ func (h *BoltDBHandler) GetQueueInfo() (map[string]int, error) {
 	defer h.mu.RUnlock()
 
 	info := map[string]int{
-		"trng_queue_capacity":    h.trngQueueSize,
-		"fortuna_queue_capacity": h.fortunaQueueSize,
+		"trng_queue_capacity":    h.TRNGQueueSize,
+		"fortuna_queue_capacity": h.FortunaQueueSize,
 	}
 
 	// Get current queue usage
-	err := h.db.View(func(tx *bolt.Tx) error {
+	err := h.DB.View(func(tx *bolt.Tx) error {
 		// Count TRNG unconsumed
 		trngBucket := tx.Bucket(trngDataBucket)
 		trngCursor := trngBucket.Cursor()
@@ -769,11 +771,11 @@ func (h *BoltDBHandler) GetQueueInfo() (map[string]int, error) {
 // UpdateQueueSizes updates the queue size configuration
 func (h *BoltDBHandler) UpdateQueueSizes(trngSize, fortunaSize int) error {
 	h.mu.Lock()
-	h.trngQueueSize = trngSize
-	h.fortunaQueueSize = fortunaSize
+	h.TRNGQueueSize = trngSize
+	h.FortunaQueueSize = fortunaSize
 	h.mu.Unlock()
 
-	return h.db.Update(func(tx *bolt.Tx) error {
+	return h.DB.Update(func(tx *bolt.Tx) error {
 		configB := tx.Bucket(configBucket)
 		var buf [8]byte
 
@@ -796,7 +798,7 @@ func (h *BoltDBHandler) UpdateQueueSizes(trngSize, fortunaSize int) error {
 
 // HealthCheck performs a basic health check on the database
 func (h *BoltDBHandler) HealthCheck() bool {
-	err := h.db.View(func(tx *bolt.Tx) error {
+	err := h.DB.View(func(_ *bolt.Tx) error {
 		return nil
 	})
 	return err == nil

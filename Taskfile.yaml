@@ -62,7 +62,7 @@ tasks:
         ignore_error: true
 
   lint:
-    desc: Run linters on all modules
+    desc: Run linters on all code
     deps: [install-golangci-lint, download]
     cmds:
       - |
@@ -70,10 +70,7 @@ tasks:
           echo "No Go files found. Skipping lint."
           exit 0
         }
-      - for: { var: MODULES }
-        dir: "{{.}}"
-        cmd: golangci-lint run ./... || echo "Linting found issues, but continuing"
-        ignore_error: true
+      - golangci-lint run ./... || echo "Linting found issues, but continuing"
 
   fmt:
     desc: Format all Go code
@@ -86,7 +83,7 @@ tasks:
       - find . -name "*.go" -not -path "./vendor/*" -not -path "./build/*" | xargs gofmt -s -w
 
   vet:
-    desc: Vet all modules
+    desc: Vet all code
     deps: [download]
     cmds:
       - |
@@ -94,10 +91,7 @@ tasks:
           echo "No Go files found. Skipping vet."
           exit 0
         }
-      - for: { var: MODULES }
-        dir: "{{.}}"
-        cmd: go vet ./... || echo "Vet found issues, but continuing"
-        ignore_error: true
+      - go vet ./... || echo "Vet found issues, but continuing"
 
   build:
     desc: Build all components
@@ -132,10 +126,28 @@ tasks:
           echo "No test files found. Skipping tests."
           exit 0
         }
-      - for: { var: MODULES }
-        dir: "{{.}}"
-        cmd: go test -v ./... || echo "Tests failed, but continuing"
-        ignore_error: true
+      - |
+        go test ./... 2>&1 | grep -v "^RUN\|^\[GIN-debug\|^\[GIN\]" | grep -E "(^--- (FAIL|SKIP)|^FAIL|^ok  |^PASS|Error:|expected|got:)" || true
+      - |
+        echo ""
+        echo "Test Summary:"
+        go test -json ./... 2>&1 | jq -rs '
+          group_by(.Package) | 
+          map({
+            package: .[0].Package,
+            total: [.[] | select(.Action=="run" and .Test)] | unique | length,
+            passed: [.[] | select(.Action=="pass" and .Test)] | length,
+            failed: [.[] | select(.Action=="fail" and .Test)] | length,
+            skipped: [.[] | select(.Action=="skip" and .Test)] | length,
+            skipped_tests: [.[] | select(.Action=="skip" and .Test) | .Test] | unique
+          }) | 
+          (map(.passed) | add) as $total_passed |
+          (map(.total) | add) as $total_tests |
+          (map(.failed) | add) as $total_failed |
+          (map(.skipped) | add) as $total_skipped |
+          (map(.skipped_tests) | flatten | unique) as $all_skipped |
+          "  TOTAL: \($total_passed)/\($total_tests) tests passed (\($total_failed) failed, \($total_skipped) skipped)" +
+          (if $total_skipped > 0 then "\n\n  Skipped tests:\n" + ($all_skipped | map("    - \(.)") | join("\n")) else "" end)' 2>/dev/null || echo "  (Summary unavailable - jq may not be installed)"
 
   clean:
     desc: Clean build artifacts

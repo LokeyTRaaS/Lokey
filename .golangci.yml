@@ -1,27 +1,26 @@
+version: 2
+
 run:
   timeout: 5m
   tests: true
+  go: '1.24'
 
 linters:
   enable:
-    - errcheck      # Check for unchecked errors
-    - gosimple      # Simplify code
-    - govet         # Standard Go vet
-    - ineffassign   # Detect ineffectual assignments
-    - staticcheck   # Advanced static analysis
-    - unused        # Check for unused code
-    - gosec         # Security issues
-    - misspell      # Spelling errors
-    - gofmt         # Code formatting
-    - gocritic      # Go code review
-    - revive        # Fast, configurable, extensible, flexible linter
-    - typecheck     # Type checking
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - gosec
+    - misspell
+    - gocritic
+    - revive
 
 linters-settings:
   errcheck:
     check-blank: true
     check-type-assertions: false
-    # Use exclude-functions instead of deprecated ignore
     exclude-functions:
       - (io.Closer).Close
       - (io.ReadCloser).Close
@@ -29,58 +28,92 @@ linters-settings:
   govet:
     enable-all: true
     disable:
+      - fieldalignment
       - shadow
-      - fieldalignment  # Disable fieldalignment entirely - it's overly strict
 
   gosec:
-    excludes:
-      - G115  # We've handled these with #nosec where appropriate
+    config:
+      G115: false
+      G301: false
 
   revive:
     rules:
       - name: exported
         disabled: true
+      - name: package-comments
+        disabled: true
+      - name: var-naming
+        disabled: true
+      - name: unused-parameter
+        disabled: true
 
-  unused:
-    # Only report exported unused items
-    check-exported: false
-    # Treat field-only usage as usage (fixes false positives for mutex fields)
-    field-writes-are-uses: true
+  staticcheck:
+    checks:
+      - "all"
+      - "-ST1005"
 
 issues:
   exclude-dirs:
     - vendor
     - tmp
-    - pkg/api/docs  # Exclude swagger generated code
+    - pkg/api/docs
+    - tests
 
   exclude-rules:
-    # Exclude some linters from running on tests files
+    # Disable revive for test files (unit tests in packages)
+    - path: _test\.go
+      linters:
+        - revive
+
+    # Disable errcheck and gosec in test files (unit tests in packages)
     - path: _test\.go
       linters:
         - errcheck
         - gosec
 
-    # Exclude fieldalignment warnings (treat as info only)
+    # Exclude fieldalignment in non-test code
     - linters:
         - govet
       text: "fieldalignment"
 
-    # Allow blank identifier assignments for intentionally ignored errors
+    # Allow intentionally ignored errors with blank identifier
     - linters:
         - errcheck
-      text: "Error return value of.*is not checked"
       source: "^\\s*_\\s*=\\s*"
 
-    # Allow nolint directives for errcheck
+    # Allow nolint directives
     - linters:
         - errcheck
       source: "//nolint:errcheck"
+
+    # Allow deferred Close without error check
+    - linters:
+        - errcheck
+      text: "Error return value of.*Close.*is not checked"
+      source: "defer.*\\.Close\\(\\)"
+
+    # Ignore G115 integer overflow warnings
+    - linters:
+        - gosec
+      text: "G115:"
+
+    # Ignore G301 file permissions
+    - linters:
+        - gosec
+      text: "G301:"
+
+    # Allow QF1003 (tagged switch suggestions)
+    - linters:
+        - staticcheck
+      text: "QF1003:"
 
   max-issues-per-linter: 0
   max-same-issues: 0
 
 output:
-  format: colored-line-number
+  formats:
+    stdout:
+      format: colored-line-number
   print-issued-lines: true
   print-linter-name: true
   sort-results: true

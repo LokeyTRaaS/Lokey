@@ -18,14 +18,16 @@ import (
 	ginSwagger "github.com/swaggo/gin-swagger"
 )
 
+// Server represents the HTTP API server for the random number generation service.
 type Server struct {
-	db             database.DBHandler
-	controllerAddr string
-	fortunaAddr    string
+	DB             database.DBHandler
+	ControllerAddr string
+	FortunaAddr    string
 	port           int
-	router         *gin.Engine
+	Router         *gin.Engine
 	validate       *validator.Validate
 	metrics        *Metrics
+	registry       *prometheus.Registry
 	consumeMode    bool         // Global consume setting
 	consumeMutex   sync.RWMutex // Protects consumeMode
 }
@@ -61,6 +63,7 @@ type HealthCheckResponse struct {
 	} `json:"details"`
 }
 
+// Metrics holds Prometheus metrics for the API server.
 type Metrics struct {
 	TRNGQueueCurrent    prometheus.Gauge
 	TRNGQueueCapacity   prometheus.Gauge
@@ -78,12 +81,17 @@ type Metrics struct {
 }
 
 // NewServer creates a new API server
-func NewServer(db database.DBHandler, controllerAddr, fortunaAddr string, port int) *Server {
+func NewServer(db database.DBHandler, controllerAddr, fortunaAddr string, port int, reg *prometheus.Registry) *Server {
 	router := gin.Default()
 	validate := validator.New()
 
 	// Initialize Swagger documentation
 	docs.SwaggerInfo.BasePath = "/api/v1"
+
+	// Use default registry if none provided
+	if reg == nil {
+		reg = prometheus.DefaultRegisterer.(*prometheus.Registry)
+	}
 
 	metrics := &Metrics{
 		TRNGQueueCurrent: prometheus.NewGauge(prometheus.GaugeOpts{
@@ -134,8 +142,8 @@ func NewServer(db database.DBHandler, controllerAddr, fortunaAddr string, port i
 		}),
 	}
 
-	// Register metrics
-	prometheus.MustRegister(
+	// Register metrics to the provided registry
+	reg.MustRegister(
 		metrics.TRNGQueueCurrent,
 		metrics.TRNGQueueCapacity,
 		metrics.TRNGQueuePercentage,
@@ -150,13 +158,14 @@ func NewServer(db database.DBHandler, controllerAddr, fortunaAddr string, port i
 	)
 
 	server := &Server{
-		db:             db,
-		controllerAddr: controllerAddr,
-		fortunaAddr:    fortunaAddr,
+		DB:             db,
+		ControllerAddr: controllerAddr,
+		FortunaAddr:    fortunaAddr,
 		port:           port,
-		router:         router,
+		Router:         router,
 		validate:       validate,
 		metrics:        metrics,
+		registry:       reg,
 		consumeMode:    false, // Default: don't consume (read-only mode)
 	}
 
@@ -167,7 +176,7 @@ func NewServer(db database.DBHandler, controllerAddr, fortunaAddr string, port i
 // setupRoutes configures the API routes
 func (s *Server) setupRoutes() {
 	// Add CORS middleware
-	s.router.Use(func(c *gin.Context) {
+	s.Router.Use(func(c *gin.Context) {
 		c.Header("Access-Control-Allow-Origin", "*")
 		c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 		c.Header("Access-Control-Allow-Headers", "Content-Type, Authorization, Accept")
@@ -181,13 +190,13 @@ func (s *Server) setupRoutes() {
 	})
 
 	// Swagger UI - uses embedded docs from swaggo
-	s.router.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
+	s.Router.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
 
 	// Prometheus metrics endpoint
-	s.router.GET("/metrics", s.MetricsHandler)
+	s.Router.GET("/metrics", s.MetricsHandler)
 
 	// API v1 group
-	api := s.router.Group("/api/v1")
+	api := s.Router.Group("/api/v1")
 	{
 		// Configuration endpoints
 		api.GET("/config/queue", s.GetQueueConfig)
@@ -207,11 +216,12 @@ func (s *Server) setupRoutes() {
 
 // Run starts the API server
 func (s *Server) Run() error {
-	return s.router.Run(fmt.Sprintf(":%d", s.port))
+	return s.Router.Run(fmt.Sprintf(":%d", s.port))
 }
 
-// @Summary         Get queue configuration
-// @Description     Get current queue size configuration for TRNG and Fortuna data
+// GetQueueConfig returns the current queue configuration.
+// @Summary Get queue configuration
+// @Description Get current queue size configuration for TRNG and Fortuna data
 // @Tags            configuration
 // @Accept          json
 // @Produce         json
@@ -219,14 +229,14 @@ func (s *Server) Run() error {
 // @Failure         500 {object} map[string]string "Database error"
 // @Router          /config/queue [get]
 func (s *Server) GetQueueConfig(c *gin.Context) {
-	if !s.db.HealthCheck() {
+	if !s.DB.HealthCheck() {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": "Database is not healthy",
 		})
 		return
 	}
 
-	queueInfo, err := s.db.GetQueueInfo()
+	queueInfo, err := s.DB.GetQueueInfo()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": fmt.Sprintf("Failed to get queue info: %v", err),
@@ -240,6 +250,7 @@ func (s *Server) GetQueueConfig(c *gin.Context) {
 	})
 }
 
+// UpdateQueueConfig updates the queue configuration.
 // @Summary Update queue configuration
 // @Description Update queue size configuration for TRNG and Fortuna data
 // @Tags configuration
@@ -262,7 +273,7 @@ func (s *Server) UpdateQueueConfig(c *gin.Context) {
 		return
 	}
 
-	if err := s.db.UpdateQueueSizes(config.TRNGQueueSize, config.FortunaQueueSize); err != nil {
+	if err := s.DB.UpdateQueueSizes(config.TRNGQueueSize, config.FortunaQueueSize); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update queue configuration"})
 		return
 	}
@@ -270,8 +281,9 @@ func (s *Server) UpdateQueueConfig(c *gin.Context) {
 	c.JSON(http.StatusOK, config)
 }
 
-// @Summary         Get consume configuration
-// @Description     Get current consume mode setting (true = delete-on-read, false = keep data in queue)
+// GetConsumeConfig returns the current consume mode configuration.
+// @Summary Get consume configuration
+// @Description Get current consume mode setting (true = delete-on-read, false = keep data in queue)
 // @Tags            configuration
 // @Accept          json
 // @Produce         json
@@ -287,8 +299,9 @@ func (s *Server) GetConsumeConfig(c *gin.Context) {
 	})
 }
 
-// @Summary         Update consume configuration
-// @Description     Update consume mode setting (true = delete-on-read, false = keep data in queue)
+// UpdateConsumeConfig updates the consume mode configuration.
+// @Summary Update consume configuration
+// @Description Update consume mode setting (true = delete-on-read, false = keep data in queue)
 // @Tags            configuration
 // @Accept          json
 // @Produce         json
@@ -312,6 +325,7 @@ func (s *Server) UpdateConsumeConfig(c *gin.Context) {
 	c.JSON(http.StatusOK, config)
 }
 
+// GetRandomData retrieves random data in various formats with pagination.
 // @Summary Get random data
 // @Description Retrieve random data in various formats with pagination
 // @Tags data
@@ -350,9 +364,9 @@ func (s *Server) GetRandomData(c *gin.Context) {
 	var rawData [][]byte
 	var err error
 	if request.Source == "trng" {
-		rawData, err = s.db.GetTRNGData(estimatedChunksNeeded, request.Offset, consumeData)
+		rawData, err = s.DB.GetTRNGData(estimatedChunksNeeded, request.Offset, consumeData)
 	} else {
-		rawData, err = s.db.GetFortunaData(estimatedChunksNeeded, request.Offset, consumeData)
+		rawData, err = s.DB.GetFortunaData(estimatedChunksNeeded, request.Offset, consumeData)
 	}
 
 	if err != nil {
@@ -469,8 +483,9 @@ func convertToIntFormat(data [][]byte, maxCount, bytesPerValue int, signed bool)
 	return result
 }
 
-// @Summary         Get system status
-// @Description     Get detailed status of TRNG and Fortuna systems with comprehensive metrics
+// GetStatus returns the system status.
+// @Summary Get system status
+// @Description Get detailed status of TRNG and Fortuna systems with comprehensive metrics
 // @Tags            status
 // @Accept          json
 // @Produce         json
@@ -478,7 +493,7 @@ func convertToIntFormat(data [][]byte, maxCount, bytesPerValue int, signed bool)
 // @Failure         500 {object} map[string]string "Server error"
 // @Router          /status [get]
 func (s *Server) GetStatus(c *gin.Context) {
-	stats, err := s.db.GetDetailedStats()
+	stats, err := s.DB.GetDetailedStats()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get system status"})
 		return
@@ -502,6 +517,7 @@ func (s *Server) GetStatus(c *gin.Context) {
 	c.JSON(http.StatusOK, stats)
 }
 
+// HealthCheck performs a health check on the API server and its dependencies.
 // @Summary Health check endpoint
 // @Description Checks health of the API server and its dependencies
 // @Tags status
@@ -516,16 +532,16 @@ func (s *Server) HealthCheck(c *gin.Context) {
 	}
 
 	// Check database
-	response.Details.Database = s.db.HealthCheck()
+	response.Details.Database = s.DB.HealthCheck()
 
 	// Check API (always true if we got here)
 	response.Details.API = true
 
 	// Check controller service
-	response.Details.Controller = s.checkServiceHealth(s.controllerAddr)
+	response.Details.Controller = s.checkServiceHealth(s.ControllerAddr)
 
 	// Check Fortuna service
-	response.Details.Fortuna = s.checkServiceHealth(s.fortunaAddr)
+	response.Details.Fortuna = s.checkServiceHealth(s.FortunaAddr)
 
 	// Determine overall status
 	if !response.Details.Database || !response.Details.Controller || !response.Details.Fortuna {
@@ -556,5 +572,5 @@ func (s *Server) checkServiceHealth(serviceAddr string) bool {
 
 // MetricsHandler serves Prometheus metrics
 func (s *Server) MetricsHandler(c *gin.Context) {
-	promhttp.Handler().ServeHTTP(c.Writer, c.Request)
+	promhttp.HandlerFor(s.registry, promhttp.HandlerOpts{}).ServeHTTP(c.Writer, c.Request)
 }

@@ -123,7 +123,7 @@ func main() {
 	defer db.Close()
 
 	// Create API server
-	server := api.NewServer(db, controllerAddr, fortunaAddr, port)
+	server := api.NewServer(db, controllerAddr, fortunaAddr, port, nil)
 
 	// Create context for polling that can be cancelled
 	ctx, cancel := context.WithCancel(context.Background())

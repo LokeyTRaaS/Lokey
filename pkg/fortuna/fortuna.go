@@ -1,3 +1,4 @@
+// Package fortuna implements the Fortuna cryptographically secure random number generator.
 package fortuna
 
 import (
@@ -22,13 +23,13 @@ const (
 // Generator implements the Fortuna algorithm for random number generation
 type Generator struct {
 	key        []byte
-	counter    uint64
-	blockSize  int
+	Counter    uint64
+	BlockSize  int
 	cipher     cipher.Block
 	mutex      sync.Mutex
 	lastReseed time.Time
 	pools      [NumberOfPools][]byte
-	isHealthy  bool
+	IsHealthy  bool
 }
 
 // NewGenerator creates a new Fortuna generator
@@ -49,12 +50,12 @@ func NewGenerator(seed []byte) (*Generator, error) {
 
 	g := &Generator{
 		key:        initKey,
-		counter:    0,
-		blockSize:  aesCipher.BlockSize(),
+		Counter:    0,
+		BlockSize:   aesCipher.BlockSize(),
 		cipher:     aesCipher,
 		mutex:      sync.Mutex{},
 		lastReseed: time.Now(),
-		isHealthy:  true,
+		IsHealthy:   true,
 	}
 
 	// Initialize pools
@@ -117,7 +118,7 @@ func (g *Generator) Reseed(seeds [][]byte) error {
 
 	g.key = newKey
 	g.cipher = aesCipher
-	g.counter++ // Increment counter on reseed
+	g.Counter++ // Increment counter on reseed
 	g.lastReseed = time.Now()
 
 	return nil
@@ -139,27 +140,27 @@ func (g *Generator) GenerateRandomData(length int) ([]byte, error) {
 
 	// Generate random data
 	result := make([]byte, length)
-	blocks := (length + g.blockSize - 1) / g.blockSize
-	temp := make([]byte, g.blockSize)
+	blocks := (length + g.BlockSize - 1) / g.BlockSize
+	temp := make([]byte, g.BlockSize)
 
 	for i := 0; i < blocks; i++ {
 		// Convert counter to bytes
 		ctrBytes := make([]byte, 16) // AES block size
-		binary.BigEndian.PutUint64(ctrBytes[8:], g.counter)
+		binary.BigEndian.PutUint64(ctrBytes[8:], g.Counter)
 
 		// Encrypt counter to generate random block
 		g.cipher.Encrypt(temp, ctrBytes)
 
 		// Copy to result
-		copySize := g.blockSize
-		if i == blocks-1 && length%g.blockSize != 0 {
-			copySize = length % g.blockSize
+		copySize := g.BlockSize
+		if i == blocks-1 && length%g.BlockSize != 0 {
+			copySize = length % g.BlockSize
 		}
 
-		copy(result[i*g.blockSize:], temp[:copySize])
+		copy(result[i*g.BlockSize:], temp[:copySize])
 
 		// Increment counter
-		g.counter++
+		g.Counter++
 	}
 
 	return result, nil
@@ -169,7 +170,7 @@ func (g *Generator) GenerateRandomData(length int) ([]byte, error) {
 func (g *Generator) ReseedFromPools() error {
 	g.mutex.Lock()
 	// Determine which pools to use based on the reseed count
-	reseedCount := g.counter
+	reseedCount := g.Counter
 	var poolsToUse [][]byte
 
 	for i := 0; i < NumberOfPools; i++ {
@@ -239,7 +240,7 @@ func (g *Generator) HealthCheck() bool {
 		return false
 	}
 
-	return g.isHealthy
+	return g.IsHealthy
 }
 
 // GetLastReseedTime returns the time of the last reseed operation
@@ -253,5 +254,5 @@ func (g *Generator) GetLastReseedTime() time.Time {
 func (g *Generator) GetCounter() uint64 {
 	g.mutex.Lock()
 	defer g.mutex.Unlock()
-	return g.counter
+	return g.Counter
 }

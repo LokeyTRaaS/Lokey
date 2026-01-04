@@ -27,6 +27,7 @@ New to LoKey? Start here:
 
 - **[Architecture](architecture.md)** - System design, components, and technical implementation
 - **[Development Guide](development.md)** - Building from source, testing, contributing
+- **[Testing Guide](tests.md)** - Test suite documentation and best practices
 
 ## Quick Reference
 

@@ -14,7 +14,7 @@ type UsageStat struct {
 type DetailedStats struct {
 	TRNG     DataSourceStats `json:"trng"`
 	Fortuna  DataSourceStats `json:"fortuna"`
-	Database DatabaseStats   `json:"database"`
+	Database Stats           `json:"database"`
 }
 
 // DataSourceStats represents statistics for a specific data source
@@ -29,8 +29,8 @@ type DataSourceStats struct {
 	TotalGenerated  int64   `json:"total_generated"`  // Total items ever generated
 }
 
-// DatabaseStats represents database-related statistics
-type DatabaseStats struct {
+// Stats represents database-related statistics.
+type Stats struct {
 	SizeBytes int64  `json:"size_bytes"`
 	SizeHuman string `json:"size_human"`
 	Path      string `json:"path"`
