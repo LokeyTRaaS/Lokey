@@ -140,7 +140,7 @@ func TestGenerator_Reseed(t *testing.T) {
 	t.Run("reseed multiple times", func(t *testing.T) {
 		gen3, _ := fortuna.NewGenerator(seed)
 		for i := 0; i < 5; i++ {
-			seeds := [][]byte{[]byte{byte(i)}}
+			seeds := [][]byte{{byte(i)}}
 			err := gen3.Reseed(seeds)
 			if err != nil {
 				t.Fatalf("Expected no error on reseed %d, got %v", i, err)
@@ -272,7 +272,7 @@ func TestGenerator_AmplifyRandomData(t *testing.T) {
 		gen2, _ := fortuna.NewGenerator(seed)
 		// Reseed first to increment counter so ReseedFromPools can select pools
 		gen2.Reseed([][]byte{[]byte("initial")})
-		
+
 		inputSeed := make([]byte, 64)
 		rand.Read(inputSeed)
 
@@ -315,7 +315,7 @@ func TestGenerator_AmplifyRandomData(t *testing.T) {
 		gen3, _ := fortuna.NewGenerator(seed)
 		// Reseed first to increment counter so ReseedFromPools can select pools
 		gen3.Reseed([][]byte{[]byte("initial")})
-		
+
 		largeSeed := make([]byte, 500)
 		rand.Read(largeSeed)
 
@@ -393,4 +393,3 @@ func TestGenerator_GetCounter(t *testing.T) {
 		t.Errorf("Expected counter to increment by 1 after reseed, got %d", gen.GetCounter())
 	}
 }
-

@@ -69,8 +69,8 @@ func (s *Server) FetchAndStoreTRNGData() error {
 		Data string `json:"data"`
 	}
 
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return fmt.Errorf("error parsing TRNG response: %w", err)
+	if decodeErr := json.NewDecoder(resp.Body).Decode(&result); decodeErr != nil {
+		return fmt.Errorf("error parsing TRNG response: %w", decodeErr)
 	}
 
 	// Decode the hex-encoded data
@@ -136,8 +136,8 @@ func (s *Server) FetchAndStoreFortunaData() error {
 		Size int    `json:"size"`
 	}
 
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return fmt.Errorf("error parsing Fortuna response: %w", err)
+	if decodeErr := json.NewDecoder(resp.Body).Decode(&result); decodeErr != nil {
+		return fmt.Errorf("error parsing Fortuna response: %w", decodeErr)
 	}
 
 	// Decode the hex-encoded data
@@ -201,8 +201,8 @@ func (s *Server) SeedFortuna() error {
 		Data []string `json:"data"`
 	}
 
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return fmt.Errorf("error parsing controller response for seeding: %w", err)
+	if decodeErr := json.NewDecoder(resp.Body).Decode(&result); decodeErr != nil {
+		return fmt.Errorf("error parsing controller response for seeding: %w", decodeErr)
 	}
 
 	if len(result.Data) == 0 {

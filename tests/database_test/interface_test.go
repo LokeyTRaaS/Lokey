@@ -127,4 +127,3 @@ func TestDBHandlerInterface_Methods(t *testing.T) {
 		_ = handler.Close()
 	})
 }
-

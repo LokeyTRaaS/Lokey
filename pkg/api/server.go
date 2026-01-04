@@ -10,12 +10,13 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/go-playground/validator/v10"
-	"github.com/lokey/rng-service/pkg/api/docs"
-	"github.com/lokey/rng-service/pkg/database"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	swaggerFiles "github.com/swaggo/files"
 	ginSwagger "github.com/swaggo/gin-swagger"
+
+	"github.com/lokey/rng-service/pkg/api/docs"
+	"github.com/lokey/rng-service/pkg/database"
 )
 
 // Server represents the HTTP API server for the random number generation service.
@@ -90,7 +91,10 @@ func NewServer(db database.DBHandler, controllerAddr, fortunaAddr string, port i
 
 	// Use default registry if none provided
 	if reg == nil {
-		reg = prometheus.DefaultRegisterer.(*prometheus.Registry)
+		reg, _ = prometheus.DefaultRegisterer.(*prometheus.Registry) //nolint:errcheck // Type assertion result handled by nil check
+		if reg == nil {
+			reg = prometheus.NewRegistry()
+		}
 	}
 
 	metrics := &Metrics{

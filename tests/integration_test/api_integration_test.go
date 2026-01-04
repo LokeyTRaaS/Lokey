@@ -11,9 +11,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+
 	"github.com/lokey/rng-service/pkg/api"
 	"github.com/lokey/rng-service/pkg/database"
-	"github.com/prometheus/client_golang/prometheus"
 )
 
 // setupIntegrationServer creates a test server with mock external services

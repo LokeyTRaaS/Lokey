@@ -476,4 +476,3 @@ func TestDatabaseConsistency(t *testing.T) {
 		}
 	})
 }
-

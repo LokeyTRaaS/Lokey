@@ -474,14 +474,13 @@ func TestChannelDBHandler_GetStats(t *testing.T) {
 		t.Fatalf("Expected no error, got %v", err)
 	}
 
-	if stats["trng_count"].(int) != 1 {
-		t.Errorf("Expected trng_count 1, got %d", stats["trng_count"])
+	if trngCount, ok := stats["trng_count"].(int); !ok || trngCount != 1 {
+		t.Errorf("Expected trng_count 1, got %d", trngCount)
 	}
-	if stats["fortuna_count"].(int) != 1 {
-		t.Errorf("Expected fortuna_count 1, got %d", stats["fortuna_count"])
+	if fortunaCount, ok := stats["fortuna_count"].(int); !ok || fortunaCount != 1 {
+		t.Errorf("Expected fortuna_count 1, got %d", fortunaCount)
 	}
-	if stats["db_size"].(int64) != 0 {
-		t.Errorf("Expected db_size 0 (in-memory), got %d", stats["db_size"])
+	if dbSize, ok := stats["db_size"].(int64); !ok || dbSize != 0 {
+		t.Errorf("Expected db_size 0 (in-memory), got %d", dbSize)
 	}
 }
-

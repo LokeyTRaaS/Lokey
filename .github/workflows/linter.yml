@@ -36,11 +36,17 @@ jobs:
           cd cmd/controller && go mod download && go mod tidy && cd ../..
           cd cmd/fortuna && go mod download && go mod tidy && cd ../..
 
-      - name: golangci-lint
+      - name: Run golangci-lint on source code
         uses: golangci/golangci-lint-action@v8
         with:
           version: latest
-          args: --timeout=5m
+          args: --config .golangci.yml ./pkg/... ./cmd/...
+      
+      - name: Run golangci-lint on tests
+        uses: golangci/golangci-lint-action@v8
+        with:
+          version: latest
+          args: --config .golangci-tests.yml ./tests/...
 
   test:
     name: Run Tests

@@ -51,11 +51,11 @@ func NewGenerator(seed []byte) (*Generator, error) {
 	g := &Generator{
 		key:        initKey,
 		Counter:    0,
-		BlockSize:   aesCipher.BlockSize(),
+		BlockSize:  aesCipher.BlockSize(),
 		cipher:     aesCipher,
 		mutex:      sync.Mutex{},
 		lastReseed: time.Now(),
-		IsHealthy:   true,
+		IsHealthy:  true,
 	}
 
 	// Initialize pools

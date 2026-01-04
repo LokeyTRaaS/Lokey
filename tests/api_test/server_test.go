@@ -7,9 +7,10 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/prometheus/client_golang/prometheus"
+
 	"github.com/lokey/rng-service/pkg/api"
 	"github.com/lokey/rng-service/pkg/database"
-	"github.com/prometheus/client_golang/prometheus"
 )
 
 func setupTestServer() (*api.Server, database.DBHandler) {
@@ -374,4 +375,3 @@ func TestServer_Swagger(t *testing.T) {
 		t.Errorf("Expected status < 500, got %d", w.Code)
 	}
 }
-

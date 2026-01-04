@@ -15,7 +15,7 @@ func TestController_calculateAdafruitCRC(t *testing.T) {
 	// Create a minimal controller for testing (we only need it for the method)
 	// Since calculateAdafruitCRC is a method, we need a controller instance
 	// We'll create a test helper that doesn't require I2C
-	
+
 	t.Run("empty data", func(t *testing.T) {
 		c := &atecc608a.Controller{}
 		crc := c.CalculateAdafruitCRC([]byte{})
@@ -92,4 +92,3 @@ func TestController_calculateAdafruitCRC(t *testing.T) {
 // 3. Integration tests with mock I2C devices
 //
 // For now, we test the pure logic functions that don't require I2C.
-

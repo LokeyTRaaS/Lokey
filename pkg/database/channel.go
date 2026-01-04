@@ -137,8 +137,8 @@ func (q *CircularQueue) Capacity() int {
 
 // ChannelDBHandler implements DBHandler using in-memory circular queues
 type ChannelDBHandler struct {
-	TRNGQueue    *CircularQueue
-	FortunaQueue *CircularQueue
+	TRNGQueue     *CircularQueue
+	FortunaQueue  *CircularQueue
 	nextTRNGID    atomic.Uint64
 	nextFortunaID atomic.Uint64
 	// Note: No mutex needed here - CircularQueue handles its own synchronization
@@ -232,9 +232,9 @@ func (h *ChannelDBHandler) GetDetailedStats() (*DetailedStats, error) {
 	trngSize := h.TRNGQueue.Size()
 	trngCapacity := h.TRNGQueue.Capacity()
 
-	stats.TRNG.PollingCount = int64(h.TRNGQueue.Stats.PollingCount.Load())    // #nosec G115
-	stats.TRNG.QueueDropped = int64(h.TRNGQueue.Stats.DroppedCount.Load())     // #nosec G115
-	stats.TRNG.ConsumedCount = int64(h.TRNGQueue.Stats.ConsumedCount.Load())   // #nosec G115
+	stats.TRNG.PollingCount = int64(h.TRNGQueue.Stats.PollingCount.Load())   // #nosec G115
+	stats.TRNG.QueueDropped = int64(h.TRNGQueue.Stats.DroppedCount.Load())   // #nosec G115
+	stats.TRNG.ConsumedCount = int64(h.TRNGQueue.Stats.ConsumedCount.Load()) // #nosec G115
 	stats.TRNG.QueueCurrent = trngSize
 	stats.TRNG.QueueCapacity = trngCapacity
 	stats.TRNG.UnconsumedCount = trngSize
@@ -248,9 +248,9 @@ func (h *ChannelDBHandler) GetDetailedStats() (*DetailedStats, error) {
 	fortunaSize := h.FortunaQueue.Size()
 	fortunaCapacity := h.FortunaQueue.Capacity()
 
-	stats.Fortuna.PollingCount = int64(h.FortunaQueue.Stats.PollingCount.Load())    // #nosec G115
-	stats.Fortuna.QueueDropped = int64(h.FortunaQueue.Stats.DroppedCount.Load())     // #nosec G115
-	stats.Fortuna.ConsumedCount = int64(h.FortunaQueue.Stats.ConsumedCount.Load())   // #nosec G115
+	stats.Fortuna.PollingCount = int64(h.FortunaQueue.Stats.PollingCount.Load())   // #nosec G115
+	stats.Fortuna.QueueDropped = int64(h.FortunaQueue.Stats.DroppedCount.Load())   // #nosec G115
+	stats.Fortuna.ConsumedCount = int64(h.FortunaQueue.Stats.ConsumedCount.Load()) // #nosec G115
 	stats.Fortuna.QueueCurrent = fortunaSize
 	stats.Fortuna.QueueCapacity = fortunaCapacity
 	stats.Fortuna.UnconsumedCount = fortunaSize

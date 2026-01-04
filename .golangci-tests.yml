@@ -1,6 +1,6 @@
 run:
   timeout: 5m
-  tests: false
+  tests: true
 
 linters:
   enable:
@@ -44,6 +44,12 @@ linters-settings:
       - os.RemoveAll
       - os.Setenv
       - os.Unsetenv
+      - (*testing.T).Fatal
+      - (*testing.T).Fatalf
+      - (*testing.T).Error
+      - (*testing.T).Errorf
+      - (*testing.T).Skip
+      - (*testing.T).Skipf
 
   gofmt:
     simplify: true
@@ -63,13 +69,10 @@ linters-settings:
     excludes:
       - G104
       - G107
+      - G115
       - G204
 
 issues:
-  exclude-dirs:
-    - tests
-  exclude-files:
-    - ".*\\.pb\\.go$"
   exclude-rules:
     - path: _test\.go
       linters:

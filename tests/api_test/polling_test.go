@@ -9,9 +9,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+
 	"github.com/lokey/rng-service/pkg/api"
 	"github.com/lokey/rng-service/pkg/database"
-	"github.com/prometheus/client_golang/prometheus"
 )
 
 func TestServer_fetchAndStoreTRNGData(t *testing.T) {

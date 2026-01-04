@@ -62,15 +62,26 @@ tasks:
         ignore_error: true
 
   lint:
-    desc: Run linters on all code
+    desc: Run linters on source code (pkg and cmd)
     deps: [install-golangci-lint, download]
     cmds:
       - |
-        find . -name "*.go" -not -path "./vendor/*" -not -path "./build/*" | grep -q "\.go$" || {
+        find ./pkg ./cmd -name "*.go" -not -path "./vendor/*" -not -path "./build/*" 2>/dev/null | grep -q "\.go$" || {
           echo "No Go files found. Skipping lint."
           exit 0
         }
-      - golangci-lint run ./... || echo "Linting found issues, but continuing"
+      - golangci-lint run --config .golangci.yml ./pkg/... ./cmd/... || echo "Linting found issues, but continuing"
+
+  lint-tests:
+    desc: Run linters on test code
+    deps: [install-golangci-lint, download]
+    cmds:
+      - |
+        find ./tests -name "*.go" -not -path "./vendor/*" -not -path "./build/*" 2>/dev/null | grep -q "\.go$" || {
+          echo "No test files found. Skipping lint."
+          exit 0
+        }
+      - golangci-lint run --config .golangci-tests.yml ./tests/... || echo "Linting found issues, but continuing"
 
   fmt:
     desc: Format all Go code
@@ -122,16 +133,53 @@ tasks:
     deps: [download]
     cmds:
       - |
-        find . -name "*_test.go" -not -path "./vendor/*" -not -path "./build/*" | grep -q "_test\.go$" || {
+        find ./tests -name "*_test.go" -not -path "./vendor/*" -not -path "./build/*" 2>/dev/null | grep -q "_test\.go$" || {
           echo "No test files found. Skipping tests."
           exit 0
         }
       - |
-        go test ./... 2>&1 | grep -v "^RUN\|^\[GIN-debug\|^\[GIN\]" | grep -E "(^--- (FAIL|SKIP)|^FAIL|^ok  |^PASS|Error:|expected|got:)" || true
+        go test ./tests/... 2>&1 | grep -v "^RUN\|^\[GIN-debug\|^\[GIN\]" | grep -E "(^--- (FAIL|SKIP)|^FAIL|^ok  |^PASS|Error:|expected|got:)" || true
       - |
         echo ""
         echo "Test Summary:"
-        go test -json ./... 2>&1 | jq -rs '
+        go test -json ./tests/... 2>&1 | jq -rs '
+          group_by(.Package) | 
+          map({
+            package: .[0].Package,
+            total: [.[] | select(.Action=="run" and .Test)] | unique | length,
+            passed: [.[] | select(.Action=="pass" and .Test)] | length,
+            failed: [.[] | select(.Action=="fail" and .Test)] | length,
+            skipped: [.[] | select(.Action=="skip" and .Test)] | length,
+            skipped_tests: [.[] | select(.Action=="skip" and .Test) | .Test] | unique
+          }) | 
+          (map(.passed) | add) as $total_passed |
+          (map(.total) | add) as $total_tests |
+          (map(.failed) | add) as $total_failed |
+          (map(.skipped) | add) as $total_skipped |
+          (map(.skipped_tests) | flatten | unique) as $all_skipped |
+          "  TOTAL: \($total_passed)/\($total_tests) tests passed (\($total_failed) failed, \($total_skipped) skipped)" +
+          (if $total_skipped > 0 then "\n\n  Skipped tests:\n" + ($all_skipped | map("    - \(.)") | join("\n")) else "" end)' 2>/dev/null || echo "  (Summary unavailable - jq may not be installed)"
+
+  test-coverage:
+    desc: Run tests with coverage report
+    deps: [download]
+    cmds:
+      - |
+        find ./tests -name "*_test.go" -not -path "./vendor/*" -not -path "./build/*" 2>/dev/null | grep -q "_test\.go$" || {
+          echo "No test files found. Skipping tests."
+          exit 0
+        }
+      - mkdir -p build
+      - |
+        go test -race -coverprofile=build/coverage.out -covermode=atomic -coverpkg=./pkg/...,./cmd/... ./tests/... 2>&1 | grep -v "^RUN\|^\[GIN-debug\|^\[GIN\]" | grep -E "(^--- (FAIL|SKIP)|^FAIL|^ok  |^PASS|Error:|expected|got:)" || true
+      - |
+        echo ""
+        echo "Coverage Summary:"
+        go tool cover -func=build/coverage.out 2>/dev/null | tail -1 || echo "  (Coverage summary unavailable)"
+      - |
+        echo ""
+        echo "Test Summary:"
+        go test -json ./tests/... 2>&1 | jq -rs '
           group_by(.Package) | 
           map({
             package: .[0].Package,
