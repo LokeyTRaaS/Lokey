@@ -10,6 +10,8 @@ import (
 	"log"
 	"net/http"
 	"time"
+
+	"github.com/lokey/rng-service/pkg/fortuna"
 )
 
 // StartPolling initiates background polling of external services for random data
@@ -78,6 +80,9 @@ func (s *Server) FetchAndStoreTRNGData() error {
 	if err != nil {
 		return fmt.Errorf("error decoding data from controller: %w", err)
 	}
+
+	// Calculate quality metrics BEFORE storing
+	s.trngQualityTracker.ProcessData(dataBytes)
 
 	// Store the data in database
 	if err := s.DB.StoreTRNGData(dataBytes); err != nil {
@@ -172,11 +177,70 @@ func (s *Server) SeedFortunaWithTRNG(ctx context.Context, interval time.Duration
 			log.Printf("Fortuna seeding stopped")
 			return
 		case <-ticker.C:
+			// Check circuit breaker
+			if s.isSeedingCircuitOpen() {
+				log.Printf("Fortuna seeding circuit breaker is OPEN, skipping attempt")
+				continue
+			}
+
 			if err := s.SeedFortuna(); err != nil {
-				log.Printf("Fortuna seeding error: %v", err)
+				s.seedingFailures.Add(1)
+				s.lastSeedingFailure.Store(time.Now().Unix())
+				log.Printf("Fortuna seeding error: %v (failures: %d)", err, s.seedingFailures.Load())
+
+				// Open circuit breaker after 5 consecutive failures
+				if s.seedingFailures.Load() >= 5 {
+					s.seedingCircuitOpen.Store(true)
+					log.Printf("Fortuna seeding circuit breaker opened after %d failures", s.seedingFailures.Load())
+				}
+			} else {
+				// Reset failure count on success
+				s.seedingFailures.Store(0)
+				s.seedingCircuitOpen.Store(false)
 			}
 		}
 	}
+}
+
+// isSeedingCircuitOpen checks if seeding circuit breaker is open
+func (s *Server) isSeedingCircuitOpen() bool {
+	if !s.seedingCircuitOpen.Load() {
+		return false
+	}
+
+	// Check if cooldown period has expired (default: 5 minutes)
+	lastFailure := s.lastSeedingFailure.Load()
+	if lastFailure > 0 {
+		elapsed := time.Since(time.Unix(lastFailure, 0))
+		if elapsed >= s.seedingCooldown {
+			// Transition to half-open for testing
+			s.seedingCircuitOpen.Store(false)
+			log.Printf("Fortuna seeding circuit breaker cooldown expired, resuming attempts")
+			return false
+		}
+	}
+	return true
+}
+
+// ValidateTRNGData validates that TRNG seed data has sufficient quality
+func ValidateTRNGData(seeds []string) error {
+	if len(seeds) == 0 {
+		return fmt.Errorf("no seeds provided")
+	}
+
+	for i, seedHex := range seeds {
+		seed, err := hex.DecodeString(seedHex)
+		if err != nil {
+			return fmt.Errorf("seed %d: invalid hex encoding: %w", i, err)
+		}
+
+		// Use Fortuna's validation function
+		if !fortuna.ValidateSeedQuality(seed) {
+			return fmt.Errorf("seed %d: low quality detected (repeating pattern or low entropy)", i)
+		}
+	}
+
+	return nil
 }
 
 // seedFortuna fetches TRNG data and seeds the Fortuna generator
@@ -207,6 +271,11 @@ func (s *Server) SeedFortuna() error {
 
 	if len(result.Data) == 0 {
 		return fmt.Errorf("no TRNG data received for seeding")
+	}
+
+	// NEW: Validate TRNG data quality before sending to Fortuna
+	if err := ValidateTRNGData(result.Data); err != nil {
+		return fmt.Errorf("TRNG data validation failed: %w", err)
 	}
 
 	// Send seeds to Fortuna's /seed endpoint

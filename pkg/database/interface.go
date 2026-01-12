@@ -12,9 +12,40 @@ type UsageStat struct {
 
 // DetailedStats represents comprehensive system statistics
 type DetailedStats struct {
-	TRNG     DataSourceStats `json:"trng"`
-	Fortuna  DataSourceStats `json:"fortuna"`
-	Database Stats           `json:"database"`
+	TRNG        DataSourceStats `json:"trng"`
+	Fortuna     DataSourceStats `json:"fortuna"`
+	Database    Stats           `json:"database"`
+	TRNGQuality QualityMetrics  `json:"trng_quality"`
+}
+
+// QualityMetrics represents TRNG randomness quality metrics
+type QualityMetrics struct {
+	Monobit        MonobitMetrics        `json:"monobit"`
+	RepetitionCount RepetitionCountMetrics `json:"repetition_count"`
+	APT            APTMetrics            `json:"apt"`
+}
+
+// MonobitMetrics represents monobit (frequency) test results
+type MonobitMetrics struct {
+	Zeros   int64   `json:"zeros"`
+	Ones    int64   `json:"ones"`
+	Total   int64   `json:"total"`
+	Average float64 `json:"average"`
+}
+
+// RepetitionCountMetrics represents repetition count test results
+type RepetitionCountMetrics struct {
+	Failures   int64 `json:"failures"`
+	CurrentRun int   `json:"current_run"`
+	LastValue  int   `json:"last_value"`
+}
+
+// APTMetrics represents adaptive proportion test results
+type APTMetrics struct {
+	WindowSize       int   `json:"window_size"`
+	Cutoff           int   `json:"cutoff"`
+	BiasCount        int64 `json:"bias_count"`
+	SamplesProcessed int64 `json:"samples_processed"`
 }
 
 // DataSourceStats represents statistics for a specific data source

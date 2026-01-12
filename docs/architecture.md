@@ -123,6 +123,9 @@ Hardware TRNG                       Cryptographic PRNG
 - Cryptographically secure output
 - High throughput generation (1000s/sec)
 - Automatic pool rotation
+- Seed quality validation (entropy and pattern checks)
+- Configurable health check intervals
+- Explicit health state management
 
 ### API Service (Port 8080)
 
@@ -516,6 +519,9 @@ func pollTRNGService(ctx context.Context, interval time.Duration) {
             // Fetch from controller
             data := fetchFromController()
             
+            // Calculate quality metrics BEFORE storing
+            qualityTracker.ProcessData(data)
+            
             // Store in database
             db.StoreTRNGData(data)
             
@@ -696,10 +702,222 @@ Response:
 
 ### Error Handling
 
-- **Retry Logic**: Not implemented (fail-fast)
-- **Fallback**: Controller uses time-based entropy if hardware unavailable
+- **Retry Logic**: Exponential backoff for recovery attempts
+- **Circuit Breaker**: Prevents request storms during persistent failures
+- **Recovery Validation**: Post-recovery validation ensures device actually works
+- **Seed Validation**: TRNG data validated before seeding Fortuna
 - **Logging**: All errors logged with context
 - **Health Checks**: Regular polling for service availability
+
+### Randomness Quality Metrics
+
+The API service continuously monitors TRNG data quality using three NIST statistical tests. Metrics are calculated **before** data is stored, ensuring real-time quality assessment.
+
+#### Data Flow with Quality Metrics
+
+```mermaid
+flowchart TD
+    A["Controller Service"] -->|"HTTP GET /generate"| B[FetchAndStoreTRNGData]
+    B -->|"Hex Decode"| C["dataBytes []byte"]
+    C -->|"Calculate Metrics"| D[TRNGQualityTracker]
+    D -->|"Update Counters"| E[QualityMetrics]
+    E -->|"Store Data"| F["DB.StoreTRNGData"]
+    
+    G["GetStatus Endpoint"] -->|"Query Metrics"| D
+    D -->|"Return Quality Stats"| H["DetailedStats with trng_quality"]
+```
+
+#### Monobit (Frequency) Test
+
+**Purpose**: Tests the proportion of zeros and ones in the entire sequence. For truly random data, the proportion should be approximately 0.5 (50% zeros, 50% ones).
+
+**What it detects**: Bias toward zeros or ones, indicating non-randomness or hardware degradation.
+
+**Calculation**:
+- Counts total bits processed
+- Separately counts zeros and ones
+- Calculates average: `average = ones / total`
+- For random data: average ≈ 0.5
+
+**Expected Values**:
+- **Healthy TRNG**: Average between 0.49 and 0.51
+- **Warning**: Average between 0.45-0.49 or 0.51-0.55
+- **Critical**: Average < 0.45 or > 0.55
+
+**Storage**: 3 int64 counters + 1 float64 = ~32 bytes
+
+**Example Output**:
+```json
+{
+  "monobit": {
+    "zeros": 12345678,
+    "ones": 12345678,
+    "total": 24691356,
+    "average": 0.5000123
+  }
+}
+```
+
+#### NIST SP 800-90B Repetition Count Test
+
+**Purpose**: Detects if a specific value repeats too many times consecutively, which would indicate hardware failure or stuck bits.
+
+**What it detects**: Consecutive identical values exceeding a threshold (default: 35 for 8-bit values).
+
+**Algorithm**:
+1. Tracks the most recent sample value
+2. Counts consecutive repetitions
+3. If count exceeds cutoff (35), increments failure counter
+4. Resets count when value changes
+
+**Expected Values**:
+- **Healthy TRNG**: `failures = 0`
+- **Warning**: `failures > 0` but infrequent
+- **Critical**: `failures` increasing rapidly
+
+**Storage**: Small circular buffer (~40 bytes) + counters = ~60 bytes
+
+**Example Output**:
+```json
+{
+  "repetition_count": {
+    "failures": 0,
+    "current_run": 1,
+    "last_value": 66
+  }
+}
+```
+
+#### NIST SP 800-90B Adaptive Proportion Test (APT)
+
+**Purpose**: Detects statistical bias by checking if the proportion of a specific value in a sliding window exceeds expected random distribution.
+
+**What it detects**: Systematic bias where certain values appear more frequently than expected in a window of samples.
+
+**Algorithm**:
+1. Maintains a sliding window of recent samples (default: 512 bytes)
+2. For each new sample, counts its occurrences in the current window
+3. Calculates cutoff: `floor(0.5 × window_size) + 3 × √(window_size × 0.25)`
+4. For 512 samples: cutoff ≈ 290
+5. If count exceeds cutoff, increments bias counter
+
+**Expected Values**:
+- **Healthy TRNG**: `bias_count = 0` or very low
+- **Warning**: `bias_count` slowly increasing
+- **Critical**: `bias_count` increasing rapidly
+
+**Storage**: Sliding window (512 bytes default, configurable) + metadata = ~536 bytes
+
+**Configuration**:
+- `TRNG_APT_WINDOW_SIZE`: Window size in bytes (default: 512, range: 256-2048)
+- Larger windows: Better bias detection, more memory
+- Smaller windows: Less memory, faster updates, may miss subtle biases
+
+**Example Output**:
+```json
+{
+  "apt": {
+    "window_size": 512,
+    "cutoff": 290,
+    "bias_count": 0,
+    "samples_processed": 123456
+  }
+}
+```
+
+#### Total Storage Requirements
+
+**Per-Tracker Storage**:
+- Monobit: ~32 bytes
+- Repetition Count: ~60 bytes
+- APT: ~536 bytes (configurable via `TRNG_APT_WINDOW_SIZE`)
+- **Total**: ~628 bytes per tracker instance
+
+**Memory Impact**: Negligible compared to queue sizes (500K items × 31 bytes = 15.5MB)
+
+#### Interpreting Metrics
+
+**Healthy TRNG Indicators**:
+- Monobit average: 0.49 - 0.51
+- Repetition count failures: 0
+- APT bias count: 0 or very low
+- All metrics stable over time
+
+**Warning Signs**:
+- Monobit average drifting away from 0.5
+- Repetition count failures appearing
+- APT bias count increasing
+- Metrics fluctuating significantly
+
+**Action Items**:
+1. **Monobit average outside 0.45-0.55**: Check hardware connections, verify I2C communication
+2. **Repetition failures**: Hardware may be stuck or degraded, check device health
+3. **APT bias detected**: Possible systematic bias, review hardware configuration
+4. **All metrics degraded**: Consider hardware replacement or service restart
+
+### Fault Tolerance and Recovery
+
+The system implements comprehensive fault tolerance mechanisms:
+
+#### Controller Recovery State Machine
+
+```mermaid
+stateDiagram-v2
+    [*] --> Unknown
+    Unknown --> Healthy: Initialize Success
+    Unknown --> Failed: Initialize Failure
+    Healthy --> Failed: Hardware Failure Detected
+    Failed --> Recovering: Start Recovery
+    Recovering --> Validating: Reinitialize Success
+    Validating --> Healthy: Validation Passes
+    Validating --> Failed: Validation Fails
+    Recovering --> Failed: Max Retries Exceeded
+    Failed --> CircuitOpen: Consecutive Failures > Threshold
+    CircuitOpen --> Recovering: Cooldown Period Expired
+```
+
+**Recovery Process:**
+1. **Detection**: Hardware failure detected (0xFF patterns, I2C errors)
+2. **Recovery Start**: Device enters RECOVERING state
+3. **Reinitialize**: I2C connection recreated, device reinitialized
+4. **Validation**: Multiple random samples generated and validated for quality
+5. **Cooldown**: Extended validation period (default 30s) with continued checks
+6. **Healthy**: Device marked HEALTHY only after all validations pass
+
+**Circuit Breaker:**
+- Opens after 5 consecutive failures
+- Rejects all requests immediately when OPEN
+- Transitions to HALF_OPEN after cooldown (default 5 minutes)
+- Closes after successful test request in HALF_OPEN state
+
+**Configuration:**
+- `CONTROLLER_RECOVERY_COOLDOWN_SECONDS`: Cooldown period (default: 30)
+- `CONTROLLER_RECOVERY_VALIDATION_ATTEMPTS`: Validation samples (default: 3)
+- `CONTROLLER_CIRCUIT_BREAKER_COOLDOWN_MINUTES`: Circuit breaker cooldown (default: 5)
+
+#### Fortuna Health Management
+
+**Health Check Criteria:**
+- Generator must be explicitly healthy (`IsHealthy = true`)
+- Last reseed must be within max interval (default: 1 hour, configurable)
+- Seed data validated for entropy and pattern quality
+
+**Seed Validation:**
+- Rejects seeds with >90% same byte value (0xFF patterns)
+- Requires minimum Shannon entropy (3.0 bits per byte)
+- Validates all seeds before accepting for reseeding
+
+**Configuration:**
+- `FORTUNA_MAX_RESEED_INTERVAL_HOURS`: Max time between reseeds (default: 1)
+
+#### Cascade Failure Prevention
+
+The API service prevents cascade failures through:
+
+1. **TRNG Data Validation**: All controller data validated before use
+2. **Seed Quality Checks**: Fortuna seeds validated for entropy
+3. **Circuit Breaker**: Stops seeding attempts when controller consistently fails
+4. **Health State Tracking**: Proper state management across services
 
 ## Security Considerations
 

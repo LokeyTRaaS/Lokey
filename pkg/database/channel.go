@@ -265,6 +265,9 @@ func (h *ChannelDBHandler) GetDetailedStats() (*DetailedStats, error) {
 	stats.Database.SizeHuman = "0 B (in-memory)"
 	stats.Database.Path = "memory://channels"
 
+	// Initialize empty quality metrics (will be populated by API server)
+	stats.TRNGQuality = QualityMetrics{}
+
 	return stats, nil
 }
 

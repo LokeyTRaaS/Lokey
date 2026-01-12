@@ -610,6 +610,9 @@ func (h *BoltDBHandler) GetDetailedStats() (*DetailedStats, error) {
 	stats.Database.SizeHuman = formatBytes(dbSize)
 	stats.Database.Path = h.GetDatabasePath()
 
+	// Initialize empty quality metrics (will be populated by API server)
+	stats.TRNGQuality = QualityMetrics{}
+
 	return stats, nil
 }
 

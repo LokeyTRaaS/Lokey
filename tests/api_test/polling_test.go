@@ -2,6 +2,7 @@ package api_test
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"net/http"
@@ -188,14 +189,22 @@ func TestServer_fetchAndStoreFortunaData(t *testing.T) {
 
 func TestServer_seedFortuna(t *testing.T) {
 	t.Run("successful seeding", func(t *testing.T) {
+		// Generate high-entropy test data
+		validSeed1 := make([]byte, 32)
+		rand.Read(validSeed1)
+		validSeed2 := make([]byte, 32)
+		rand.Read(validSeed2)
+		validSeed3 := make([]byte, 32)
+		rand.Read(validSeed3)
+
 		var seedRequestReceived bool
 		controllerServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path == "/generate" {
-				// Return multiple TRNG samples
+				// Return multiple TRNG samples with high entropy
 				data := []string{
-					hex.EncodeToString([]byte{1, 2, 3}),
-					hex.EncodeToString([]byte{4, 5, 6}),
-					hex.EncodeToString([]byte{7, 8, 9}),
+					hex.EncodeToString(validSeed1),
+					hex.EncodeToString(validSeed2),
+					hex.EncodeToString(validSeed3),
 				}
 				response := map[string]interface{}{"data": data}
 				w.Header().Set("Content-Type", "application/json")
@@ -257,9 +266,13 @@ func TestServer_seedFortuna(t *testing.T) {
 	})
 
 	t.Run("fortuna seeding error", func(t *testing.T) {
+		// Generate high-entropy test data
+		validSeed := make([]byte, 32)
+		rand.Read(validSeed)
+
 		controllerServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path == "/generate" {
-				data := []string{hex.EncodeToString([]byte{1, 2, 3})}
+				data := []string{hex.EncodeToString(validSeed)}
 				response := map[string]interface{}{"data": data}
 				w.Header().Set("Content-Type", "application/json")
 				json.NewEncoder(w).Encode(response)
@@ -284,6 +297,91 @@ func TestServer_seedFortuna(t *testing.T) {
 		}
 		if err != nil && err.Error() == "" {
 			t.Error("Expected non-empty error message")
+		}
+	})
+
+	t.Run("seed validation rejects bad data", func(t *testing.T) {
+		// Controller returns 0xFF pattern (bad data)
+		controllerServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/generate" {
+				badData := make([]byte, 32)
+				for i := range badData {
+					badData[i] = 0xFF
+				}
+				data := []string{hex.EncodeToString(badData)}
+				response := map[string]interface{}{"data": data}
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(response)
+			}
+		}))
+		defer controllerServer.Close()
+
+		fortunaServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		}))
+		defer fortunaServer.Close()
+
+		db, _ := database.NewChannelDBHandler("", 10, 20)
+		testRegistry := prometheus.NewRegistry()
+		server := api.NewServer(db, controllerServer.URL, fortunaServer.URL, 0, testRegistry)
+
+		err := server.SeedFortuna()
+		if err == nil {
+			t.Error("Expected error when TRNG data validation fails, got nil")
+		}
+		if err != nil && err.Error() == "" {
+			t.Error("Expected non-empty error message")
+		}
+	})
+}
+
+func TestValidateTRNGData(t *testing.T) {
+	t.Run("valid seeds", func(t *testing.T) {
+		validSeeds := []string{
+			hex.EncodeToString([]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32}),
+			hex.EncodeToString([]byte{100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 123, 124, 125, 126, 127, 128, 129, 130, 131}),
+		}
+		err := api.ValidateTRNGData(validSeeds)
+		if err != nil {
+			t.Errorf("Expected no error for valid seeds, got %v", err)
+		}
+	})
+
+	t.Run("invalid seeds - 0xFF pattern", func(t *testing.T) {
+		badSeed := make([]byte, 32)
+		for i := range badSeed {
+			badSeed[i] = 0xFF
+		}
+		invalidSeeds := []string{hex.EncodeToString(badSeed)}
+		err := api.ValidateTRNGData(invalidSeeds)
+		if err == nil {
+			t.Error("Expected error for invalid seeds with 0xFF pattern, got nil")
+		}
+	})
+
+	t.Run("invalid seeds - all same bytes", func(t *testing.T) {
+		badSeed := make([]byte, 32)
+		for i := range badSeed {
+			badSeed[i] = 0x42
+		}
+		invalidSeeds := []string{hex.EncodeToString(badSeed)}
+		err := api.ValidateTRNGData(invalidSeeds)
+		if err == nil {
+			t.Error("Expected error for invalid seeds with all same bytes, got nil")
+		}
+	})
+
+	t.Run("empty seeds", func(t *testing.T) {
+		err := api.ValidateTRNGData([]string{})
+		if err == nil {
+			t.Error("Expected error for empty seeds, got nil")
+		}
+	})
+
+	t.Run("invalid hex encoding", func(t *testing.T) {
+		err := api.ValidateTRNGData([]string{"not-hex"})
+		if err == nil {
+			t.Error("Expected error for invalid hex encoding, got nil")
 		}
 	})
 }

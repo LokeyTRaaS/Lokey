@@ -106,11 +106,15 @@ func TestGenerator_Reseed(t *testing.T) {
 	gen, _ := fortuna.NewGenerator(seed)
 
 	t.Run("reseed with valid seeds", func(t *testing.T) {
-		seeds := [][]byte{
-			[]byte("seed1"),
-			[]byte("seed2"),
-			[]byte("seed3"),
-		}
+		// Generate high-entropy seeds
+		seed1 := make([]byte, 32)
+		rand.Read(seed1)
+		seed2 := make([]byte, 32)
+		rand.Read(seed2)
+		seed3 := make([]byte, 32)
+		rand.Read(seed3)
+
+		seeds := [][]byte{seed1, seed2, seed3}
 
 		counterBefore := gen.GetCounter()
 		err := gen.Reseed(seeds)
@@ -140,7 +144,10 @@ func TestGenerator_Reseed(t *testing.T) {
 	t.Run("reseed multiple times", func(t *testing.T) {
 		gen3, _ := fortuna.NewGenerator(seed)
 		for i := 0; i < 5; i++ {
-			seeds := [][]byte{{byte(i)}}
+			// Generate high-entropy seed
+			validSeed := make([]byte, 32)
+			rand.Read(validSeed)
+			seeds := [][]byte{validSeed}
 			err := gen3.Reseed(seeds)
 			if err != nil {
 				t.Fatalf("Expected no error on reseed %d, got %v", i, err)
@@ -171,7 +178,9 @@ func TestGenerator_ReseedFromPools(t *testing.T) {
 		// Reseed from pools - this will use pools based on counter bits
 		// Since counter is 0, it will use pool 0 (bit 0 of 0 is 0, so no pools)
 		// Let's add events and reseed manually first to increment counter
-		gen.Reseed([][]byte{[]byte("initial")})
+		initialSeed := make([]byte, 32)
+		rand.Read(initialSeed)
+		gen.Reseed([][]byte{initialSeed})
 		gen.AddRandomEvent(0, []byte{10, 11, 12})
 
 		// Now counter is 1, so bit 0 is set, pool 0 should be used
@@ -271,7 +280,9 @@ func TestGenerator_AmplifyRandomData(t *testing.T) {
 	t.Run("amplify seed", func(t *testing.T) {
 		gen2, _ := fortuna.NewGenerator(seed)
 		// Reseed first to increment counter so ReseedFromPools can select pools
-		gen2.Reseed([][]byte{[]byte("initial")})
+		initialSeed := make([]byte, 32)
+		rand.Read(initialSeed)
+		gen2.Reseed([][]byte{initialSeed})
 
 		inputSeed := make([]byte, 64)
 		rand.Read(inputSeed)
@@ -314,7 +325,9 @@ func TestGenerator_AmplifyRandomData(t *testing.T) {
 	t.Run("large seed", func(t *testing.T) {
 		gen3, _ := fortuna.NewGenerator(seed)
 		// Reseed first to increment counter so ReseedFromPools can select pools
-		gen3.Reseed([][]byte{[]byte("initial")})
+		initialSeed := make([]byte, 32)
+		rand.Read(initialSeed)
+		gen3.Reseed([][]byte{initialSeed})
 
 		largeSeed := make([]byte, 500)
 		rand.Read(largeSeed)
@@ -344,7 +357,9 @@ func TestGenerator_HealthCheck(t *testing.T) {
 		gen, _ := fortuna.NewGenerator(seed)
 		// Manually set lastReseed to be old (requires accessing private field)
 		// Since lastReseed is private, we test by reseeding and checking it's recent
-		gen.Reseed([][]byte{[]byte("test")})
+		testSeed := make([]byte, 32)
+		rand.Read(testSeed)
+		gen.Reseed([][]byte{testSeed})
 		if !gen.HealthCheck() {
 			t.Error("Expected generator to be healthy after recent reseed")
 		}
@@ -363,7 +378,9 @@ func TestGenerator_GetLastReseedTime(t *testing.T) {
 
 	// Reseed and check time updates
 	time.Sleep(10 * time.Millisecond)
-	gen.Reseed([][]byte{[]byte("test")})
+	testSeed := make([]byte, 32)
+	rand.Read(testSeed)
+	gen.Reseed([][]byte{testSeed})
 	newTime := gen.GetLastReseedTime()
 
 	if !newTime.After(initialTime) {
@@ -388,7 +405,9 @@ func TestGenerator_GetCounter(t *testing.T) {
 
 	// Reseed (increments counter)
 	initialCounter := gen.GetCounter()
-	gen.Reseed([][]byte{[]byte("test")})
+	testSeed := make([]byte, 32)
+	rand.Read(testSeed)
+	gen.Reseed([][]byte{testSeed})
 	if gen.GetCounter() != initialCounter+1 {
 		t.Errorf("Expected counter to increment by 1 after reseed, got %d", gen.GetCounter())
 	}

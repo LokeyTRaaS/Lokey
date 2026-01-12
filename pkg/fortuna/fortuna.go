@@ -7,6 +7,9 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
+	"math"
+	"os"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -22,14 +25,15 @@ const (
 
 // Generator implements the Fortuna algorithm for random number generation
 type Generator struct {
-	key        []byte
-	Counter    uint64
-	BlockSize  int
-	cipher     cipher.Block
-	mutex      sync.Mutex
-	lastReseed time.Time
-	pools      [NumberOfPools][]byte
-	IsHealthy  bool
+	key              []byte
+	Counter          uint64
+	BlockSize        int
+	cipher           cipher.Block
+	mutex            sync.Mutex
+	lastReseed       time.Time
+	pools            [NumberOfPools][]byte
+	IsHealthy        bool
+	maxReseedInterval time.Duration
 }
 
 // NewGenerator creates a new Fortuna generator
@@ -48,14 +52,23 @@ func NewGenerator(seed []byte) (*Generator, error) {
 		return nil, fmt.Errorf("failed to create AES cipher: %w", err)
 	}
 
+	// Read max reseed interval from environment (default: 1 hour)
+	maxReseedInterval := 1 * time.Hour
+	if val, ok := os.LookupEnv("FORTUNA_MAX_RESEED_INTERVAL_HOURS"); ok {
+		if hours, err := strconv.Atoi(val); err == nil && hours > 0 {
+			maxReseedInterval = time.Duration(hours) * time.Hour
+		}
+	}
+
 	g := &Generator{
-		key:        initKey,
-		Counter:    0,
-		BlockSize:  aesCipher.BlockSize(),
-		cipher:     aesCipher,
-		mutex:      sync.Mutex{},
-		lastReseed: time.Now(),
-		IsHealthy:  true,
+		key:               initKey,
+		Counter:           0,
+		BlockSize:         aesCipher.BlockSize(),
+		cipher:            aesCipher,
+		mutex:             sync.Mutex{},
+		lastReseed:        time.Now(),
+		IsHealthy:         true,
+		maxReseedInterval: maxReseedInterval,
 	}
 
 	// Initialize pools
@@ -88,14 +101,86 @@ func (g *Generator) AddRandomEvent(source byte, value []byte) error {
 	return nil
 }
 
+// ValidateSeedQuality checks if seed data has sufficient entropy and no repeating patterns
+func ValidateSeedQuality(seed []byte) bool {
+	if len(seed) < 4 {
+		return false
+	}
+
+	// Check if all bytes are the same (common error pattern)
+	allSame := true
+	firstByte := seed[0]
+	for _, b := range seed {
+		if b != firstByte {
+			allSame = false
+			break
+		}
+	}
+	if allSame {
+		return false
+	}
+
+	// Check for 0xFF repeating (common I2C error - bus not responding)
+	ffCount := 0
+	for _, b := range seed {
+		if b == 0xFF {
+			ffCount++
+		}
+	}
+	if float64(ffCount)/float64(len(seed)) > 0.9 {
+		return false
+	}
+
+	// Check entropy (Shannon entropy)
+	entropy := calculateShannonEntropy(seed)
+	// Require at least 3.0 bits of entropy per byte (reasonable threshold)
+	if entropy < 3.0 {
+		return false
+	}
+
+	return true
+}
+
+// calculateShannonEntropy calculates the Shannon entropy of data
+func calculateShannonEntropy(data []byte) float64 {
+	if len(data) == 0 {
+		return 0
+	}
+
+	freq := make(map[byte]int)
+	for _, b := range data {
+		freq[b]++
+	}
+
+	entropy := 0.0
+	dataLen := float64(len(data))
+	for _, count := range freq {
+		if count > 0 {
+			p := float64(count) / dataLen
+			entropy -= p * math.Log2(p)
+		}
+	}
+
+	return entropy
+}
+
 // Reseed reseeds the generator using available entropy
 func (g *Generator) Reseed(seeds [][]byte) error {
 	if len(seeds) == 0 {
+		g.SetHealthy(false)
 		return fmt.Errorf("cannot reseed with empty seed list")
 	}
 
 	g.mutex.Lock()
 	defer g.mutex.Unlock()
+
+	// Validate all seeds before processing
+	for i, seed := range seeds {
+		if len(seed) > 0 && !ValidateSeedQuality(seed) {
+			g.IsHealthy = false
+			return fmt.Errorf("seed %d: invalid seed quality detected", i)
+		}
+	}
 
 	// Create a hash of all seeds
 	h := sha256.New()
@@ -113,6 +198,7 @@ func (g *Generator) Reseed(seeds [][]byte) error {
 	// Create new cipher with updated key
 	aesCipher, err := aes.NewCipher(newKey)
 	if err != nil {
+		g.IsHealthy = false
 		return fmt.Errorf("failed to create AES cipher: %w", err)
 	}
 
@@ -120,6 +206,7 @@ func (g *Generator) Reseed(seeds [][]byte) error {
 	g.cipher = aesCipher
 	g.Counter++ // Increment counter on reseed
 	g.lastReseed = time.Now()
+	g.IsHealthy = true // Mark healthy on successful reseed
 
 	return nil
 }
@@ -233,14 +320,27 @@ func (g *Generator) HealthCheck() bool {
 	g.mutex.Lock()
 	defer g.mutex.Unlock()
 
-	// Check time since last reseed
-	timeSinceReseed := time.Since(g.lastReseed)
-	if timeSinceReseed > 24*time.Hour {
-		// Haven't been reseeded in a day, might be a problem
+	// If explicitly marked unhealthy, return false
+	if !g.IsHealthy {
 		return false
 	}
 
-	return g.IsHealthy
+	// Check time since last reseed
+	timeSinceReseed := time.Since(g.lastReseed)
+	if timeSinceReseed > g.maxReseedInterval {
+		// Haven't been reseeded in max interval, might be a problem
+		// Only fail if also explicitly unhealthy
+		return false
+	}
+
+	return true
+}
+
+// SetHealthy sets the explicit health state of the generator
+func (g *Generator) SetHealthy(healthy bool) {
+	g.mutex.Lock()
+	defer g.mutex.Unlock()
+	g.IsHealthy = healthy
 }
 
 // GetLastReseedTime returns the time of the last reseed operation

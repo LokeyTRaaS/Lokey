@@ -234,10 +234,13 @@ func (p *FortunaProcessor) seedHandler(ctx *gin.Context) {
 	// Reseed the generator
 	err := p.generator.ReseedFromPools()
 	if err != nil {
+		p.generator.SetHealthy(false)
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to reseed generator"})
 		return
 	}
 
+	// Mark healthy on successful reseed
+	p.generator.SetHealthy(true)
 	// Update last reseed time
 	p.lastReseedTime = time.Now()
 

@@ -513,19 +513,34 @@ docker compose up -d
 
 ### Controller Service
 
-| Variable          | Description                        | Default | Valid Range |
-|-------------------|------------------------------------|---------|-------------|
-| `PORT`            | Controller server port             | `8081`  | 1-65535     |
-| `I2C_BUS_NUMBER`  | I2C bus for ATECC608A              | `1`     | 0-10        |
-| `FORCE_CONFIG`    | Force ATECC608A configuration      | `false` | true/false  |
-| `DISABLE_AUTO_CONFIG` | Disable automatic configuration | `false` | true/false  |
+| Variable                              | Description                                    | Default      | Valid Range |
+|---------------------------------------|------------------------------------------------|--------------|-------------|
+| `PORT`                                | Controller server port                         | `8081`       | 1-65535     |
+| `I2C_BUS_NUMBER`                      | I2C bus for ATECC608A                          | `1`           | 0-10        |
+| `FORCE_CONFIG`                         | Force ATECC608A configuration                  | `false`       | true/false  |
+| `DISABLE_AUTO_CONFIG`                 | Disable automatic configuration                 | `false`       | true/false  |
+| `CONTROLLER_RECOVERY_COOLDOWN_SECONDS`| Cooldown period after recovery (seconds)        | `30`          | 10-300      |
+| `CONTROLLER_RECOVERY_VALIDATION_ATTEMPTS` | Number of validation samples after recovery | `3`           | 1-10        |
+| `CONTROLLER_CIRCUIT_BREAKER_COOLDOWN_MINUTES` | Circuit breaker cooldown (minutes)      | `5`           | 1-60        |
+
+### API Service - Quality Metrics
+
+| Variable                  | Description                                    | Default | Valid Range |
+|---------------------------|------------------------------------------------|---------|-------------|
+| `TRNG_APT_WINDOW_SIZE`    | APT test window size in bytes                  | `512`   | 256-2048    |
+
+**APT Window Size Trade-offs**:
+- **Larger values (1024-2048)**: Better bias detection, more memory (~1-2KB), slower updates
+- **Default (512)**: Balanced detection and performance (~536 bytes)
+- **Smaller values (256-512)**: Less memory, faster updates, may miss subtle biases
 
 ### Fortuna Service
 
-| Variable               | Description                    | Default | Valid Range |
-|------------------------|--------------------------------|---------|-------------|
-| `PORT`                 | Fortuna server port            | `8082`  | 1-65535     |
-| `AMPLIFICATION_FACTOR` | Data amplification multiplier  | `4`     | 1-100       |
+| Variable                        | Description                              | Default | Valid Range |
+|---------------------------------|------------------------------------------|---------|-------------|
+| `PORT`                          | Fortuna server port                      | `8082`  | 1-65535     |
+| `AMPLIFICATION_FACTOR`          | Data amplification multiplier            | `4`     | 1-100       |
+| `FORTUNA_MAX_RESEED_INTERVAL_HOURS` | Maximum time between reseeds (hours) | `1`     | 1-24        |
 
 ### Example Configuration
 
@@ -659,6 +674,131 @@ groups:
       summary: "LoKey service is down"
 ```
 ## Troubleshooting
+
+### Controller Recovery Loop
+
+If the controller is stuck in a recovery loop:
+
+**Symptoms:**
+- Logs show repeated "recovery successful" but device still returns 0xFF patterns
+- Health checks fail immediately after recovery
+- High CPU usage from recovery attempts
+
+**Solutions:**
+1. **Check I2C Hardware:**
+   ```bash
+   # Verify device is connected
+   i2cdetect -y 1
+   # Should show 0x60 for ATECC608A
+   
+   # Check I2C permissions
+   ls -l /dev/i2c-1
+   # Should be readable/writable by container user
+   ```
+
+2. **Adjust Recovery Settings:**
+   ```yaml
+   environment:
+     - CONTROLLER_RECOVERY_VALIDATION_ATTEMPTS=5  # More validation
+     - CONTROLLER_RECOVERY_COOLDOWN_SECONDS=60    # Longer cooldown
+   ```
+
+3. **Check Circuit Breaker:**
+   - Circuit breaker opens after 5 consecutive failures
+   - Wait for cooldown period (default 5 minutes)
+   - Check logs for "Circuit breaker opened" messages
+
+4. **Hardware Diagnostics:**
+   ```bash
+   # Test I2C communication
+   docker compose exec controller i2cdetect -y 1
+   
+   # Check for I2C errors in kernel logs
+   dmesg | grep i2c
+   ```
+
+### Fortuna Health Check Failures
+
+If Fortuna shows as unhealthy:
+
+**Symptoms:**
+- Health endpoint returns 503
+- "Haven't been reseeded" errors
+- System shows degraded status
+
+**Solutions:**
+1. **Check Reseed Interval:**
+   ```yaml
+   environment:
+     - FORTUNA_MAX_RESEED_INTERVAL_HOURS=2  # Increase tolerance
+   ```
+
+2. **Verify Seeding:**
+   ```bash
+   # Check if API is successfully seeding Fortuna
+   docker compose logs api | grep "seeded Fortuna"
+   
+   # Test seeding manually
+   curl -X POST http://localhost:8082/seed \
+     -H "Content-Type: application/json" \
+     -d '{"seeds": ["a1b2c3..."]}'
+   ```
+
+3. **Check Controller Status:**
+   - Fortuna depends on controller for seeds
+   - If controller is failing, Fortuna won't get reseeded
+   - Check controller health: `curl http://localhost:8081/health`
+
+### I2C Communication Errors
+
+**Symptoms:**
+- "write /dev/i2c-1: input/output error"
+- "I2C sleep command failed"
+- Device not responding
+
+**Solutions:**
+1. **Hardware Connection:**
+   - Verify ATECC608A is properly connected
+   - Check SDA/SCL connections
+   - Verify power supply (3.3V)
+
+2. **I2C Bus Issues:**
+   ```bash
+   # Enable I2C in Raspberry Pi config
+   sudo raspi-config
+   # Interface Options -> I2C -> Enable
+   
+   # Reload I2C module
+   sudo modprobe -r i2c-dev
+   sudo modprobe i2c-dev
+   ```
+
+3. **Container Permissions:**
+   ```yaml
+   # Ensure device is accessible
+   devices:
+     - /dev/i2c-1:/dev/i2c-1
+   ```
+
+### Seed Validation Failures
+
+If seeding fails with "low quality detected":
+
+**Symptoms:**
+- "TRNG data validation failed" errors
+- "seed quality detected" messages
+- Fortuna not accepting seeds
+
+**Solutions:**
+1. **Controller Hardware Issue:**
+   - Controller returning 0xFF patterns indicates hardware failure
+   - Check I2C connection and device health
+   - May require hardware replacement
+
+2. **Temporary Workaround:**
+   - System will automatically retry
+   - Circuit breaker prevents wasted attempts
+   - Check controller recovery status
 
 ### Services Won't Start
 ```

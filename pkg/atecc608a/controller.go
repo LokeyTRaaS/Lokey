@@ -6,7 +6,9 @@ import (
 	"io"
 	"log"
 	"os"
+	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/d2r2/go-i2c"
@@ -38,6 +40,24 @@ const (
 	// Retry constants
 	maxRetries        = 10
 	initialRetryDelay = 100 * time.Millisecond
+
+	// Circuit breaker constants
+	circuitBreakerThreshold = 5
+	circuitBreakerCooldown  = 5 * time.Minute
+	defaultCooldownPeriod   = 30 * time.Second
+	validationAttempts      = 3
+)
+
+// CircuitBreakerState represents the state of the circuit breaker
+type CircuitBreakerState int32
+
+const (
+	// CircuitClosed represents normal operation
+	CircuitClosed CircuitBreakerState = iota
+	// CircuitOpen represents failure state - requests rejected
+	CircuitOpen
+	// CircuitHalfOpen represents testing state - single request allowed
+	CircuitHalfOpen
 )
 
 // LogLevel represents the logging verbosity level
@@ -124,6 +144,18 @@ type Controller struct {
 	autoConfig       bool
 	recoveryInFlight bool
 	recoveryMutex    sync.Mutex
+
+	// Circuit breaker fields
+	circuitState         atomic.Int32 // CircuitBreakerState
+	consecutiveFailures  atomic.Int64
+	lastFailureTime     atomic.Int64 // Unix timestamp
+	circuitOpenDuration  time.Duration
+	failureCount         atomic.Int64
+	recoveryStarted      atomic.Bool
+
+	// Recovery validation fields
+	recoveryCooldown     time.Duration
+	validationAttempts  int
 }
 
 // NewController creates a new ATECC608A controller
@@ -202,6 +234,28 @@ func NewController(busNumber int) (*Controller, error) {
 		log.SetOutput(logOutput)
 	}
 
+	// Read recovery configuration from environment
+	recoveryCooldown := defaultCooldownPeriod
+	if val, ok := os.LookupEnv("CONTROLLER_RECOVERY_COOLDOWN_SECONDS"); ok {
+		if sec, err := strconv.Atoi(val); err == nil && sec > 0 {
+			recoveryCooldown = time.Duration(sec) * time.Second
+		}
+	}
+
+	validationAttemptsCount := validationAttempts
+	if val, ok := os.LookupEnv("CONTROLLER_RECOVERY_VALIDATION_ATTEMPTS"); ok {
+		if attempts, err := strconv.Atoi(val); err == nil && attempts > 0 {
+			validationAttemptsCount = attempts
+		}
+	}
+
+	circuitOpenDuration := circuitBreakerCooldown
+	if val, ok := os.LookupEnv("CONTROLLER_CIRCUIT_BREAKER_COOLDOWN_MINUTES"); ok {
+		if minutes, err := strconv.Atoi(val); err == nil && minutes > 0 {
+			circuitOpenDuration = time.Duration(minutes) * time.Minute
+		}
+	}
+
 	controller := &Controller{
 		i2c:              i2c,
 		LastError:        nil,
@@ -209,7 +263,11 @@ func NewController(busNumber int) (*Controller, error) {
 		state:            DeviceStateUnknown,
 		autoConfig:       true, // Enable auto-configuration by default
 		recoveryInFlight: false,
+		circuitOpenDuration: circuitOpenDuration,
+		recoveryCooldown:    recoveryCooldown,
+		validationAttempts:  validationAttemptsCount,
 	}
+	controller.circuitState.Store(int32(CircuitClosed))
 
 	// Read environment variable to check if auto-config is disabled
 	if val, ok := os.LookupEnv("DISABLE_AUTO_CONFIG"); ok && val == "true" {
@@ -281,14 +339,32 @@ func (c *Controller) startRecovery() {
 		if err := c.reinitialize(); err != nil {
 			logWarn("ATECC608A recovery attempt %d/%d failed: %v", attempt, maxRetries, err)
 			delay *= 2 // Exponential backoff
-		} else {
-			logWarn("ATECC608A recovery successful on attempt %d/%d", attempt, maxRetries)
-			c.setState(DeviceStateHealthy)
-			c.recoveryMutex.Lock()
-			c.recoveryInFlight = false
-			c.recoveryMutex.Unlock()
-			return
+			continue
 		}
+
+		// NEW: Validate device health after reinitialize
+		if err := c.validateDeviceHealth(); err != nil {
+			logWarn("ATECC608A recovery validation failed on attempt %d/%d: %v", attempt, maxRetries, err)
+			delay *= 2 // Exponential backoff
+			continue
+		}
+
+		// NEW: Cooldown period with continued validation
+		if err := c.recoveryCooldownPeriod(); err != nil {
+			logWarn("ATECC608A recovery cooldown validation failed on attempt %d/%d: %v", attempt, maxRetries, err)
+			delay *= 2 // Exponential backoff
+			continue
+		}
+
+		// Recovery successful - reset failure counters
+		logWarn("ATECC608A recovery successful on attempt %d/%d", attempt, maxRetries)
+		c.consecutiveFailures.Store(0)
+		c.circuitState.Store(int32(CircuitClosed))
+		c.setState(DeviceStateHealthy)
+		c.recoveryMutex.Lock()
+		c.recoveryInFlight = false
+		c.recoveryMutex.Unlock()
+		return
 	}
 
 	// All retries exhausted
@@ -323,6 +399,88 @@ func (c *Controller) reinitialize() error {
 
 	// Initialize the device
 	return c.initializeUnlocked()
+}
+
+// validateDeviceHealth generates random samples and validates they're not repeating patterns
+func (c *Controller) validateDeviceHealth() error {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+
+	delays := []time.Duration{10 * time.Millisecond, 20 * time.Millisecond, 40 * time.Millisecond}
+	maxAttempts := c.validationAttempts
+	if maxAttempts > len(delays) {
+		maxAttempts = len(delays)
+	}
+
+	for i := 0; i < maxAttempts; i++ {
+		// Generate random data
+		err := c.sendCommand(cmdRandom, 0x00, 0x0000, nil)
+		if err != nil {
+			return fmt.Errorf("validation attempt %d: failed to send random command: %w", i+1, err)
+		}
+
+		response, err := c.getResponse(32, randomExecTime)
+		if err != nil {
+			return fmt.Errorf("validation attempt %d: failed to get random response: %w", i+1, err)
+		}
+
+		if len(response) > 1 {
+			randomData := response[1:]
+			if isRepeatingPattern(randomData) {
+				return fmt.Errorf("validation attempt %d: repeating pattern detected", i+1)
+			}
+		} else {
+			return fmt.Errorf("validation attempt %d: response too short", i+1)
+		}
+
+		c.idle()
+
+		// Wait before next attempt (except last)
+		if i < maxAttempts-1 {
+			time.Sleep(delays[i])
+		}
+	}
+
+	return nil
+}
+
+// recoveryCooldownPeriod waits for cooldown period while continuing to validate
+func (c *Controller) recoveryCooldownPeriod() error {
+	cooldownEnd := time.Now().Add(c.recoveryCooldown)
+	checkInterval := c.recoveryCooldown / 3
+	if checkInterval < 1*time.Second {
+		checkInterval = 1 * time.Second
+	}
+
+	for time.Now().Before(cooldownEnd) {
+		time.Sleep(checkInterval)
+		// Validate during cooldown
+		if err := c.validateDeviceHealth(); err != nil {
+			return fmt.Errorf("cooldown validation failed: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// isCircuitOpen checks if circuit breaker is open
+func (c *Controller) isCircuitOpen() bool {
+	state := CircuitBreakerState(c.circuitState.Load())
+	if state == CircuitOpen {
+		// Check if cooldown period has expired
+		lastFailure := c.lastFailureTime.Load()
+		if lastFailure > 0 {
+			elapsed := time.Since(time.Unix(lastFailure, 0))
+			if elapsed >= c.circuitOpenDuration {
+				// Transition to half-open for testing
+				c.circuitState.Store(int32(CircuitHalfOpen))
+				logWarn("Circuit breaker transitioning to HALF_OPEN for testing")
+				return false
+			}
+		}
+		return true
+	}
+	return false
 }
 
 // initialize configures the device for random number generation
@@ -616,9 +774,31 @@ func (c *Controller) CalculateAdafruitCRC(data []byte) uint16 {
 
 // GenerateRandom generates random bytes - ONLY from ATECC608A, no fallback
 func (c *Controller) GenerateRandom() ([]byte, error) {
-	// Check device state first - fail fast if not healthy
+	// Check circuit breaker first - fail fast if open
+	if c.isCircuitOpen() {
+		return nil, fmt.Errorf("ATECC608A circuit breaker is OPEN")
+	}
+
+	// Check device state - fail fast if not healthy
 	if c.getState() != DeviceStateHealthy {
 		return nil, fmt.Errorf("ATECC608A device not healthy (state: %d)", c.getState())
+	}
+
+	// If circuit is half-open, this is a test request
+	state := CircuitBreakerState(c.circuitState.Load())
+	if state == CircuitHalfOpen {
+		// Test request - if it succeeds, close circuit; if fails, open it
+		defer func() {
+			if c.LastError == nil {
+				c.circuitState.Store(int32(CircuitClosed))
+				c.consecutiveFailures.Store(0)
+				logWarn("Circuit breaker closed after successful test request")
+			} else {
+				c.circuitState.Store(int32(CircuitOpen))
+				c.lastFailureTime.Store(time.Now().Unix())
+				logError("Circuit breaker reopened after failed test request")
+			}
+		}()
 	}
 
 	c.mutex.Lock()
@@ -670,11 +850,39 @@ func (c *Controller) GenerateRandom() ([]byte, error) {
 }
 
 // handleDeviceFailure marks device as failed and starts recovery
+// Uses atomic operations to prevent race conditions
 func (c *Controller) handleDeviceFailure() {
-	if c.getState() == DeviceStateHealthy {
-		c.setState(DeviceStateFailed)
-		c.startRecovery()
+	// Only start recovery if device is currently healthy
+	if c.getState() != DeviceStateHealthy {
+		return
 	}
+
+	// Use atomic compare-and-swap to ensure only one recovery starts
+	if !c.recoveryStarted.CompareAndSwap(false, true) {
+		// Recovery already started by another goroutine
+		return
+	}
+
+	// Increment failure count
+	c.failureCount.Add(1)
+	c.consecutiveFailures.Add(1)
+	c.lastFailureTime.Store(time.Now().Unix())
+
+	// Check circuit breaker threshold
+	if c.consecutiveFailures.Load() >= circuitBreakerThreshold {
+		c.circuitState.Store(int32(CircuitOpen))
+		logError("Circuit breaker opened after %d consecutive failures", circuitBreakerThreshold)
+		// Reset recovery flag to allow circuit breaker recovery later
+		c.recoveryStarted.Store(false)
+		return
+	}
+
+	c.setState(DeviceStateFailed)
+	go func() {
+		c.startRecovery()
+		// Reset recovery flag after recovery completes
+		c.recoveryStarted.Store(false)
+	}()
 }
 
 // isRepeatingPattern checks if data has suspicious repeating patterns

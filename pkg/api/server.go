@@ -5,7 +5,10 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
+	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -31,6 +34,15 @@ type Server struct {
 	registry       *prometheus.Registry
 	consumeMode    bool         // Global consume setting
 	consumeMutex   sync.RWMutex // Protects consumeMode
+
+	// Seeding circuit breaker
+	seedingFailures    atomic.Int64
+	seedingCircuitOpen atomic.Bool
+	lastSeedingFailure atomic.Int64 // Unix timestamp
+	seedingCooldown    time.Duration
+
+	// TRNG quality metrics tracker
+	trngQualityTracker *TRNGQualityTracker
 }
 
 // QueueConfig represents the queue configuration
@@ -161,6 +173,14 @@ func NewServer(db database.DBHandler, controllerAddr, fortunaAddr string, port i
 		metrics.DatabaseSizeBytes,
 	)
 
+	// Read APT window size from environment (default: 512)
+	aptWindowSize := 512
+	if val, ok := os.LookupEnv("TRNG_APT_WINDOW_SIZE"); ok {
+		if size, err := strconv.Atoi(val); err == nil && size >= 256 && size <= 2048 {
+			aptWindowSize = size
+		}
+	}
+
 	server := &Server{
 		DB:             db,
 		ControllerAddr: controllerAddr,
@@ -171,6 +191,8 @@ func NewServer(db database.DBHandler, controllerAddr, fortunaAddr string, port i
 		metrics:        metrics,
 		registry:       reg,
 		consumeMode:    false, // Default: don't consume (read-only mode)
+		seedingCooldown: 5 * time.Minute, // Default cooldown for seeding circuit breaker
+		trngQualityTracker: NewTRNGQualityTracker(aptWindowSize),
 	}
 
 	server.setupRoutes()
@@ -502,6 +524,9 @@ func (s *Server) GetStatus(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get system status"})
 		return
 	}
+
+	// Add quality metrics from tracker
+	stats.TRNGQuality = s.trngQualityTracker.GetQualityMetrics()
 
 	// Update Prometheus metrics
 	s.metrics.TRNGQueueCurrent.Set(float64(stats.TRNG.QueueCurrent))

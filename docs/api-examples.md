@@ -99,6 +99,142 @@ Verify all services are operational:
 bash
 curl http://localhost:8080/api/v1/health
 ```
+
+**Response:**
+```json
+{
+  "status": "ok",
+  "timestamp": "2026-01-12T10:00:00Z",
+  "details": {
+    "api": true,
+    "controller": true,
+    "fortuna": true,
+    "database": true
+  }
+}
+```
+
+### Get System Status with Quality Metrics
+
+Get comprehensive system statistics including TRNG quality metrics:
+```
+bash
+curl http://localhost:8080/api/v1/status
+```
+
+**Response:**
+```json
+{
+  "trng": {
+    "polling_count": 509976,
+    "queue_current": 89630,
+    "queue_capacity": 500000,
+    "queue_percentage": 17.926,
+    "queue_dropped": 9872,
+    "consumed_count": 410474,
+    "unconsumed_count": 89630,
+    "total_generated": 509976
+  },
+  "fortuna": {
+    "polling_count": 61886098,
+    "queue_current": 10000,
+    "queue_capacity": 10000,
+    "queue_percentage": 100,
+    "queue_dropped": 61876098,
+    "consumed_count": 0,
+    "unconsumed_count": 10000,
+    "total_generated": 61886098
+  },
+  "database": {
+    "size_bytes": 0,
+    "size_human": "0 B (in-memory)",
+    "path": "memory://channels"
+  },
+  "trng_quality": {
+    "monobit": {
+      "zeros": 12345678,
+      "ones": 12345678,
+      "total": 24691356,
+      "average": 0.5000123
+    },
+    "repetition_count": {
+      "failures": 0,
+      "current_run": 1,
+      "last_value": 66
+    },
+    "apt": {
+      "window_size": 512,
+      "cutoff": 290,
+      "bias_count": 0,
+      "samples_processed": 123456
+    }
+  }
+}
+```
+
+### Interpreting Quality Metrics
+
+**Monobit Test**:
+- **`average`**: Proportion of ones in the sequence
+  - **Good**: 0.49 - 0.51 (close to 0.5)
+  - **Warning**: 0.45 - 0.49 or 0.51 - 0.55
+  - **Critical**: < 0.45 or > 0.55
+- **`zeros`**, **`ones`**, **`total`**: Raw bit counts for monitoring
+
+**Repetition Count Test**:
+- **`failures`**: Number of times a value repeated >35 times consecutively
+  - **Good**: 0 (no failures detected)
+  - **Warning**: > 0 but stable
+  - **Critical**: Increasing rapidly
+- **`current_run`**: Current consecutive repetition count
+- **`last_value`**: Most recent sample value (decimal)
+
+**Adaptive Proportion Test (APT)**:
+- **`bias_count`**: Number of times bias detected in sliding window
+  - **Good**: 0 or very low
+  - **Warning**: Slowly increasing
+  - **Critical**: Increasing rapidly
+- **`window_size`**: Size of sliding window (configurable via `TRNG_APT_WINDOW_SIZE`)
+- **`cutoff`**: Threshold for bias detection (calculated from window size)
+- **`samples_processed`**: Total samples analyzed
+
+**Example: Healthy TRNG**:
+```json
+{
+  "trng_quality": {
+    "monobit": {
+      "average": 0.5001,
+      "total": 1000000
+    },
+    "repetition_count": {
+      "failures": 0
+    },
+    "apt": {
+      "bias_count": 0,
+      "samples_processed": 100000
+    }
+  }
+}
+```
+
+**Example: Degraded TRNG**:
+```json
+{
+  "trng_quality": {
+    "monobit": {
+      "average": 0.47,
+      "total": 1000000
+    },
+    "repetition_count": {
+      "failures": 5
+    },
+    "apt": {
+      "bias_count": 12,
+      "samples_processed": 100000
+    }
+  }
+}
+```
 **Response:**
 ```
 json

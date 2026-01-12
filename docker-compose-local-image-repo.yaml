@@ -17,6 +17,7 @@ services:
       - FORTUNA_QUEUE_SIZE=10000
       - TRNG_POLL_INTERVAL_MS=100
       - FORTUNA_POLL_INTERVAL_MS=100
+      - TRNG_APT_WINDOW_SIZE=512
     image: ${DEV_MACHINE_IP:-localhost}:5000/lokey-api:latest
     ports:
       - '8080:8080'

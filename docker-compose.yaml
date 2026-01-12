@@ -37,6 +37,7 @@ x-api-env: &api-env
   FORTUNA_QUEUE_SIZE: 10000 #For raspberry pi zero 2 max 1000 of 256 bit items, note that these settings are optimistic and assume the device to solely be used for random number generation.
   TRNG_POLL_INTERVAL_MS: 100
   FORTUNA_POLL_INTERVAL_MS: 100
+  TRNG_APT_WINDOW_SIZE: 512 # APT test window size in bytes (256-2048)
 
 x-controller-common: &controller-common
   deploy:
