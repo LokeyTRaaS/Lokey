@@ -1,0 +1,36 @@
+FROM alpine:latest
+
+# OCI Labels
+LABEL org.opencontainers.image.title="LoKey VirtIO"
+LABEL org.opencontainers.image.description="VirtIO RNG service for virtualized environments"
+LABEL org.opencontainers.image.url="https://lokey.cloud"
+LABEL org.opencontainers.image.source="https://github.com/LokeyTRaaS/Lokey"
+LABEL org.opencontainers.image.licenses="MIT"
+LABEL org.opencontainers.image.vendor="LoKey TRaaS"
+LABEL org.opencontainers.image.documentation="https://github.com/LokeyTRaaS/Lokey/blob/main/README.md"
+
+# Add runtime dependencies
+# ca-certificates: HTTPS support
+# wget: Health check support
+RUN apk --no-cache add ca-certificates wget
+
+WORKDIR /app
+
+# Copy pre-built binary (standardized name created in CI)
+COPY build/lokey-virtio /app/lokey-virtio
+
+# Set environment variables
+ENV PORT=8083 \
+    RNG_DEVICE=/dev/hwrng \
+    VIRTIO_QUEUE_SIZE=500000 \
+    LOG_LEVEL=INFO
+
+# Expose the port
+EXPOSE 8083
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+  CMD wget --no-verbose --tries=1 -O /dev/null http://localhost:8083/health || exit 1
+
+# Run the application
+CMD ["/app/lokey-virtio"]

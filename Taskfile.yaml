@@ -8,6 +8,7 @@ vars:
     - "./cmd/controller"
     - "./cmd/api"
     - "./cmd/fortuna"
+    - "./cmd/virtio"
 
 tasks:
   default:
@@ -18,7 +19,7 @@ tasks:
   init:
     desc: Initialize the project
     cmds:
-      - mkdir -p cmd/controller cmd/api cmd/fortuna pkg/api/docs
+      - mkdir -p cmd/controller cmd/api cmd/fortuna cmd/virtio pkg/api/docs
       - |
         if [ ! -f go.mod ]; then
           go mod init github.com/lokey/rng-service
@@ -126,6 +127,12 @@ tasks:
           cd cmd/fortuna && go build -o {{.BUILD_DIR}}/fortuna || echo "Fortuna build failed"
         else
           echo "Skipping Fortuna build - directory or main.go not found"
+        fi
+      - |
+        if [ -d cmd/virtio ] && [ -f cmd/virtio/main.go ]; then
+          cd cmd/virtio && go build -o {{.BUILD_DIR}}/virtio || echo "VirtIO build failed"
+        else
+          echo "Skipping VirtIO build - directory or main.go not found"
         fi
 
   test:
@@ -238,6 +245,7 @@ tasks:
       - echo "=== All tasks completed ==="
 
   build_controller:
+    desc: Build controller image and push to registry
     cmds:
       - >
         docker buildx build --platform linux/arm64/v8
@@ -249,6 +257,7 @@ tasks:
         .
 
   build_api:
+    desc: Build API image and push to registry
     cmds:
       - >
         docker buildx build --platform linux/arm64/v8
@@ -260,6 +269,7 @@ tasks:
         .
 
   build_fortuna:
+    desc: Build Fortuna image and push to registry
     cmds:
       - >
         docker buildx build --platform linux/arm64/v8
@@ -270,24 +280,112 @@ tasks:
         --allow network.host
         .
 
+  build_virtio:
+    desc: Build VirtIO image and push to registry
+    cmds:
+      - >
+        docker buildx build --platform linux/arm64/v8
+        -t lokey-registry:5000/lokey-virtio:latest
+        -f cmd/virtio/Dockerfile
+        --push
+        --allow security.insecure
+        --allow network.host
+        .
+
+  build_controller_local:
+    desc: Build controller image locally (without pushing to registry)
+    cmds:
+      - >
+        docker buildx build --platform linux/arm64/v8
+        -t lokey-controller:latest
+        -f cmd/controller/Dockerfile
+        --load
+        --allow security.insecure
+        --allow network.host
+        .
+
+  build_api_local:
+    desc: Build API image locally (without pushing to registry)
+    cmds:
+      - >
+        docker buildx build --platform linux/arm64/v8
+        -t lokey-api:latest
+        -f cmd/api/Dockerfile
+        --load
+        --allow security.insecure
+        --allow network.host
+        .
+
+  build_fortuna_local:
+    desc: Build Fortuna image locally (without pushing to registry)
+    cmds:
+      - >
+        docker buildx build --platform linux/arm64/v8
+        -t lokey-fortuna:latest
+        -f cmd/fortuna/Dockerfile
+        --load
+        --allow security.insecure
+        --allow network.host
+        .
+
+  build_virtio_local:
+    desc: Build VirtIO image locally (without pushing to registry)
+    cmds:
+      - >
+        docker buildx build --platform linux/arm64/v8
+        -t lokey-virtio:latest
+        -f cmd/virtio/Dockerfile
+        --load
+        --allow security.insecure
+        --allow network.host
+        .
+
   _build_all_containers_parallel:
-    desc: Build all containers in parallel
+    desc: Build all containers in parallel (for registry)
     deps:
       - build_controller
       - build_api
       - build_fortuna
+      - build_virtio
     run: once
 
   _build_all_containers_sequential:
-    desc: Build all containers in sequential order
+    desc: Build all containers in sequential order (for registry)
     run: once
     cmds:
       - task: build_controller
       - task: build_api
       - task: build_fortuna
+      - task: build_virtio
+
+  _build_all_containers_local_parallel:
+    desc: Build all containers locally in parallel (without pushing)
+    deps:
+      - build_controller_local
+      - build_api_local
+      - build_fortuna_local
+      - build_virtio_local
+    run: once
+
+  _build_all_containers_local_sequential:
+    desc: Build all containers locally in sequential order (without pushing)
+    run: once
+    cmds:
+      - task: build_controller_local
+      - task: build_api_local
+      - task: build_fortuna_local
+      - task: build_virtio_local
+
+  build_images_local:
+    desc: Build all images locally without pushing to registry
+    cmds:
+      - echo "Building all images locally (without pushing to registry)..."
+      - task: _build_all_containers_local_sequential
 
   build_images_and_registry:
+    desc: Setup local registry and build all images (for network access)
     cmds:
+      - echo "Setting up local Docker registry and building all images..."
       - docker network create lokey-net || true
       - docker rm -f registry || true
       - docker run -d --name registry --network lokey-net --network-alias lokey-registry -p 5000:5000 registry:2

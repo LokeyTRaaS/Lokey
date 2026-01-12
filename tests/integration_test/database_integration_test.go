@@ -12,7 +12,7 @@ import (
 func setupBoltDBForIntegration(t *testing.T) (*database.BoltDBHandler, func()) {
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "test.db")
-	handler, err := database.NewBoltDBHandler(dbPath, 10, 20)
+	handler, err := database.NewBoltDBHandler(dbPath, 10, 20, 15)
 	if err != nil {
 		t.Fatalf("Failed to create BoltDB handler: %v", err)
 	}
@@ -30,7 +30,7 @@ func TestDatabaseImplementations(t *testing.T) {
 		{
 			name: "ChannelDBHandler",
 			setup: func(t *testing.T) (database.DBHandler, func()) {
-				db, _ := database.NewChannelDBHandler("", 10, 20)
+				db, _ := database.NewChannelDBHandler("", 10, 20, 15)
 				return db, func() { db.Close() }
 			},
 		},
@@ -140,7 +140,7 @@ func TestDatabaseImplementations(t *testing.T) {
 			})
 
 			t.Run("Update queue sizes", func(t *testing.T) {
-				err := db.UpdateQueueSizes(15, 25)
+				err := db.UpdateQueueSizes(15, 25, 20)
 				if impl.name == "ChannelDBHandler" {
 					// ChannelDBHandler doesn't support UpdateQueueSizes
 					if err == nil {
@@ -308,7 +308,7 @@ func TestDatabaseImplementations(t *testing.T) {
 func TestDatabaseConsistency(t *testing.T) {
 	// Setup both implementations
 	channelDB, cleanupChannel := func() (database.DBHandler, func()) {
-		db, _ := database.NewChannelDBHandler("", 10, 20)
+		db, _ := database.NewChannelDBHandler("", 10, 20, 15)
 		return db, func() { db.Close() }
 	}()
 

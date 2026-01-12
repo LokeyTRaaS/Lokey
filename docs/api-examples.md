@@ -108,6 +108,7 @@ curl http://localhost:8080/api/v1/health
   "details": {
     "api": true,
     "controller": true,
+    "virtio": true,
     "fortuna": true,
     "database": true
   }
@@ -245,6 +246,7 @@ json
 "api": true,
 "controller": true,
 "fortuna": true,
+"virtio": true,
 "database": true
 }
 }
@@ -311,7 +313,8 @@ curl http://localhost:8080/api/v1/config/queue
 json
 {
 "trng_queue_size": 100,
-"fortuna_queue_size": 100
+"fortuna_queue_size": 100,
+"virtio_queue_size": 500000
 }
 ```
 ### Update Queue Sizes
@@ -659,7 +662,7 @@ database_size_bytes
 - `format` is one of the supported types
 - `limit` is between 1 and 100,000
 - `offset` is >= 0
-- `source` is either "trng" or "fortuna"
+- `source` is either "trng" or "fortuna" (VirtIO is a consumer endpoint, not a data source)
 - JSON is properly formatted
 
 ### Service Unavailable
@@ -729,6 +732,174 @@ random_ints = get_random_data(format="int32", limit=100, source="fortuna")
 random_bytes = get_random_bytes(32, source="trng")
 ```
 
+
+## VirtIO Access Methods
+
+The VirtIO service provides two high-performance access methods for random data:
+
+1. **Named Pipe (FIFO)**: For local VMs (QEMU, Proxmox, VirtualBox, VMware) - ~500x faster than legacy EGD
+2. **HTTP Streaming**: For remote servers and Kubernetes sidecars
+
+### Named Pipe (FIFO) Usage
+
+The named pipe provides the highest performance for local hypervisor access. It's a standard Unix FIFO that hypervisors can read from directly.
+
+**Default Path**: `/var/run/lokey/virtio-rng` (configurable via `VIRTIO_PIPE_PATH`)
+
+**Reading from Named Pipe:**
+```bash
+# Read 32 bytes from pipe
+dd if=/var/run/lokey/virtio-rng bs=32 count=1
+
+# Continuous reading (for testing)
+cat /var/run/lokey/virtio-rng | hexdump -C
+
+# Read specific amount
+head -c 1024 /var/run/lokey/virtio-rng > random_data.bin
+```
+
+**Python Example:**
+```python
+# Read from named pipe
+with open('/var/run/lokey/virtio-rng', 'rb') as pipe:
+    data = pipe.read(32)  # Read 32 bytes
+    print(f"Received: {data.hex()}")
+```
+
+**QEMU Configuration:**
+```bash
+# Start QEMU with named pipe as RNG source
+qemu-system-x86_64 \
+  -object rng-random,id=rng0,filename=/var/run/lokey/virtio-rng \
+  -device virtio-rng-pci,rng=rng0 \
+  ...
+```
+
+**Proxmox Configuration:**
+```bash
+# Set RNG device for VM
+qm set <vmid> -rng0 /var/run/lokey/virtio-rng
+```
+
+### HTTP Streaming Usage
+
+The HTTP streaming endpoint provides network-based access for remote servers and Kubernetes sidecars.
+
+**Endpoint**: `GET /stream`
+
+**Query Parameters:**
+- `chunk_size` (optional, default: 1024): Bytes per chunk
+- `max_bytes` (optional): Maximum total bytes to stream
+
+**Basic Usage:**
+```bash
+# Stream data continuously
+curl -N http://virtio:8083/stream
+
+# Stream with custom chunk size
+curl -N "http://virtio:8083/stream?chunk_size=2048"
+
+# Stream with maximum bytes limit
+curl -N "http://virtio:8083/stream?chunk_size=1024&max_bytes=10000" > random_data.bin
+```
+
+**Python Example:**
+```python
+import requests
+
+# Stream data continuously
+response = requests.get(
+    'http://virtio:8083/stream',
+    params={'chunk_size': 1024, 'max_bytes': 10000},
+    stream=True
+)
+
+for chunk in response.iter_content(chunk_size=1024):
+    if chunk:
+        print(f"Received {len(chunk)} bytes: {chunk.hex()[:64]}...")
+```
+
+**Go Example:**
+```go
+package main
+
+import (
+    "io"
+    "net/http"
+    "os"
+)
+
+func main() {
+    resp, err := http.Get("http://virtio:8083/stream?chunk_size=1024")
+    if err != nil {
+        panic(err)
+    }
+    defer resp.Body.Close()
+
+    // Stream to file
+    file, _ := os.Create("random_data.bin")
+    defer file.Close()
+
+    io.Copy(file, resp.Body)
+}
+```
+
+**Kubernetes Sidecar Example:**
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: app-with-random
+spec:
+  containers:
+  - name: app
+    image: myapp:latest
+    volumeMounts:
+    - name: virtio-rng
+      mountPath: /dev/virtio-rng
+      readOnly: true
+  - name: virtio-sidecar
+    image: lokey/virtio-sidecar:latest
+    env:
+    - name: VIRTIO_API_URL
+      value: "http://virtio-service:8083"
+    - name: PIPE_PATH
+      value: "/dev/virtio-rng"
+    volumeMounts:
+    - name: virtio-rng
+      mountPath: /dev
+```
+
+### Named Pipe vs HTTP Streaming
+
+| Feature | Named Pipe (FIFO) | HTTP Streaming |
+|---------|------------------|----------------|
+| **Path/Endpoint** | `/var/run/lokey/virtio-rng` | `GET /stream` |
+| **Protocol** | Unix FIFO | HTTP chunked |
+| **Latency** | Very low (~0.1ms) | Low (~1-5ms) |
+| **Throughput** | ~500x faster than EGD | High (network dependent) |
+| **Use Case** | Local VMs (QEMU, Proxmox, etc.) | Remote servers, Kubernetes |
+| **Max Request** | Unlimited | Configurable via query params |
+| **Access** | Local filesystem only | Network accessible |
+| **Setup** | Requires volume mount | Standard HTTP |
+
+### Configuration
+
+**Environment Variables:**
+- `VIRTIO_PIPE_PATH`: Named pipe filesystem path (default: `/var/run/lokey/virtio-rng`)
+- `VIRTIO_QUEUE_SIZE`: Internal queue capacity (default: 15000 items ≈ 480 KB)
+
+**Example Docker Compose:**
+```yaml
+virtio:
+  environment:
+    - VIRTIO_PIPE_PATH=/var/run/lokey/virtio-rng
+    - VIRTIO_QUEUE_SIZE=15000
+  volumes:
+    - /var/run/lokey:/var/run/lokey
+  ports:
+    - '8083:8083'  # HTTP API
+```
 
 ## Next Steps
 

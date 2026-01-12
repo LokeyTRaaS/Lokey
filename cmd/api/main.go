@@ -21,10 +21,11 @@ import (
 // @description     The system uses a Raspberry Pi Zero 2W and an ATECC608A cryptographic chip, creating a hardware-based solution with a modest bill of materials costing approximately €50. This provides true random number generation (TRNG) from physical entropy sources rather than algorithmic pseudo-random generation.
 // @description
 // @description     ## System Architecture
-// @description     LoKey consists of three microservices:
+// @description     LoKey consists of four microservices:
 // @description     - **Controller Service**: Interfaces with the ATECC608A chip to harvest true random numbers and process SHA-256 hashes
 // @description     - **Fortuna Service**: Amplifies the entropy using the Fortuna algorithm for enhanced randomness
-// @description     - **API Service**: Provides endpoints for configuration and both raw TRNG and Fortuna-amplified data retrieval
+// @description     - **VirtIO Service**: Provides high-performance random data access for virtualization via named pipe (FIFO) and HTTP streaming, serving VMs/containers
+// @description     - **API Service**: Provides endpoints for configuration, data retrieval from TRNG and Fortuna, and VirtIO seeding management
 // @description
 // @description     ## Use Cases
 // @description     This service is valuable for cryptographic key generation, password management, blockchain applications, Monte Carlo simulations, gaming systems, IoT device authentication, secure communications, financial services, and scientific research requiring provably random data.
@@ -50,10 +51,15 @@ const (
 	DefaultDbPath              = "/data/api.db"
 	DefaultControllerAddr      = "http://controller:8081"
 	DefaultFortunaAddr         = "http://fortuna:8082"
+	DefaultVirtioAddr          = "http://virtio:8083"
 	DefaultTRNGQueueSize       = 1000000
 	DefaultFortunaQueueSize    = 1000000
+	DefaultVirtIOQueueSize     = 500000
 	DefaultTRNGPollInterval    = 100 * time.Millisecond
 	DefaultFortunaPollInterval = 100 * time.Millisecond
+	DefaultVirtIOPollInterval  = 100 * time.Millisecond
+	DefaultVirtIOSeedingSource = "trng"
+	DefaultVirtIOSeedInterval  = 30 * time.Second
 )
 
 func main() {
@@ -81,6 +87,11 @@ func main() {
 		fortunaAddr = val
 	}
 
+	virtioAddr := DefaultVirtioAddr
+	if val, ok := os.LookupEnv("VIRTIO_ADDR"); ok && val != "" {
+		virtioAddr = val
+	}
+
 	trngQueueSize := DefaultTRNGQueueSize
 	if val, ok := os.LookupEnv("TRNG_QUEUE_SIZE"); ok {
 		if n, err := fmt.Sscanf(val, "%d", &trngQueueSize); n != 1 || err != nil {
@@ -94,6 +105,14 @@ func main() {
 		if n, err := fmt.Sscanf(val, "%d", &fortunaQueueSize); n != 1 || err != nil {
 			log.Printf("Invalid FORTUNA_QUEUE_SIZE, using default: %d", DefaultFortunaQueueSize)
 			fortunaQueueSize = DefaultFortunaQueueSize
+		}
+	}
+
+	virtioQueueSize := DefaultVirtIOQueueSize
+	if val, ok := os.LookupEnv("VIRTIO_QUEUE_SIZE"); ok {
+		if n, err := fmt.Sscanf(val, "%d", &virtioQueueSize); n != 1 || err != nil {
+			log.Printf("Invalid VIRTIO_QUEUE_SIZE, using default: %d", DefaultVirtIOQueueSize)
+			virtioQueueSize = DefaultVirtIOQueueSize
 		}
 	}
 
@@ -115,15 +134,36 @@ func main() {
 	}
 	fortunaPollInterval := time.Duration(fortunaPollIntervalMs) * time.Millisecond
 
+	virtioPollIntervalMs := DefaultVirtIOPollInterval.Milliseconds()
+	if val, ok := os.LookupEnv("VIRTIO_POLL_INTERVAL_MS"); ok {
+		if n, err := fmt.Sscanf(val, "%d", &virtioPollIntervalMs); n != 1 || err != nil {
+			log.Printf("Invalid VIRTIO_POLL_INTERVAL_MS, using default: %d", DefaultVirtIOPollInterval.Milliseconds())
+			virtioPollIntervalMs = DefaultVirtIOPollInterval.Milliseconds()
+		}
+	}
+	virtioPollInterval := time.Duration(virtioPollIntervalMs) * time.Millisecond
+
+	virtioSeedingSource := DefaultVirtIOSeedingSource
+	if val, ok := os.LookupEnv("VIRTIO_SEEDING_SOURCE"); ok && val != "" {
+		if val == "trng" || val == "fortuna" || val == "both" {
+			virtioSeedingSource = val
+		} else {
+			log.Printf("Invalid VIRTIO_SEEDING_SOURCE, using default: %s", DefaultVirtIOSeedingSource)
+		}
+	}
+
 	// Initialize database using the factory function
-	db, err := database.NewDBHandler(dbPath, trngQueueSize, fortunaQueueSize)
+	db, err := database.NewDBHandler(dbPath, trngQueueSize, fortunaQueueSize, virtioQueueSize)
 	if err != nil {
 		log.Fatalf("Failed to initialize database: %v", err)
 	}
 	defer db.Close()
 
 	// Create API server
-	server := api.NewServer(db, controllerAddr, fortunaAddr, port, nil)
+	server := api.NewServer(db, controllerAddr, fortunaAddr, virtioAddr, port, nil)
+
+	// Initialize VirtIO configuration
+	server.SetVirtIOSeedingSource(virtioSeedingSource)
 
 	// Create context for polling that can be cancelled
 	ctx, cancel := context.WithCancel(context.Background())
@@ -150,10 +190,14 @@ func main() {
 	log.Printf("  Port: %d", port)
 	log.Printf("  Controller Address: %s", controllerAddr)
 	log.Printf("  Fortuna Address: %s", fortunaAddr)
+	log.Printf("  VirtIO Address: %s", virtioAddr)
 	log.Printf("  TRNG Queue Size: %d", trngQueueSize)
 	log.Printf("  Fortuna Queue Size: %d", fortunaQueueSize)
+	log.Printf("  VirtIO Queue Size: %d", virtioQueueSize)
 	log.Printf("  TRNG Poll Interval: %s", trngPollInterval)
 	log.Printf("  Fortuna Poll Interval: %s", fortunaPollInterval)
+	log.Printf("  VirtIO Poll Interval: %s", virtioPollInterval)
+	log.Printf("  VirtIO Seeding Source: %s", virtioSeedingSource)
 
 	if err := server.Run(); err != nil {
 		log.Fatalf("API server error: %v", err)

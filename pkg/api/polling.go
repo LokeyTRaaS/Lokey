@@ -25,6 +25,22 @@ func (s *Server) StartPolling(ctx context.Context, trngPollInterval, fortunaPoll
 	// Start Fortuna seeding with TRNG data
 	go s.SeedFortunaWithTRNG(ctx, 30*time.Second)
 
+	// Start VirtIO seeding based on configuration
+	if s.VirtioAddr != "" {
+		seedingSource := s.getVirtIOSeedingSource()
+		seedInterval := 30 * time.Second
+
+		switch seedingSource {
+		case "trng":
+			go s.SeedVirtIOWithTRNG(ctx, seedInterval)
+		case "fortuna":
+			go s.SeedVirtIOWithFortuna(ctx, seedInterval)
+		case "both":
+			go s.SeedVirtIOWithTRNG(ctx, seedInterval)
+			go s.SeedVirtIOWithFortuna(ctx, seedInterval)
+		}
+	}
+
 	log.Printf("Started polling services - TRNG interval: %s, Fortuna interval: %s, Fortuna seeding: every 30s",
 		trngPollInterval, fortunaPollInterval)
 }
@@ -310,4 +326,206 @@ func (s *Server) SeedFortuna() error {
 
 	log.Printf("Successfully seeded Fortuna with %d TRNG samples", len(result.Data))
 	return nil
+}
+
+// SeedVirtIOWithTRNG seeds VirtIO with TRNG data
+func (s *Server) SeedVirtIOWithTRNG(ctx context.Context, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	log.Printf("Starting VirtIO seeding with TRNG data every %s", interval)
+
+	for {
+		select {
+		case <-ctx.Done():
+			log.Printf("VirtIO seeding with TRNG stopped")
+			return
+		case <-ticker.C:
+			// Check circuit breaker
+			if s.isVirtIOSeedingCircuitOpen() {
+				log.Printf("VirtIO seeding circuit breaker is OPEN, skipping attempt")
+				continue
+			}
+
+			if err := s.SeedVirtIOFromTRNG(); err != nil {
+				s.virtioSeedingFailures.Add(1)
+				s.lastVirtIOSeedingFailure.Store(time.Now().Unix())
+				log.Printf("VirtIO seeding error: %v (failures: %d)", err, s.virtioSeedingFailures.Load())
+
+				// Open circuit breaker after 5 consecutive failures
+				if s.virtioSeedingFailures.Load() >= 5 {
+					s.virtioSeedingCircuitOpen.Store(true)
+					log.Printf("VirtIO seeding circuit breaker opened after %d failures", s.virtioSeedingFailures.Load())
+				}
+			} else {
+				// Reset failure count on success
+				s.virtioSeedingFailures.Store(0)
+			}
+		}
+	}
+}
+
+// SeedVirtIOFromTRNG fetches TRNG data and sends it to VirtIO's /seed endpoint
+func (s *Server) SeedVirtIOFromTRNG() error {
+	// Fetch TRNG data from controller (5 samples for seeding)
+	resp, err := http.Get(s.ControllerAddr + "/generate?count=5")
+	if err != nil {
+		return fmt.Errorf("error fetching TRNG data for seeding: %w", err)
+	}
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			log.Printf("Error closing controller response body: %v", closeErr)
+		}
+	}()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("controller returned status %d for seeding", resp.StatusCode)
+	}
+
+	// Parse controller response (returns array when count > 1)
+	var result struct {
+		Data []string `json:"data"`
+	}
+
+	if decodeErr := json.NewDecoder(resp.Body).Decode(&result); decodeErr != nil {
+		return fmt.Errorf("error parsing controller response for seeding: %w", decodeErr)
+	}
+
+	if len(result.Data) == 0 {
+		return fmt.Errorf("no TRNG data received for seeding")
+	}
+
+	// Validate TRNG data quality before sending to VirtIO
+	if err := ValidateTRNGData(result.Data); err != nil {
+		return fmt.Errorf("TRNG data validation failed: %w", err)
+	}
+
+	// Send seeds to VirtIO's /seed endpoint
+	seedRequest := struct {
+		Seeds []string `json:"seeds"`
+	}{
+		Seeds: result.Data,
+	}
+
+	seedData, err := json.Marshal(seedRequest)
+	if err != nil {
+		return fmt.Errorf("error marshaling seed request: %w", err)
+	}
+
+	seedResp, err := http.Post(
+		s.VirtioAddr+"/seed",
+		"application/json",
+		bytes.NewBuffer(seedData),
+	)
+	if err != nil {
+		return fmt.Errorf("error seeding VirtIO: %w", err)
+	}
+	defer func() {
+		if closeErr := seedResp.Body.Close(); closeErr != nil {
+			log.Printf("Error closing seed response body: %v", closeErr)
+		}
+	}()
+
+	if seedResp.StatusCode != http.StatusOK {
+		return fmt.Errorf("virtio seeding failed with status: %d", seedResp.StatusCode)
+	}
+
+	log.Printf("Successfully seeded VirtIO with %d TRNG samples", len(result.Data))
+	return nil
+}
+
+// SeedVirtIOWithFortuna seeds VirtIO with Fortuna data
+func (s *Server) SeedVirtIOWithFortuna(ctx context.Context, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	log.Printf("Starting VirtIO seeding with Fortuna data every %s", interval)
+
+	for {
+		select {
+		case <-ctx.Done():
+			log.Printf("VirtIO seeding with Fortuna stopped")
+			return
+		case <-ticker.C:
+			// Check circuit breaker
+			if s.isVirtIOSeedingCircuitOpen() {
+				log.Printf("VirtIO seeding circuit breaker is OPEN, skipping attempt")
+				continue
+			}
+
+			if err := s.SeedVirtIOFromFortuna(); err != nil {
+				s.virtioSeedingFailures.Add(1)
+				s.lastVirtIOSeedingFailure.Store(time.Now().Unix())
+				log.Printf("VirtIO seeding error: %v (failures: %d)", err, s.virtioSeedingFailures.Load())
+
+				// Open circuit breaker after 5 consecutive failures
+				if s.virtioSeedingFailures.Load() >= 5 {
+					s.virtioSeedingCircuitOpen.Store(true)
+					log.Printf("VirtIO seeding circuit breaker opened after %d failures", s.virtioSeedingFailures.Load())
+				}
+			} else {
+				// Reset failure count on success
+				s.virtioSeedingFailures.Store(0)
+			}
+		}
+	}
+}
+
+// SeedVirtIOFromFortuna fetches Fortuna data and sends it to VirtIO's /seed endpoint
+func (s *Server) SeedVirtIOFromFortuna() error {
+	// Fetch Fortuna data from database (unconsumed items, 5 samples)
+	fortunaData, err := s.DB.GetFortunaData(5, 0, false)
+	if err != nil {
+		return fmt.Errorf("error fetching Fortuna data for seeding: %w", err)
+	}
+
+	if len(fortunaData) == 0 {
+		return fmt.Errorf("no Fortuna data available for seeding")
+	}
+
+	// Convert to hex strings for seeding
+	seeds := make([]string, 0, len(fortunaData))
+	for _, data := range fortunaData {
+		seeds = append(seeds, hex.EncodeToString(data))
+	}
+
+	// Send seeds to VirtIO's /seed endpoint
+	seedRequest := struct {
+		Seeds []string `json:"seeds"`
+	}{
+		Seeds: seeds,
+	}
+
+	seedData, err := json.Marshal(seedRequest)
+	if err != nil {
+		return fmt.Errorf("error marshaling seed request: %w", err)
+	}
+
+	seedResp, err := http.Post(
+		s.VirtioAddr+"/seed",
+		"application/json",
+		bytes.NewBuffer(seedData),
+	)
+	if err != nil {
+		return fmt.Errorf("error seeding VirtIO: %w", err)
+	}
+	defer func() {
+		if closeErr := seedResp.Body.Close(); closeErr != nil {
+			log.Printf("Error closing seed response body: %v", closeErr)
+		}
+	}()
+
+	if seedResp.StatusCode != http.StatusOK {
+		return fmt.Errorf("virtio seeding failed with status: %d", seedResp.StatusCode)
+	}
+
+	log.Printf("Successfully seeded VirtIO with %d Fortuna samples", len(seeds))
+	return nil
+}
+
+// getVirtIOSeedingSource safely reads the current VirtIO seeding source
+func (s *Server) getVirtIOSeedingSource() string {
+	s.virtioConfigMutex.RLock()
+	defer s.virtioConfigMutex.RUnlock()
+	return s.virtioSeedingSource
 }

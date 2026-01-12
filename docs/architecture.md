@@ -9,6 +9,7 @@ Technical architecture and implementation details of the LoKey system.
 - [Data Flow](#data-flow)
 - [Controller Service](#controller-service)
 - [Fortuna Service](#fortuna-service)
+- [VirtIO Service](#virtio-service)
 - [API Service](#api-service)
 - [Database Design](#database-design)
 - [Communication Patterns](#communication-patterns)
@@ -16,7 +17,7 @@ Technical architecture and implementation details of the LoKey system.
 
 ## System Overview
 
-LoKey is a microservices-based true random number generation system designed for high availability and throughput. The architecture separates concerns into three independent services that communicate via HTTP REST APIs.
+LoKey is a microservices-based true random number generation system designed for high availability and throughput. The architecture separates concerns into four independent services that communicate via HTTP REST APIs.
 
 ### Design Principles
 
@@ -50,32 +51,33 @@ LoKey is a microservices-based true random number generation system designed for
 │  │         BoltDB Database  │                               │   │
 │  │  • TRNG Data Queue      │                               │   │
 │  │  • Fortuna Data Queue   │                               │   │
+│  │  • (VirtIO has own queue)│                               │   │
 │  │  • Configuration        │                               │   │
 │  │  • Counters & Stats     │                               │   │
 │  └──────────────────────────┼───────────────────────────────┘   │
 └─────────────────────────────┼────────────────────────────────────┘
 │
-┌───────────────────┴───────────────────┐
-│                                       │
-▼                                       ▼
-┌─────────────────────┐               ┌─────────────────────┐
-│ Controller Service  │               │  Fortuna Service    │
-│                     │               │                     │
-│ ┌─────────────────┐ │               │ ┌─────────────────┐ │
-│ │  I2C Interface  │ │               │ │ Fortuna CSPRNG  │ │
-│ │  ATECC608A Ops  │ │               │ │ Entropy Pools   │ │
-│ │  Random Gen     │ │               │ │ Amplification   │ │
-│ │  Health Check   │ │               │ │ Reseeding       │ │
-│ └─────────────────┘ │               │ └─────────────────┘ │
-│         │           │               │                     │
-│         ▼           │               │                     │
-│ ┌─────────────────┐ │               │                     │
-│ │   ATECC608A     │ │               │                     │
-│ │  Hardware Chip  │ │               │                     │
-│ └─────────────────┘ │               │                     │
-└─────────────────────┘               └─────────────────────┘
-Hardware TRNG                       Cryptographic PRNG
-(~10 samples/sec)                   (High throughput)
+┌───────────┴───────────┬───────────┴───────────┐
+│                      │                       │
+▼                      ▼                       ▼
+┌─────────────────────┐ ┌─────────────────────┐ ┌─────────────────────┐
+│ Controller Service  │ │  Fortuna Service    │ │  VirtIO Service     │
+│                     │ │                     │ │                     │
+│ ┌─────────────────┐ │ │ ┌─────────────────┐ │ │ ┌─────────────────┐ │
+│ │  I2C Interface  │ │ │ │ Fortuna CSPRNG  │ │ │ │ Named Pipe      │ │
+│ │  ATECC608A Ops  │ │ │ │ Entropy Pools   │ │ │ │ HTTP Streaming  │ │
+│ │  Random Gen     │ │ │ │ Amplification   │ │ │ │ Circular Queue  │ │
+│ │  Health Check   │ │ │ │ Reseeding       │ │ │ │ Health Check    │ │
+│ └─────────────────┘ │ │ └─────────────────┘ │ │ └─────────────────┘ │
+│         │           │ │                     │ │         │           │
+│         ▼           │ │                     │ │         ▼           │
+│ ┌─────────────────┐ │ │                     │ │ ┌─────────────────┐ │
+│ │   ATECC608A     │ │ │                     │ │ │  VMs/Containers │ │
+│ │  Hardware Chip  │ │ │                     │ │ │  (via Pipe/HTTP)│ │
+│ └─────────────────┘ │ │                     │ │ └─────────────────┘ │
+└─────────────────────┘ └─────────────────────┘ └─────────────────────┘
+Hardware TRNG           Cryptographic PRNG      VirtIO Consumer
+(~10 samples/sec)       (High throughput)       (Seeded by API)
 ```
 ## Component Architecture
 
@@ -127,17 +129,102 @@ Hardware TRNG                       Cryptographic PRNG
 - Configurable health check intervals
 - Explicit health state management
 
+### VirtIO Service (Port 8083 HTTP)
+
+**Purpose:** Provide high-throughput random data access for virtualization environments via named pipe (FIFO) and HTTP streaming. VirtIO is a **consumer endpoint** that serves data to VMs/containers. It does NOT read from hardware devices - all data comes from its queue, which is seeded by the API service.
+
+**Responsibilities:**
+- Accept seed data from API service (TRNG or Fortuna)
+- Maintain internal circular queue for seeded data (100-500 KB capacity)
+- Serve data to local VMs via named pipe (FIFO) - high-performance, low-latency
+- Serve data to remote clients/Kubernetes via HTTP streaming endpoint
+- Provide HTTP management API (port 8083)
+- Provide health status (queue-based, not device-based)
+- Support runtime queue size configuration
+- **Note**: Device access (`/dev/hwrng`) is NOT required - VirtIO works purely from seeded queue data
+
+**Technology:**
+- Go 1.24
+- Gin web framework (HTTP API)
+- Named pipe (FIFO) for local VM access
+- HTTP chunked streaming for network access
+- In-memory circular queue (channel-based only)
+- **No device access required** - works purely from seeded queue
+
+**Key Features:**
+- **Dual Access Methods**:
+  - **Named Pipe (FIFO)**: High-performance local access for hypervisors (QEMU, Proxmox, VirtualBox, VMware)
+    - Default path: `/var/run/lokey/virtio-rng`
+    - ~500x faster than legacy EGD protocol
+    - Blocking writes (standard FIFO behavior)
+    - Automatic reconnection when reader disconnects
+  - **HTTP Streaming (Port 8083)**: Network access for remote servers and Kubernetes sidecars
+    - Endpoint: `GET /stream`
+    - Chunked transfer encoding
+    - Configurable chunk size and max bytes
+    - Graceful client disconnection handling
+- **HTTP API (Port 8083)**: Management, monitoring, seeding endpoints
+  - `GET /health` - Health check
+  - `GET /info` - Service information (includes pipe path)
+  - `GET /generate` - Pull data from queue (testing/debugging)
+  - `GET /stream` - Continuous data streaming
+  - `POST /seed` - Accept seed data from API service
+  - `GET /config/queue` - Get queue configuration
+  - `PUT /config/queue` - Update queue size
+- Circular queue for storing seeded data (default: 15,000 items ≈ 480 KB)
+- **Consumer-only operation**:
+  - Accepts seed data via `/seed` endpoint (from API service)
+  - Serves data via named pipe to local VMs
+  - Serves data via HTTP streaming to remote clients
+- Runtime queue size updates via `/config/queue` endpoint
+- Graceful handling of pipe reader disconnections
+- Thread-safe concurrent access
+
+**Named Pipe (FIFO) Details:**
+
+The named pipe provides a high-performance interface for local hypervisor access:
+
+- **Path**: Configurable via `VIRTIO_PIPE_PATH` (default: `/var/run/lokey/virtio-rng`)
+- **Creation**: Automatically created on service startup
+- **Permissions**: 0666 (read/write for all)
+- **Behavior**: Blocking writes (standard FIFO behavior - blocks when pipe buffer is full)
+- **Reconnection**: Automatically reopens pipe when reader disconnects
+- **Performance**: ~500x faster than legacy EGD protocol
+- **Queue Integration**: Continuously reads from circular queue and writes to pipe
+
+**HTTP Streaming Details:**
+
+The HTTP streaming endpoint enables network-based access:
+
+- **Endpoint**: `GET /stream`
+- **Query Parameters**:
+  - `chunk_size` (optional, default: 1024): Bytes per chunk
+  - `max_bytes` (optional): Maximum total bytes to stream
+- **Headers**:
+  - `Content-Type: application/octet-stream`
+  - `Transfer-Encoding: chunked`
+- **Behavior**: Continuously streams data from queue until client disconnects or max_bytes reached
+- **Use Cases**: Remote servers, Kubernetes sidecars, network-based access
+
+**Use Cases:**
+- **Local VMs**: QEMU, Proxmox, VirtualBox, VMware via named pipe
+- **Kubernetes/OpenShift**: Sidecar container reads from HTTP stream and provides pipe to pod
+- **Remote Servers**: Network-based access via HTTP streaming
+- **Cloud Deployments**: Where hardware TRNG is unavailable
+- **Development and Testing**: High-throughput entropy for testing environments
+
 ### API Service (Port 8080)
 
 **Purpose:** Unified REST API, data storage, and queue management.
 
 **Responsibilities:**
 - Accept client requests
-- Poll controller and fortuna services
-- Store random data in queues
+- Poll controller and fortuna services (VirtIO is NOT polled - it's a consumer endpoint)
+- Store random data in queues (TRNG and Fortuna only)
 - Serve data in multiple formats
 - Track statistics and metrics
 - Health monitoring
+- **Seed VirtIO service** (configurable source: TRNG, Fortuna, or both) - data flows one way: API → VirtIO
 
 **Technology:**
 - Go 1.24
@@ -148,10 +235,12 @@ Hardware TRNG                       Cryptographic PRNG
 
 **Key Features:**
 - Multiple data formats (int8-64, uint8-64, binary)
-- Configurable queue sizes
+- Configurable queue sizes (TRNG, Fortuna, VirtIO)
 - Consumption tracking
 - Delete-on-read behavior
 - Comprehensive statistics
+- VirtIO seeding configuration (TRNG, Fortuna, or both)
+- Runtime configuration updates for VirtIO
 
 ## Data Flow
 
@@ -253,6 +342,45 @@ Every 30 seconds:
 │ └──────────┘ │
 │              │ 6. Increment counter
 └──────────────┘    (determines next pools to use)
+```
+
+### VirtIO Seeding Flow
+```
+
+Every 30 seconds (configurable):
+
+┌──────────────┐
+│ API Service  │
+│              │ 1. Fetch data from TRNG or Fortuna
+│              │    (based on VIRTIO_SEEDING_SOURCE)
+└──────┬───────┘
+│
+│ 2. POST to /seed endpoint
+│    (validates data quality)
+▼
+┌──────────────┐
+│ VirtIO       │
+│ Service      │ 3. Store seeds in circular queue
+│              │
+│ ┌──────────┐ │ 4. Queue serves data via:
+│ │ Circular │ │    - Named pipe (FIFO) for local VMs
+│ │ Queue    │ │    - HTTP streaming for remote/K8s
+│ └──────────┘ │
+└──────┬───────┘
+│
+│ 5a. Local VMs read from pipe
+│     (QEMU, Proxmox, VirtualBox, VMware)
+│ 5b. Remote/K8s read from HTTP stream
+▼
+┌──────────────┐
+│ QEMU/VM      │ 6. Consumes entropy for
+│ Container    │    virtualization needs
+│ Kubernetes   │
+└──────────────┘
+
+Note: Data flows ONE WAY - API seeds VirtIO, VirtIO serves VMs.
+      API does NOT poll VirtIO (it's a consumer endpoint).
+      Named pipe provides ~500x better performance than legacy EGD.
 ```
 ## Controller Service
 
@@ -449,12 +577,88 @@ The pool selection algorithm ensures that even if an attacker compromises the st
 **POST /seed**
 - Accepts array of hex-encoded seeds
 - Distributes to entropy pools
-- Triggers reseed operation
 
-**POST /amplify**
-- Accepts seed + desired output size
-- Adds seed to pools
-- Returns amplified data
+## VirtIO Service
+
+### Implementation Details
+
+The VirtIO service provides high-throughput random data access for virtualization environments via named pipe (FIFO) and HTTP streaming.
+
+**Device Access:**
+- **NOT REQUIRED** - VirtIO service does not read from hardware devices
+- All data comes from the seeded queue (populated by API service)
+- Device paths are ignored - VirtIO works purely from seeded data
+
+**Queue Management:**
+- Internal circular queue for seeded data
+- Configurable size via `VIRTIO_QUEUE_SIZE` (default: 15,000 items ≈ 480 KB)
+- Target capacity: 100-500 KB
+- FIFO behavior (oldest data removed when full)
+- Thread-safe concurrent access
+- Runtime size updates via `/config/queue` endpoint
+- Byte-based capacity calculation: `GetQueueSizeBytes()` = items × 32 bytes
+
+**Operation Mode:**
+- **Consumer Mode Only**: Accepts seed data via `/seed` endpoint and stores in queue
+- Serves data to local VMs via named pipe (FIFO) - high-performance, low-latency
+- Serves data to remote clients/Kubernetes via HTTP streaming
+- `/generate` endpoint pulls from queue (for testing/debugging only, not for production API consumption)
+
+**Named Pipe (FIFO) Implementation:**
+- Created at path specified by `VIRTIO_PIPE_PATH` (default: `/var/run/lokey/virtio-rng`)
+- Automatically created on service startup
+- Permissions: 0666 (read/write for all)
+- Blocking writes (standard FIFO behavior - blocks when pipe buffer is full)
+- Automatic reconnection when reader disconnects
+- Continuously reads from circular queue and writes to pipe
+- ~500x faster than legacy EGD protocol
+
+**HTTP Streaming Implementation:**
+- Endpoint: `GET /stream`
+- Chunked transfer encoding for continuous streaming
+- Configurable chunk size and max bytes via query parameters
+- Graceful client disconnection handling
+- Suitable for remote servers and Kubernetes sidecars
+
+### Endpoints
+
+**GET /health**
+- Returns service health status
+- Checks queue availability (device access not checked)
+- Returns 200 if healthy (queue exists and has capacity), 503 if unhealthy
+
+**GET /info**
+- Returns service information
+- Current queue status
+- Named pipe path
+
+**GET /generate?count=N**
+- Generates N random values (1-100)
+- **Pulls from queue** (not from device)
+- Returns hex-encoded data (32 bytes per value)
+- **Note**: This endpoint is for testing/debugging. Production VMs should use named pipe or HTTP streaming
+
+**GET /stream?chunk_size=N&max_bytes=M**
+- Streams random data continuously
+- Query parameters:
+  - `chunk_size` (optional, default: 1024): Bytes per chunk
+  - `max_bytes` (optional): Maximum total bytes to stream
+- Headers: `Content-Type: application/octet-stream`, `Transfer-Encoding: chunked`
+- Use cases: Remote servers, Kubernetes sidecars, network-based access
+
+**POST /seed**
+- Accepts array of hex-encoded seeds
+- Stores seeds in circular queue
+- Returns count of successfully seeded items
+
+**GET /config/queue**
+- Returns current queue configuration
+- Queue size and current usage
+
+**PUT /config/queue**
+- Updates queue size dynamically
+- Migrates existing data if possible
+- Accepts `{"queue_size": <number>}` (10-1000000)
 
 ## API Service
 

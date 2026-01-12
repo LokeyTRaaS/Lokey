@@ -37,6 +37,11 @@ x-api-env: &api-env
   FORTUNA_QUEUE_SIZE: 10000 #For raspberry pi zero 2 max 1000 of 256 bit items, note that these settings are optimistic and assume the device to solely be used for random number generation.
   TRNG_POLL_INTERVAL_MS: 100
   FORTUNA_POLL_INTERVAL_MS: 100
+  VIRTIO_ADDR: http://virtio:8083
+  VIRTIO_QUEUE_SIZE: 500000
+  VIRTIO_POLL_INTERVAL_MS: 100
+  VIRTIO_SEED_INTERVAL_SECONDS: 30
+  VIRTIO_SEEDING_SOURCE: trng
   TRNG_APT_WINDOW_SIZE: 512 # APT test window size in bytes (256-2048)
 
 x-controller-common: &controller-common
@@ -56,7 +61,7 @@ x-controller-common: &controller-common
 x-controller-env: &controller-env
   PORT: 8081
   I2C_BUS_NUMBER: 1
-  FORCE_CONFIG: false
+  FORCE_CONFIG: "false"
 
 x-fortuna-common: &fortuna-common
   deploy:
@@ -73,6 +78,37 @@ x-fortuna-env: &fortuna-env
   PORT: 8082
   AMPLIFICATION_FACTOR: 4
 
+x-virtio-common: &virtio-common
+  deploy:
+    resources:
+      limits:
+        memory: 20M
+  networks:
+    - lokey-internal
+  image: ghcr.io/lokeytraas/lokey/virtio:prerelease-major-refactor-arm64
+  restart: unless-stopped
+  logging: *logging-common
+  volumes:
+    - /var/run/lokey:/var/run/lokey
+
+x-virtio-common-with-devices: &virtio-common-with-devices
+  <<: *virtio-common
+  devices:
+    - /dev/hwrng:/dev/hwrng
+    - /dev/random:/dev/random
+
+x-virtio-env: &virtio-env
+  PORT: 8083
+  RNG_DEVICE: /dev/hwrng
+  VIRTIO_QUEUE_SIZE: 15000
+  VIRTIO_PIPE_PATH: /var/run/lokey/virtio-rng
+
+x-local-registry-images: &local-registry-images
+  api: ${DEV_MACHINE_IP:-localhost}:5000/lokey-api:latest
+  controller: ${DEV_MACHINE_IP:-localhost}:5000/lokey-controller:latest
+  fortuna: ${DEV_MACHINE_IP:-localhost}:5000/lokey-fortuna:latest
+  virtio: ${DEV_MACHINE_IP:-localhost}:5000/lokey-virtio:latest
+
 services:
 
   api:
@@ -80,6 +116,7 @@ services:
     depends_on:
       - controller
       - fortuna
+      - virtio
     environment:
       <<: *api-env
       GIN_MODE: release
@@ -107,15 +144,26 @@ services:
     profiles:
       - production
 
+  virtio:
+    <<: *virtio-common-with-devices
+    environment:
+      <<: *virtio-env
+      GIN_MODE: release
+      LOG_LEVEL: WARN
+    profiles:
+      - production
+
   api-debug:
     <<: *api-common
     depends_on:
       - controller-debug
       - fortuna-debug
+      - virtio-debug
     environment:
       <<: *api-env
       CONTROLLER_ADDR: http://controller-debug:8081
       FORTUNA_ADDR: http://fortuna-debug:8082
+      VIRTIO_ADDR: http://virtio-debug:8083
       GIN_MODE: debug
       LOG_LEVEL: DEBUG
     profiles:
@@ -144,3 +192,76 @@ services:
       - '8082:8082'
     profiles:
       - debug
+
+  virtio-debug:
+    <<: *virtio-common-with-devices
+    environment:
+      <<: *virtio-env
+      GIN_MODE: debug
+      LOG_LEVEL: DEBUG
+    ports:
+      - '8083:8083'  # HTTP API
+    profiles:
+      - debug
+
+  # Local registry profile - uses images from local Docker registry
+  api-local:
+    <<: *api-common
+    image: ${DEV_MACHINE_IP:-localhost}:5000/lokey-api:latest
+    depends_on:
+      - controller-local
+      - fortuna-local
+      - virtio-local
+    environment:
+      <<: *api-env
+      CONTROLLER_ADDR: http://controller-local:8081
+      FORTUNA_ADDR: http://fortuna-local:8082
+      VIRTIO_ADDR: http://virtio-local:8083
+      GIN_MODE: release
+      LOG_LEVEL: WARN
+    volumes:
+      - api-data-local:/data
+    profiles:
+      - local
+
+  controller-local:
+    <<: *controller-common
+    image: ${DEV_MACHINE_IP:-localhost}:5000/lokey-controller:latest
+    environment:
+      <<: *controller-env
+      FORCE_CONFIG: "true"
+      GIN_MODE: release
+      LOG_LEVEL: WARN
+    ports:
+      - '8081:8081'
+    profiles:
+      - local
+
+  fortuna-local:
+    <<: *fortuna-common
+    image: ${DEV_MACHINE_IP:-localhost}:5000/lokey-fortuna:latest
+    depends_on:
+      - controller-local
+    environment:
+      <<: *fortuna-env
+      GIN_MODE: release
+      LOG_LEVEL: WARN
+    ports:
+      - '8082:8082'
+    profiles:
+      - local
+
+  virtio-local:
+    <<: *virtio-common
+    image: ${DEV_MACHINE_IP:-localhost}:5000/lokey-virtio:latest
+    environment:
+      <<: *virtio-env
+      GIN_MODE: release
+      LOG_LEVEL: WARN
+    ports:
+      - '8083:8083'  # HTTP API
+    profiles:
+      - local
+
+volumes:
+  api-data-local:

@@ -14,9 +14,9 @@ import (
 )
 
 func setupTestServer() (*api.Server, database.DBHandler) {
-	db, _ := database.NewChannelDBHandler("", 10, 20)
+	db, _ := database.NewChannelDBHandler("", 10, 20, 15)
 	testRegistry := prometheus.NewRegistry()
-	server := api.NewServer(db, "http://localhost:8081", "http://localhost:8082", 0, testRegistry)
+	server := api.NewServer(db, "http://localhost:8081", "http://localhost:8082", "http://localhost:8083", 0, testRegistry)
 	return server, db
 }
 
@@ -24,9 +24,9 @@ func TestNewServer(t *testing.T) {
 	// Skip this test to avoid Prometheus metrics registration conflicts
 	// when multiple tests create servers in the same test run
 	// The server creation is tested by other tests that use setupTestServer
-	db, _ := database.NewChannelDBHandler("", 10, 20)
+	db, _ := database.NewChannelDBHandler("", 10, 20, 15)
 	testRegistry := prometheus.NewRegistry()
-	server := api.NewServer(db, "http://localhost:8081", "http://localhost:8082", 8080, testRegistry)
+	server := api.NewServer(db, "http://localhost:8081", "http://localhost:8082", "http://localhost:8083", 8080, testRegistry)
 	if server == nil {
 		t.Fatal("Expected server to be non-nil")
 	}
@@ -71,7 +71,7 @@ func TestServer_UpdateQueueConfig(t *testing.T) {
 
 	t.Run("valid config", func(t *testing.T) {
 		// Skip this test for ChannelDBHandler as it doesn't support UpdateQueueSizes
-		if err := db.UpdateQueueSizes(50, 60); err != nil {
+		if err := db.UpdateQueueSizes(50, 60, 55); err != nil {
 			t.Skipf("UpdateQueueSizes not supported: %v", err)
 		}
 
@@ -239,9 +239,9 @@ func TestServer_GetRandomData(t *testing.T) {
 	})
 
 	t.Run("no data available", func(t *testing.T) {
-		emptyDB, _ := database.NewChannelDBHandler("", 10, 20)
+		emptyDB, _ := database.NewChannelDBHandler("", 10, 20, 15)
 		testRegistry := prometheus.NewRegistry()
-		emptyServer := api.NewServer(emptyDB, "http://localhost:8081", "http://localhost:8082", 0, testRegistry)
+		emptyServer := api.NewServer(emptyDB, "http://localhost:8081", "http://localhost:8082", "http://localhost:8083", 0, testRegistry)
 
 		request := api.DataRequest{
 			Format: "int32",
@@ -260,12 +260,12 @@ func TestServer_GetRandomData(t *testing.T) {
 	})
 
 	t.Run("pagination", func(t *testing.T) {
-		testDB, _ := database.NewChannelDBHandler("", 10, 20)
+		testDB, _ := database.NewChannelDBHandler("", 10, 20, 15)
 		for i := 0; i < 10; i++ {
 			testDB.StoreTRNGData([]byte{byte(i)})
 		}
 		testRegistry := prometheus.NewRegistry()
-		testServer := api.NewServer(testDB, "http://localhost:8081", "http://localhost:8082", 0, testRegistry)
+		testServer := api.NewServer(testDB, "http://localhost:8081", "http://localhost:8082", "http://localhost:8083", 0, testRegistry)
 
 		request := api.DataRequest{
 			Format: "uint8",

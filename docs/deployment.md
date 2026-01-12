@@ -508,7 +508,12 @@ docker compose up -d
 | `FORTUNA_ADDR`            | Fortuna service URL                  | `http://fortuna:8082`    | Valid HTTP URL      |
 | `TRNG_QUEUE_SIZE`         | TRNG data queue capacity             | `100`                    | 10-10000            |
 | `FORTUNA_QUEUE_SIZE`      | Fortuna data queue capacity          | `100`                    | 10-10000            |
+| `VIRTIO_QUEUE_SIZE`       | VirtIO data queue capacity           | `15000` (~480 KB)       | 10-1000000          |
 | `TRNG_POLL_INTERVAL_MS`   | TRNG polling interval (milliseconds) | `1000`                   | 100-60000           |
+| `VIRTIO_POLL_INTERVAL_MS` | (Deprecated - VirtIO is not polled) | N/A                    | N/A                 |
+| `VIRTIO_SEED_INTERVAL_SECONDS` | VirtIO seeding interval (seconds) | `30`              | 10-3600             |
+| `VIRTIO_SEEDING_SOURCE`   | VirtIO seeding source                | `trng`                   | trng, fortuna, both |
+| `VIRTIO_ADDR`             | VirtIO service address               | `http://virtio:8083`     | Valid HTTP URL      |
 | `FORTUNA_POLL_INTERVAL_MS`| Fortuna polling interval (ms)        | `5000`                   | 100-60000           |
 
 ### Controller Service
@@ -541,6 +546,66 @@ docker compose up -d
 | `PORT`                          | Fortuna server port                      | `8082`  | 1-65535     |
 | `AMPLIFICATION_FACTOR`          | Data amplification multiplier            | `4`     | 1-100       |
 | `FORTUNA_MAX_RESEED_INTERVAL_HOURS` | Maximum time between reseeds (hours) | `1`     | 1-24        |
+
+### VirtIO Service
+
+| Variable                  | Description                          | Default              | Valid Range |
+|---------------------------|--------------------------------------|----------------------|-------------|
+| `PORT`                    | VirtIO HTTP API port                 | `8083`               | 1-65535     |
+| `RNG_DEVICE`              | (Ignored - VirtIO doesn't use device) | N/A                   | N/A         |
+| `VIRTIO_QUEUE_SIZE`       | Internal queue capacity (items)     | `15000` (~480 KB)    | 10-1000000  |
+| `VIRTIO_PIPE_PATH`        | Named pipe (FIFO) filesystem path   | `/var/run/lokey/virtio-rng` | Valid path |
+| `LOG_LEVEL`               | Logging level                        | `INFO`               | DEBUG, INFO, WARN, ERROR |
+
+**Queue Size Calculation:**
+- Default: 15,000 items × 32 bytes/item = 480,000 bytes (480 KB)
+- Target capacity: 100-500 KB for optimal performance
+- Can be adjusted based on expected consumption rate and boot spike tolerance
+
+**Named Pipe Setup:**
+- The named pipe directory must exist on the host before starting the service
+- Create the directory with appropriate permissions:
+  ```bash
+  sudo mkdir -p /var/run/lokey
+  sudo chmod 755 /var/run/lokey
+  ```
+- The pipe file is automatically created by the VirtIO service
+- Ensure the Docker volume mount includes the pipe directory:
+  ```yaml
+  volumes:
+    - /var/run/lokey:/var/run/lokey
+  ```
+
+**Hypervisor Configuration:**
+
+**QEMU:**
+```bash
+qemu-system-x86_64 \
+  -object rng-random,id=rng0,filename=/var/run/lokey/virtio-rng \
+  -device virtio-rng-pci,rng=rng0 \
+  ...
+```
+
+**Proxmox:**
+- Edit VM configuration and add:
+  ```
+  rng0: /var/run/lokey/virtio-rng
+  ```
+- Or via command line:
+  ```bash
+  qm set <vmid> -rng0 /var/run/lokey/virtio-rng
+  ```
+
+**VirtualBox:**
+- Configure VM to use host device `/var/run/lokey/virtio-rng` as RNG source
+
+**VMware:**
+- Configure VM to use host device `/var/run/lokey/virtio-rng` as RNG source
+
+**Kubernetes/OpenShift:**
+- Use a sidecar container that reads from HTTP streaming endpoint (`GET /stream`)
+- Sidecar creates a named pipe in the pod for application consumption
+- See Kubernetes deployment examples in architecture documentation
 
 ### Example Configuration
 
@@ -615,6 +680,9 @@ curl http://localhost:8081/health
 
 # Fortuna health
 curl http://localhost:8082/health
+
+# VirtIO health
+curl http://localhost:8083/health
 ```
 ### Prometheus Metrics
 

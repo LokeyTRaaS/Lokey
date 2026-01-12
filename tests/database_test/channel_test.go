@@ -237,7 +237,7 @@ func TestCircularQueue_Concurrency(t *testing.T) {
 }
 
 func TestNewChannelDBHandler(t *testing.T) {
-	handler, err := database.NewChannelDBHandler("", 10, 20)
+	handler, err := database.NewChannelDBHandler("", 10, 20, 15)
 	if err != nil {
 		t.Fatalf("Expected no error, got %v", err)
 	}
@@ -253,7 +253,7 @@ func TestNewChannelDBHandler(t *testing.T) {
 }
 
 func TestChannelDBHandler_StoreTRNGData(t *testing.T) {
-	handler, _ := database.NewChannelDBHandler("", 10, 10)
+	handler, _ := database.NewChannelDBHandler("", 10, 10, 15)
 	data := []byte{1, 2, 3, 4}
 	err := handler.StoreTRNGData(data)
 	if err != nil {
@@ -265,7 +265,7 @@ func TestChannelDBHandler_StoreTRNGData(t *testing.T) {
 }
 
 func TestChannelDBHandler_GetTRNGData(t *testing.T) {
-	handler, _ := database.NewChannelDBHandler("", 10, 10)
+	handler, _ := database.NewChannelDBHandler("", 10, 10, 15)
 	data := []byte{1, 2, 3}
 	handler.StoreTRNGData(data)
 
@@ -283,7 +283,7 @@ func TestChannelDBHandler_GetTRNGData(t *testing.T) {
 	})
 
 	t.Run("consume mode", func(t *testing.T) {
-		handler2, _ := database.NewChannelDBHandler("", 10, 10)
+		handler2, _ := database.NewChannelDBHandler("", 10, 10, 15)
 		handler2.StoreTRNGData([]byte{5, 6, 7})
 		result, err := handler2.GetTRNGData(1, 0, true)
 		if err != nil {
@@ -299,7 +299,7 @@ func TestChannelDBHandler_GetTRNGData(t *testing.T) {
 }
 
 func TestChannelDBHandler_StoreFortunaData(t *testing.T) {
-	handler, _ := database.NewChannelDBHandler("", 10, 10)
+	handler, _ := database.NewChannelDBHandler("", 10, 10, 15)
 	data := []byte{10, 20, 30}
 	err := handler.StoreFortunaData(data)
 	if err != nil {
@@ -311,7 +311,7 @@ func TestChannelDBHandler_StoreFortunaData(t *testing.T) {
 }
 
 func TestChannelDBHandler_GetFortunaData(t *testing.T) {
-	handler, _ := database.NewChannelDBHandler("", 10, 10)
+	handler, _ := database.NewChannelDBHandler("", 10, 10, 15)
 	data := []byte{10, 20, 30}
 	handler.StoreFortunaData(data)
 
@@ -325,7 +325,7 @@ func TestChannelDBHandler_GetFortunaData(t *testing.T) {
 }
 
 func TestChannelDBHandler_IncrementPollingCount(t *testing.T) {
-	handler, _ := database.NewChannelDBHandler("", 10, 10)
+	handler, _ := database.NewChannelDBHandler("", 10, 10, 15)
 
 	err := handler.IncrementPollingCount("trng")
 	if err != nil {
@@ -345,7 +345,7 @@ func TestChannelDBHandler_IncrementPollingCount(t *testing.T) {
 }
 
 func TestChannelDBHandler_IncrementDroppedCount(t *testing.T) {
-	handler, _ := database.NewChannelDBHandler("", 10, 10)
+	handler, _ := database.NewChannelDBHandler("", 10, 10, 15)
 
 	err := handler.IncrementDroppedCount("trng")
 	if err != nil {
@@ -365,7 +365,7 @@ func TestChannelDBHandler_IncrementDroppedCount(t *testing.T) {
 }
 
 func TestChannelDBHandler_GetDetailedStats(t *testing.T) {
-	handler, _ := database.NewChannelDBHandler("", 10, 20)
+	handler, _ := database.NewChannelDBHandler("", 10, 20, 15)
 	handler.StoreTRNGData([]byte{1, 2, 3})
 	handler.StoreFortunaData([]byte{4, 5, 6})
 	handler.IncrementPollingCount("trng")
@@ -399,7 +399,7 @@ func TestChannelDBHandler_GetDetailedStats(t *testing.T) {
 }
 
 func TestChannelDBHandler_GetQueueInfo(t *testing.T) {
-	handler, _ := database.NewChannelDBHandler("", 15, 25)
+	handler, _ := database.NewChannelDBHandler("", 15, 25, 20)
 	handler.StoreTRNGData([]byte{1})
 	handler.StoreFortunaData([]byte{2})
 
@@ -423,22 +423,22 @@ func TestChannelDBHandler_GetQueueInfo(t *testing.T) {
 }
 
 func TestChannelDBHandler_UpdateQueueSizes(t *testing.T) {
-	handler, _ := database.NewChannelDBHandler("", 10, 10)
-	err := handler.UpdateQueueSizes(20, 30)
+	handler, _ := database.NewChannelDBHandler("", 10, 10, 15)
+	err := handler.UpdateQueueSizes(20, 30, 25)
 	if err == nil {
 		t.Error("Expected error for UpdateQueueSizes (not supported), got nil")
 	}
 }
 
 func TestChannelDBHandler_HealthCheck(t *testing.T) {
-	handler, _ := database.NewChannelDBHandler("", 10, 10)
+	handler, _ := database.NewChannelDBHandler("", 10, 10, 15)
 	if !handler.HealthCheck() {
 		t.Error("Expected HealthCheck to return true, got false")
 	}
 }
 
 func TestChannelDBHandler_Close(t *testing.T) {
-	handler, _ := database.NewChannelDBHandler("", 10, 10)
+	handler, _ := database.NewChannelDBHandler("", 10, 10, 15)
 	err := handler.Close()
 	if err != nil {
 		t.Errorf("Expected no error from Close, got %v", err)
@@ -446,7 +446,7 @@ func TestChannelDBHandler_Close(t *testing.T) {
 }
 
 func TestChannelDBHandler_RecordRNGUsage(t *testing.T) {
-	handler, _ := database.NewChannelDBHandler("", 10, 10)
+	handler, _ := database.NewChannelDBHandler("", 10, 10, 15)
 	err := handler.RecordRNGUsage("trng", 100)
 	if err != nil {
 		t.Errorf("Expected no error (no-op), got %v", err)
@@ -454,7 +454,7 @@ func TestChannelDBHandler_RecordRNGUsage(t *testing.T) {
 }
 
 func TestChannelDBHandler_GetRNGStatistics(t *testing.T) {
-	handler, _ := database.NewChannelDBHandler("", 10, 10)
+	handler, _ := database.NewChannelDBHandler("", 10, 10, 15)
 	stats, err := handler.GetRNGStatistics("trng", time.Now().Add(-1*time.Hour), time.Now())
 	if err != nil {
 		t.Errorf("Expected no error, got %v", err)
@@ -465,7 +465,7 @@ func TestChannelDBHandler_GetRNGStatistics(t *testing.T) {
 }
 
 func TestChannelDBHandler_GetStats(t *testing.T) {
-	handler, _ := database.NewChannelDBHandler("", 10, 10)
+	handler, _ := database.NewChannelDBHandler("", 10, 10, 15)
 	handler.StoreTRNGData([]byte{1})
 	handler.StoreFortunaData([]byte{2})
 

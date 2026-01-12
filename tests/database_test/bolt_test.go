@@ -16,7 +16,7 @@ func setupBoltDBTest(t *testing.T) (*database.BoltDBHandler, string, func()) {
 	}
 
 	dbPath := filepath.Join(tmpDir, "test.db")
-	handler, err := database.NewBoltDBHandler(dbPath, 10, 20)
+	handler, err := database.NewBoltDBHandler(dbPath, 10, 20, 15)
 	if err != nil {
 		os.RemoveAll(tmpDir)
 		t.Fatalf("Failed to create BoltDB handler: %v", err)
@@ -53,7 +53,7 @@ func TestNewBoltDBHandler(t *testing.T) {
 		}
 		defer os.RemoveAll(tmpDir)
 
-		handler, err := database.NewBoltDBHandler(tmpDir, 10, 20)
+		handler, err := database.NewBoltDBHandler(tmpDir, 10, 20, 15)
 		if err != nil {
 			t.Fatalf("Failed to create handler with directory: %v", err)
 		}
@@ -380,7 +380,7 @@ func TestBoltDBHandler_UpdateQueueSizes(t *testing.T) {
 	handler, _, cleanup := setupBoltDBTest(t)
 	defer cleanup()
 
-	err := handler.UpdateQueueSizes(50, 60)
+	err := handler.UpdateQueueSizes(50, 60, 55)
 	if err != nil {
 		t.Fatalf("Expected no error, got %v", err)
 	}
@@ -545,7 +545,7 @@ func TestBoltDBHandler_GetDatabasePath(t *testing.T) {
 	defer os.RemoveAll(tmpDir)
 
 	dbPath := filepath.Join(tmpDir, "test.db")
-	handler, err := database.NewBoltDBHandler(dbPath, 10, 20)
+	handler, err := database.NewBoltDBHandler(dbPath, 10, 20, 15)
 	if err != nil {
 		t.Fatalf("Failed to create handler: %v", err)
 	}

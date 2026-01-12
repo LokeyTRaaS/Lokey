@@ -31,7 +31,9 @@ type BoltDBHandler struct {
 }
 
 // NewBoltDBHandler creates a new BoltDB handler
-func NewBoltDBHandler(dbPath string, trngQueueSize, fortunaQueueSize int) (*BoltDBHandler, error) {
+// Note: virtioQueueSize parameter is accepted but not used (VirtIO uses channel-only queue)
+func NewBoltDBHandler(dbPath string, trngQueueSize, fortunaQueueSize, virtioQueueSize int) (*BoltDBHandler, error) {
+	_ = virtioQueueSize // Explicitly unused - VirtIO queue is channel-only
 	// Check if the path is a directory and append default filename if needed
 	fileInfo, err := os.Stat(dbPath)
 	if err == nil && fileInfo.IsDir() {
@@ -434,6 +436,18 @@ func (h *BoltDBHandler) GetFortunaData(limit, offset int, consume bool) ([][]byt
 	return dataSlices, err
 }
 
+//---------------------- VirtIO Data Operations ----------------------
+
+// StoreVirtIOData is not supported in BoltDB implementation (VirtIO uses channel-only queue)
+func (h *BoltDBHandler) StoreVirtIOData(data []byte) error {
+	return fmt.Errorf("VirtIO data storage not supported in BoltDB implementation (VirtIO uses channel-only queue)")
+}
+
+// GetVirtIOData is not supported in BoltDB implementation (VirtIO uses channel-only queue)
+func (h *BoltDBHandler) GetVirtIOData(limit, offset int, consume bool) ([][]byte, error) {
+	return nil, fmt.Errorf("VirtIO data retrieval not supported in BoltDB implementation (VirtIO uses channel-only queue)")
+}
+
 // trimFortunaDataIfNeeded maintains the Fortuna data queue size and counts drops
 func (h *BoltDBHandler) trimFortunaDataIfNeeded(tx *bolt.Tx) error {
 	b := tx.Bucket(fortunaDataBucket)
@@ -593,6 +607,9 @@ func (h *BoltDBHandler) GetDetailedStats() (*DetailedStats, error) {
 		stats.Fortuna.UnconsumedCount = fortunaUnconsumed
 		stats.Fortuna.TotalGenerated = int64(fortunaTotal)
 
+		// VirtIO stats (always zero for BoltDB - VirtIO uses channel-only queue)
+		stats.VirtIO = DataSourceStats{}
+
 		return nil
 	})
 
@@ -737,6 +754,7 @@ func (h *BoltDBHandler) GetQueueInfo() (map[string]int, error) {
 	info := map[string]int{
 		"trng_queue_capacity":    h.TRNGQueueSize,
 		"fortuna_queue_capacity": h.FortunaQueueSize,
+		"virtio_queue_capacity": 0, // VirtIO uses channel-only queue
 	}
 
 	// Get current queue usage
@@ -765,6 +783,9 @@ func (h *BoltDBHandler) GetQueueInfo() (map[string]int, error) {
 		}
 		info["fortuna_queue_current"] = fortunaUnconsumed
 
+		// VirtIO queue current (always 0 for BoltDB - VirtIO uses channel-only queue)
+		info["virtio_queue_current"] = 0
+
 		return nil
 	})
 
@@ -772,7 +793,9 @@ func (h *BoltDBHandler) GetQueueInfo() (map[string]int, error) {
 }
 
 // UpdateQueueSizes updates the queue size configuration
-func (h *BoltDBHandler) UpdateQueueSizes(trngSize, fortunaSize int) error {
+// Note: virtioSize parameter is accepted but not used (VirtIO uses channel-only queue)
+func (h *BoltDBHandler) UpdateQueueSizes(trngSize, fortunaSize, virtioSize int) error {
+	_ = virtioSize // Explicitly unused - VirtIO queue is channel-only
 	h.mu.Lock()
 	h.TRNGQueueSize = trngSize
 	h.FortunaQueueSize = fortunaSize

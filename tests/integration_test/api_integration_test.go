@@ -20,7 +20,7 @@ import (
 // setupIntegrationServer creates a test server with mock external services
 func setupIntegrationServer(handler database.DBHandler, controllerURL, fortunaURL string) (*api.Server, func()) {
 	testRegistry := prometheus.NewRegistry()
-	server := api.NewServer(handler, controllerURL, fortunaURL, 0, testRegistry)
+	server := api.NewServer(handler, controllerURL, fortunaURL, "http://localhost:8083", 0, testRegistry)
 	return server, func() {
 		handler.Close()
 	}
@@ -61,7 +61,7 @@ func setupMockFortuna(t *testing.T) (*httptest.Server, func()) {
 func TestAPI_Endpoints(t *testing.T) {
 	t.Run("with ChannelDBHandler", func(t *testing.T) {
 		testAPIEndpoints(t, func() (database.DBHandler, func()) {
-			db, _ := database.NewChannelDBHandler("", 10, 20)
+			db, _ := database.NewChannelDBHandler("", 10, 20, 15)
 			return db, func() { db.Close() }
 		})
 	})
@@ -70,7 +70,7 @@ func TestAPI_Endpoints(t *testing.T) {
 		testAPIEndpoints(t, func() (database.DBHandler, func()) {
 			tmpDir := t.TempDir()
 			dbPath := tmpDir + "/test.db"
-			db, err := database.NewBoltDBHandler(dbPath, 10, 20)
+			db, err := database.NewBoltDBHandler(dbPath, 10, 20, 15)
 			if err != nil {
 				t.Fatalf("Failed to create BoltDB handler: %v", err)
 			}
@@ -116,6 +116,7 @@ func testAPIEndpoints(t *testing.T, setupDB func() (database.DBHandler, func()))
 		config := api.QueueConfig{
 			TRNGQueueSize:    50,
 			FortunaQueueSize: 60,
+			VirtIOQueueSize:  70,
 		}
 		body, _ := json.Marshal(config)
 		w := httptest.NewRecorder()
@@ -136,6 +137,9 @@ func testAPIEndpoints(t *testing.T, setupDB func() (database.DBHandler, func()))
 			}
 			if response.TRNGQueueSize != 50 {
 				t.Errorf("Expected TRNG queue size 50, got %d", response.TRNGQueueSize)
+			}
+			if response.VirtIOQueueSize != 70 {
+				t.Errorf("Expected VirtIO queue size 70, got %d", response.VirtIOQueueSize)
 			}
 		}
 	})
@@ -366,7 +370,7 @@ func testAPIEndpoints(t *testing.T, setupDB func() (database.DBHandler, func()))
 func TestAPI_CompleteFlow(t *testing.T) {
 	t.Run("with ChannelDBHandler", func(t *testing.T) {
 		testCompleteFlow(t, func() (database.DBHandler, func()) {
-			db, _ := database.NewChannelDBHandler("", 10, 20)
+			db, _ := database.NewChannelDBHandler("", 10, 20, 15)
 			return db, func() { db.Close() }
 		})
 	})
@@ -375,7 +379,7 @@ func TestAPI_CompleteFlow(t *testing.T) {
 		testCompleteFlow(t, func() (database.DBHandler, func()) {
 			tmpDir := t.TempDir()
 			dbPath := tmpDir + "/test.db"
-			db, err := database.NewBoltDBHandler(dbPath, 10, 20)
+			db, err := database.NewBoltDBHandler(dbPath, 10, 20, 15)
 			if err != nil {
 				t.Fatalf("Failed to create BoltDB handler: %v", err)
 			}
@@ -582,7 +586,7 @@ func testCompleteFlow(t *testing.T, setupDB func() (database.DBHandler, func()))
 func TestAPI_StartPolling(t *testing.T) {
 	t.Run("with ChannelDBHandler", func(t *testing.T) {
 		testStartPolling(t, func() (database.DBHandler, func()) {
-			db, _ := database.NewChannelDBHandler("", 10, 20)
+			db, _ := database.NewChannelDBHandler("", 10, 20, 15)
 			return db, func() { db.Close() }
 		})
 	})
@@ -591,7 +595,7 @@ func TestAPI_StartPolling(t *testing.T) {
 		testStartPolling(t, func() (database.DBHandler, func()) {
 			tmpDir := t.TempDir()
 			dbPath := tmpDir + "/test.db"
-			db, err := database.NewBoltDBHandler(dbPath, 10, 20)
+			db, err := database.NewBoltDBHandler(dbPath, 10, 20, 15)
 			if err != nil {
 				t.Fatalf("Failed to create BoltDB handler: %v", err)
 			}
@@ -715,7 +719,7 @@ func testStartPolling(t *testing.T, setupDB func() (database.DBHandler, func()))
 
 func TestAPI_CORS(t *testing.T) {
 	db, cleanupDB := func() (database.DBHandler, func()) {
-		db, _ := database.NewChannelDBHandler("", 10, 20)
+		db, _ := database.NewChannelDBHandler("", 10, 20, 15)
 		return db, func() { db.Close() }
 	}()
 	defer cleanupDB()
@@ -765,7 +769,7 @@ func TestAPI_CORS(t *testing.T) {
 
 func TestAPI_HealthCheckFailures(t *testing.T) {
 	db, cleanupDB := func() (database.DBHandler, func()) {
-		db, _ := database.NewChannelDBHandler("", 10, 20)
+		db, _ := database.NewChannelDBHandler("", 10, 20, 15)
 		return db, func() { db.Close() }
 	}()
 	defer cleanupDB()
@@ -871,7 +875,17 @@ func TestAPI_HealthCheckFailures(t *testing.T) {
 		}))
 		defer fortunaServer.Close()
 
-		server, _ := setupIntegrationServer(db, controllerServer.URL, fortunaServer.URL)
+		virtioServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/health" {
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+			}
+		}))
+		defer virtioServer.Close()
+
+		// Create server with VirtIO address
+		testRegistry := prometheus.NewRegistry()
+		server := api.NewServer(db, controllerServer.URL, fortunaServer.URL, virtioServer.URL, 0, testRegistry)
 
 		w := httptest.NewRecorder()
 		req, _ := http.NewRequest("GET", "/api/v1/health", nil)
@@ -892,6 +906,9 @@ func TestAPI_HealthCheckFailures(t *testing.T) {
 		if !response.Details.Fortuna {
 			t.Error("Expected Fortuna to be healthy")
 		}
+		if !response.Details.VirtIO {
+			t.Error("Expected VirtIO to be healthy")
+		}
 		if !response.Details.Database {
 			t.Error("Expected database to be healthy")
 		}
@@ -903,7 +920,7 @@ func TestAPI_HealthCheckFailures(t *testing.T) {
 
 func TestAPI_MetricsAccuracy(t *testing.T) {
 	db, cleanupDB := func() (database.DBHandler, func()) {
-		db, _ := database.NewChannelDBHandler("", 10, 20)
+		db, _ := database.NewChannelDBHandler("", 10, 20, 15)
 		return db, func() { db.Close() }
 	}()
 	defer cleanupDB()

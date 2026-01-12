@@ -139,17 +139,20 @@ func (q *CircularQueue) Capacity() int {
 type ChannelDBHandler struct {
 	TRNGQueue     *CircularQueue
 	FortunaQueue  *CircularQueue
+	VirtIOQueue   *CircularQueue
 	nextTRNGID    atomic.Uint64
 	nextFortunaID atomic.Uint64
+	nextVirtIOID  atomic.Uint64
 	// Note: No mutex needed here - CircularQueue handles its own synchronization
 	// and atomic fields are self-synchronized
 }
 
 // NewChannelDBHandler creates a new channel-based database handler
-func NewChannelDBHandler(_ string, trngQueueSize, fortunaQueueSize int) (*ChannelDBHandler, error) {
+func NewChannelDBHandler(_ string, trngQueueSize, fortunaQueueSize, virtioQueueSize int) (*ChannelDBHandler, error) {
 	return &ChannelDBHandler{
 		TRNGQueue:    NewCircularQueue(trngQueueSize),
 		FortunaQueue: NewCircularQueue(fortunaQueueSize),
+		VirtIOQueue:  NewCircularQueue(virtioQueueSize),
 	}, nil
 }
 
@@ -200,6 +203,27 @@ func (h *ChannelDBHandler) GetFortunaData(limit, offset int, consume bool) ([][]
 	return h.FortunaQueue.Get(limit, offset, consume), nil
 }
 
+//---------------------- VirtIO Data Operations ----------------------
+
+// StoreVirtIOData stores VirtIO-generated data
+func (h *ChannelDBHandler) StoreVirtIOData(data []byte) error {
+	id := h.nextVirtIOID.Add(1) - 1
+
+	item := DataItem{
+		ID:        id,
+		Data:      data,
+		Timestamp: time.Now(),
+	}
+
+	h.VirtIOQueue.Push(item)
+	return nil
+}
+
+// GetVirtIOData retrieves VirtIO-generated data with pagination and consumption tracking
+func (h *ChannelDBHandler) GetVirtIOData(limit, offset int, consume bool) ([][]byte, error) {
+	return h.VirtIOQueue.Get(limit, offset, consume), nil
+}
+
 //---------------------- Enhanced Statistics Operations ----------------------
 
 // IncrementPollingCount increments the polling counter for a data source
@@ -209,6 +233,8 @@ func (h *ChannelDBHandler) IncrementPollingCount(source string) error {
 		h.TRNGQueue.Stats.PollingCount.Add(1)
 	case "fortuna":
 		h.FortunaQueue.Stats.PollingCount.Add(1)
+	case "virtio":
+		h.VirtIOQueue.Stats.PollingCount.Add(1)
 	}
 	return nil
 }
@@ -220,6 +246,8 @@ func (h *ChannelDBHandler) IncrementDroppedCount(source string) error {
 		h.TRNGQueue.Stats.DroppedCount.Add(1)
 	case "fortuna":
 		h.FortunaQueue.Stats.DroppedCount.Add(1)
+	case "virtio":
+		h.VirtIOQueue.Stats.DroppedCount.Add(1)
 	}
 	return nil
 }
@@ -260,6 +288,22 @@ func (h *ChannelDBHandler) GetDetailedStats() (*DetailedStats, error) {
 		stats.Fortuna.QueuePercentage = float64(fortunaSize) / float64(fortunaCapacity) * 100
 	}
 
+	// VirtIO stats
+	virtioSize := h.VirtIOQueue.Size()
+	virtioCapacity := h.VirtIOQueue.Capacity()
+
+	stats.VirtIO.PollingCount = int64(h.VirtIOQueue.Stats.PollingCount.Load())   // #nosec G115
+	stats.VirtIO.QueueDropped = int64(h.VirtIOQueue.Stats.DroppedCount.Load())   // #nosec G115
+	stats.VirtIO.ConsumedCount = int64(h.VirtIOQueue.Stats.ConsumedCount.Load()) // #nosec G115
+	stats.VirtIO.QueueCurrent = virtioSize
+	stats.VirtIO.QueueCapacity = virtioCapacity
+	stats.VirtIO.UnconsumedCount = virtioSize
+	stats.VirtIO.TotalGenerated = int64(h.VirtIOQueue.Stats.TotalCount.Load()) // #nosec G115
+
+	if virtioCapacity > 0 {
+		stats.VirtIO.QueuePercentage = float64(virtioSize) / float64(virtioCapacity) * 100
+	}
+
 	// Database stats (in-memory, so no file)
 	stats.Database.SizeBytes = 0
 	stats.Database.SizeHuman = "0 B (in-memory)"
@@ -276,9 +320,10 @@ func (h *ChannelDBHandler) GetDatabaseSize() (int64, error) {
 	// Calculate approximate memory usage
 	trngSize := h.TRNGQueue.Size()
 	fortunaSize := h.FortunaQueue.Size()
+	virtioSize := h.VirtIOQueue.Size()
 
 	// Approximate: 32 bytes data + 24 bytes overhead per item
-	approxSize := int64((trngSize + fortunaSize) * 56)
+	approxSize := int64((trngSize + fortunaSize + virtioSize) * 56)
 
 	return approxSize, nil
 }
@@ -308,6 +353,7 @@ func (h *ChannelDBHandler) GetStats() (map[string]interface{}, error) {
 
 	stats["trng_count"] = h.TRNGQueue.Size()
 	stats["fortuna_count"] = h.FortunaQueue.Size()
+	stats["virtio_count"] = h.VirtIOQueue.Size()
 	stats["db_size"] = int64(0)
 
 	return stats, nil
@@ -320,15 +366,17 @@ func (h *ChannelDBHandler) GetQueueInfo() (map[string]int, error) {
 	info := map[string]int{
 		"trng_queue_capacity":    h.TRNGQueue.Capacity(),
 		"fortuna_queue_capacity": h.FortunaQueue.Capacity(),
+		"virtio_queue_capacity": h.VirtIOQueue.Capacity(),
 		"trng_queue_current":     h.TRNGQueue.Size(),
 		"fortuna_queue_current":  h.FortunaQueue.Size(),
+		"virtio_queue_current":   h.VirtIOQueue.Size(),
 	}
 
 	return info, nil
 }
 
 // UpdateQueueSizes is not supported for channel implementation
-func (h *ChannelDBHandler) UpdateQueueSizes(_ int, _ int) error {
+func (h *ChannelDBHandler) UpdateQueueSizes(_ int, _ int, _ int) error {
 	return fmt.Errorf("dynamic queue resizing not supported in channel implementation")
 }
 

@@ -32,7 +32,7 @@ func TestNewDBHandler_Default(t *testing.T) {
 	defer os.RemoveAll(tmpDir)
 
 	dbPath := filepath.Join(tmpDir, "test.db")
-	handler, err := database.NewDBHandler(dbPath, 10, 20)
+	handler, err := database.NewDBHandler(dbPath, 10, 20, 15)
 	if err != nil {
 		t.Fatalf("Expected no error, got %v", err)
 	}
@@ -40,7 +40,7 @@ func TestNewDBHandler_Default(t *testing.T) {
 
 	// Verify it's a database.BoltDBHandler by checking if UpdateQueueSizes works
 	// (database.ChannelDBHandler returns error for UpdateQueueSizes)
-	err = handler.UpdateQueueSizes(15, 25)
+		err = handler.UpdateQueueSizes(15, 25, 20)
 	if err != nil {
 		t.Errorf("Expected UpdateQueueSizes to work (BoltDB), got error: %v", err)
 	}
@@ -51,14 +51,14 @@ func TestNewDBHandler_Channel(t *testing.T) {
 	os.Setenv("DB_IMPLEMENTATION", "channel")
 	defer os.Unsetenv("DB_IMPLEMENTATION")
 
-	handler, err := database.NewDBHandler("", 10, 20)
+	handler, err := database.NewDBHandler("", 10, 20, 15)
 	if err != nil {
 		t.Fatalf("Expected no error, got %v", err)
 	}
 	defer handler.Close()
 
 	// Verify it's a database.ChannelDBHandler by checking UpdateQueueSizes fails
-	err = handler.UpdateQueueSizes(15, 25)
+		err = handler.UpdateQueueSizes(15, 25, 20)
 	if err == nil {
 		t.Error("Expected UpdateQueueSizes to fail (database.ChannelDBHandler), got no error")
 	}
@@ -73,7 +73,7 @@ func TestNewDBHandler_Channel(t *testing.T) {
 
 func TestDBHandlerInterface_Methods(t *testing.T) {
 	t.Run("channel handler methods", func(t *testing.T) {
-		handler, _ := database.NewChannelDBHandler("", 10, 20)
+		handler, _ := database.NewChannelDBHandler("", 10, 20, 15)
 
 		// Test all interface methods exist and are callable
 		_ = handler.StoreTRNGData([]byte{1})
@@ -89,7 +89,7 @@ func TestDBHandlerInterface_Methods(t *testing.T) {
 		_, _ = handler.GetRNGStatistics("trng", time.Now().Add(-1*time.Hour), time.Now())
 		_, _ = handler.GetStats()
 		_, _ = handler.GetQueueInfo()
-		_ = handler.UpdateQueueSizes(15, 25)
+		_ = handler.UpdateQueueSizes(15, 25, 20)
 		_ = handler.HealthCheck()
 		_ = handler.Close()
 	})
@@ -102,7 +102,7 @@ func TestDBHandlerInterface_Methods(t *testing.T) {
 		defer os.RemoveAll(tmpDir)
 
 		dbPath := filepath.Join(tmpDir, "test.db")
-		handler, err := database.NewBoltDBHandler(dbPath, 10, 20)
+		handler, err := database.NewBoltDBHandler(dbPath, 10, 20, 15)
 		if err != nil {
 			t.Fatalf("Failed to create handler: %v", err)
 		}
@@ -122,7 +122,7 @@ func TestDBHandlerInterface_Methods(t *testing.T) {
 		_, _ = handler.GetRNGStatistics("trng", time.Now().Add(-1*time.Hour), time.Now())
 		_, _ = handler.GetStats()
 		_, _ = handler.GetQueueInfo()
-		_ = handler.UpdateQueueSizes(15, 25)
+		_ = handler.UpdateQueueSizes(15, 25, 20)
 		_ = handler.HealthCheck()
 		_ = handler.Close()
 	})

@@ -14,6 +14,7 @@ type UsageStat struct {
 type DetailedStats struct {
 	TRNG        DataSourceStats `json:"trng"`
 	Fortuna     DataSourceStats `json:"fortuna"`
+	VirtIO      DataSourceStats `json:"virtio"`
 	Database    Stats           `json:"database"`
 	TRNGQuality QualityMetrics  `json:"trng_quality"`
 }
@@ -83,6 +84,14 @@ type FortunaData struct {
 	Consumed  bool      `json:"consumed"`
 }
 
+// VirtIOData represents VirtIO-generated random data
+type VirtIOData struct {
+	ID        uint64    `json:"id"`
+	Data      []byte    `json:"data"`
+	Timestamp time.Time `json:"timestamp"`
+	Consumed  bool      `json:"consumed"`
+}
+
 // DBHandler defines the interface for database operations
 type DBHandler interface {
 	// TRNG operations
@@ -92,6 +101,10 @@ type DBHandler interface {
 	// Fortuna operations
 	StoreFortunaData(data []byte) error
 	GetFortunaData(limit, offset int, consume bool) ([][]byte, error)
+
+	// VirtIO operations
+	StoreVirtIOData(data []byte) error
+	GetVirtIOData(limit, offset int, consume bool) ([][]byte, error)
 
 	// Enhanced statistics
 	GetDetailedStats() (*DetailedStats, error)
@@ -107,7 +120,7 @@ type DBHandler interface {
 
 	// Health and utility methods
 	GetQueueInfo() (map[string]int, error)
-	UpdateQueueSizes(trngSize, fortunaSize int) error
+	UpdateQueueSizes(trngSize, fortunaSize, virtioSize int) error
 	HealthCheck() bool
 	Close() error
 }

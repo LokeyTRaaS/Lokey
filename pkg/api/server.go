@@ -1,7 +1,9 @@
 package api
 
 import (
+	"bytes"
 	"encoding/binary"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -27,6 +29,7 @@ type Server struct {
 	DB             database.DBHandler
 	ControllerAddr string
 	FortunaAddr    string
+	VirtioAddr     string
 	port           int
 	Router         *gin.Engine
 	validate       *validator.Validate
@@ -41,14 +44,33 @@ type Server struct {
 	lastSeedingFailure atomic.Int64 // Unix timestamp
 	seedingCooldown    time.Duration
 
+	// VirtIO seeding circuit breaker
+	virtioSeedingFailures    atomic.Int64
+	virtioSeedingCircuitOpen atomic.Bool
+	lastVirtIOSeedingFailure atomic.Int64 // Unix timestamp
+	virtioSeedingCooldown    time.Duration
+
 	// TRNG quality metrics tracker
 	trngQualityTracker *TRNGQualityTracker
+	// VirtIO quality metrics tracker
+	virtioQualityTracker *TRNGQualityTracker
+
+	// VirtIO configuration (thread-safe)
+	virtioSeedingSource string
+	virtioConfigMutex   sync.RWMutex
 }
 
 // QueueConfig represents the queue configuration
 type QueueConfig struct {
 	TRNGQueueSize    int `json:"trng_queue_size" validate:"required,min=10,max=1000000"`
 	FortunaQueueSize int `json:"fortuna_queue_size" validate:"required,min=10,max=1000000"`
+	VirtIOQueueSize  int `json:"virtio_queue_size" validate:"required,min=10,max=1000000"`
+}
+
+// VirtIOConfig represents the VirtIO configuration
+type VirtIOConfig struct {
+	SeedingSource string `json:"seeding_source" validate:"required,oneof=trng fortuna both"`
+	QueueSize     int    `json:"queue_size" validate:"required,min=10,max=1000000"`
 }
 
 // ConsumeConfig represents the consume mode configuration
@@ -61,7 +83,7 @@ type DataRequest struct {
 	Format string `json:"format" validate:"required,oneof=int8 int16 int32 int64 uint8 uint16 uint32 uint64 binary"`
 	Count  int    `json:"limit" validate:"required,min=1,max=100000"`
 	Offset int    `json:"offset" validate:"min=0"`
-	Source string `json:"source" validate:"required,oneof=trng fortuna"`
+	Source string `json:"source" validate:"required,oneof=trng fortuna virtio"`
 }
 
 // HealthCheckResponse represents the health check response
@@ -72,6 +94,7 @@ type HealthCheckResponse struct {
 		API        bool `json:"api"`
 		Controller bool `json:"controller"`
 		Fortuna    bool `json:"fortuna"`
+		VirtIO     bool `json:"virtio"`
 		Database   bool `json:"database"`
 	} `json:"details"`
 }
@@ -90,11 +113,17 @@ type Metrics struct {
 	FortunaConsumed        prometheus.Gauge
 	FortunaUnconsumed      prometheus.Gauge
 
+	VirtIOQueueCurrent    prometheus.Gauge
+	VirtIOQueueCapacity   prometheus.Gauge
+	VirtIOQueuePercentage prometheus.Gauge
+	VirtIOConsumed        prometheus.Gauge
+	VirtIOUnconsumed      prometheus.Gauge
+
 	DatabaseSizeBytes prometheus.Gauge
 }
 
 // NewServer creates a new API server
-func NewServer(db database.DBHandler, controllerAddr, fortunaAddr string, port int, reg *prometheus.Registry) *Server {
+func NewServer(db database.DBHandler, controllerAddr, fortunaAddr, virtioAddr string, port int, reg *prometheus.Registry) *Server {
 	router := gin.Default()
 	validate := validator.New()
 
@@ -152,6 +181,27 @@ func NewServer(db database.DBHandler, controllerAddr, fortunaAddr string, port i
 			Help: "Number of Fortuna items unconsumed",
 		}),
 
+		VirtIOQueueCurrent: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "virtio_queue_current",
+			Help: "Current size of VirtIO queue",
+		}),
+		VirtIOQueueCapacity: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "virtio_queue_capacity",
+			Help: "Capacity of VirtIO queue",
+		}),
+		VirtIOQueuePercentage: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "virtio_queue_percentage",
+			Help: "Percentage of VirtIO queue used",
+		}),
+		VirtIOConsumed: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "virtio_consumed",
+			Help: "Number of VirtIO items consumed",
+		}),
+		VirtIOUnconsumed: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "virtio_unconsumed",
+			Help: "Number of VirtIO items unconsumed",
+		}),
+
 		DatabaseSizeBytes: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "database_size_bytes",
 			Help: "Size of database in bytes",
@@ -170,6 +220,11 @@ func NewServer(db database.DBHandler, controllerAddr, fortunaAddr string, port i
 		metrics.FortunaQueuePercentage,
 		metrics.FortunaConsumed,
 		metrics.FortunaUnconsumed,
+		metrics.VirtIOQueueCurrent,
+		metrics.VirtIOQueueCapacity,
+		metrics.VirtIOQueuePercentage,
+		metrics.VirtIOConsumed,
+		metrics.VirtIOUnconsumed,
 		metrics.DatabaseSizeBytes,
 	)
 
@@ -182,17 +237,21 @@ func NewServer(db database.DBHandler, controllerAddr, fortunaAddr string, port i
 	}
 
 	server := &Server{
-		DB:             db,
-		ControllerAddr: controllerAddr,
-		FortunaAddr:    fortunaAddr,
-		port:           port,
-		Router:         router,
-		validate:       validate,
-		metrics:        metrics,
-		registry:       reg,
-		consumeMode:    false, // Default: don't consume (read-only mode)
-		seedingCooldown: 5 * time.Minute, // Default cooldown for seeding circuit breaker
-		trngQualityTracker: NewTRNGQualityTracker(aptWindowSize),
+		DB:                    db,
+		ControllerAddr:        controllerAddr,
+		FortunaAddr:           fortunaAddr,
+		VirtioAddr:            virtioAddr,
+		port:                  port,
+		Router:                router,
+		validate:              validate,
+		metrics:               metrics,
+		registry:              reg,
+		consumeMode:           false,           // Default: don't consume (read-only mode)
+		seedingCooldown:       5 * time.Minute, // Default cooldown for seeding circuit breaker
+		virtioSeedingCooldown: 5 * time.Minute, // Default cooldown for VirtIO seeding circuit breaker
+		trngQualityTracker:    NewTRNGQualityTracker(aptWindowSize),
+		virtioQualityTracker:  NewTRNGQualityTracker(aptWindowSize),
+		virtioSeedingSource:   "trng", // Default seeding source
 	}
 
 	server.setupRoutes()
@@ -229,6 +288,9 @@ func (s *Server) setupRoutes() {
 		api.PUT("/config/queue", s.UpdateQueueConfig)
 		api.GET("/config/consume", s.GetConsumeConfig)
 		api.PUT("/config/consume", s.UpdateConsumeConfig)
+		// VirtIO configuration endpoints (also under /api/v1 for Swagger compatibility)
+		api.GET("/config/virtio", s.GetVirtIOConfig)
+		api.PUT("/config/virtio", s.UpdateVirtIOConfig)
 
 		// Data retrieval endpoints
 		api.POST("/data", s.GetRandomData)
@@ -238,6 +300,10 @@ func (s *Server) setupRoutes() {
 		api.GET("/health", s.HealthCheck)
 		api.GET("/metrics", s.MetricsHandler)
 	}
+
+	// VirtIO configuration endpoints (top-level, without /api/v1 prefix for direct access)
+	s.Router.GET("/config/virtio", s.GetVirtIOConfig)
+	s.Router.PUT("/config/virtio", s.UpdateVirtIOConfig)
 }
 
 // Run starts the API server
@@ -247,7 +313,7 @@ func (s *Server) Run() error {
 
 // GetQueueConfig returns the current queue configuration.
 // @Summary Get queue configuration
-// @Description Get current queue size configuration for TRNG and Fortuna data
+// @Description Get current queue size configuration for TRNG, Fortuna, and VirtIO data
 // @Tags            configuration
 // @Accept          json
 // @Produce         json
@@ -273,12 +339,13 @@ func (s *Server) GetQueueConfig(c *gin.Context) {
 	c.JSON(http.StatusOK, QueueConfig{
 		TRNGQueueSize:    queueInfo["trng_queue_capacity"],
 		FortunaQueueSize: queueInfo["fortuna_queue_capacity"],
+		VirtIOQueueSize:  queueInfo["virtio_queue_capacity"],
 	})
 }
 
 // UpdateQueueConfig updates the queue configuration.
 // @Summary Update queue configuration
-// @Description Update queue size configuration for TRNG and Fortuna data
+// @Description Update queue size configuration for TRNG, Fortuna, and VirtIO data. VirtIO queue size changes are forwarded to the VirtIO service.
 // @Tags configuration
 // @Accept json
 // @Produce json
@@ -299,9 +366,20 @@ func (s *Server) UpdateQueueConfig(c *gin.Context) {
 		return
 	}
 
-	if err := s.DB.UpdateQueueSizes(config.TRNGQueueSize, config.FortunaQueueSize); err != nil {
+	if err := s.DB.UpdateQueueSizes(config.TRNGQueueSize, config.FortunaQueueSize, config.VirtIOQueueSize); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update queue configuration"})
 		return
+	}
+
+	// Send queue size update to VirtIO service if it changed
+	if s.VirtioAddr != "" && config.VirtIOQueueSize > 0 {
+		client := &http.Client{Timeout: 5 * time.Second}
+		queueUpdateURL := fmt.Sprintf("%s/config/queue", s.VirtioAddr)
+		queueUpdateBody := map[string]int{"queue_size": config.VirtIOQueueSize}
+		jsonBody, _ := json.Marshal(queueUpdateBody)
+		req, _ := http.NewRequest("PUT", queueUpdateURL, bytes.NewBuffer(jsonBody))
+		req.Header.Set("Content-Type", "application/json")
+		_, _ = client.Do(req) // Ignore errors - VirtIO service might not be available
 	}
 
 	c.JSON(http.StatusOK, config)
@@ -353,7 +431,7 @@ func (s *Server) UpdateConsumeConfig(c *gin.Context) {
 
 // GetRandomData retrieves random data in various formats with pagination.
 // @Summary Get random data
-// @Description Retrieve random data in various formats with pagination
+// @Description Retrieve random data in various formats with pagination. Valid sources are "trng" (True Random Number Generator) and "fortuna" (Fortuna CSPRNG). Note: VirtIO is a consumer endpoint for virtualization (named pipe/HTTP streaming) and cannot be used as a data source here. To access VirtIO data, use the named pipe or HTTP streaming endpoint directly.
 // @Tags data
 // @Accept json
 // @Produce json
@@ -389,10 +467,23 @@ func (s *Server) GetRandomData(c *gin.Context) {
 	// Retrieve data
 	var rawData [][]byte
 	var err error
-	if request.Source == "trng" {
+	switch request.Source {
+	case "trng":
 		rawData, err = s.DB.GetTRNGData(estimatedChunksNeeded, request.Offset, consumeData)
-	} else {
+	case "fortuna":
 		rawData, err = s.DB.GetFortunaData(estimatedChunksNeeded, request.Offset, consumeData)
+	case "virtio":
+		// VirtIO is a consumer endpoint (for VMs via named pipe/HTTP streaming), not a data source for the API
+		// Data flows one way: API seeds VirtIO, VirtIO serves VMs
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "VirtIO is a consumer endpoint for virtualization (named pipe/HTTP streaming), not a data source. " +
+				"Use 'trng' or 'fortuna' as the source instead. " +
+				"To access VirtIO data, use the named pipe (/var/run/lokey/virtio-rng) or HTTP streaming endpoint (GET /stream).",
+		})
+		return
+	default:
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid source"})
+		return
 	}
 
 	if err != nil {
@@ -509,13 +600,96 @@ func convertToIntFormat(data [][]byte, maxCount, bytesPerValue int, signed bool)
 	return result
 }
 
+// getVirtIOQueueMetrics queries the VirtIO service for queue metrics
+func (s *Server) getVirtIOQueueMetrics() database.DataSourceStats {
+	stats := database.DataSourceStats{}
+
+	if s.VirtioAddr == "" {
+		return stats // Return zero stats if VirtIO not configured
+	}
+
+	client := &http.Client{Timeout: 5 * time.Second}
+	queueConfigURL := fmt.Sprintf("%s/config/queue", s.VirtioAddr)
+	resp, err := client.Get(queueConfigURL)
+	if err != nil {
+		// VirtIO service unavailable - return zero stats
+		return stats
+	}
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			log.Printf("Warning: failed to close VirtIO queue metrics response body: %v", closeErr)
+		}
+	}()
+
+	if resp.StatusCode != http.StatusOK {
+		return stats // Return zero stats on error
+	}
+
+	// Use map[string]interface{} to handle both int and int64 values from JSON
+	var queueInfo map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&queueInfo); err != nil {
+		log.Printf("Warning: failed to decode VirtIO queue metrics: %v", err)
+		return stats
+	}
+
+	// Extract queue_size and queue_current (always int)
+	if size, ok := queueInfo["queue_size"].(float64); ok {
+		stats.QueueCapacity = int(size)
+	}
+	if current, ok := queueInfo["queue_current"].(float64); ok {
+		stats.QueueCurrent = int(current)
+	}
+
+	// Extract metrics that may be int64 (total_generated, consumed_count, queue_dropped)
+	if totalGen, ok := queueInfo["total_generated"].(float64); ok {
+		stats.TotalGenerated = int64(totalGen)
+	}
+	if consumed, ok := queueInfo["consumed_count"].(float64); ok {
+		stats.ConsumedCount = int64(consumed)
+	}
+	if dropped, ok := queueInfo["queue_dropped"].(float64); ok {
+		stats.QueueDropped = int64(dropped)
+	}
+
+	// Calculate derived metrics
+	stats.UnconsumedCount = stats.QueueCurrent
+	// Note: PollingCount is not set - it will be omitted from VirtIO response
+
+	if stats.QueueCapacity > 0 {
+		stats.QueuePercentage = float64(stats.QueueCurrent) / float64(stats.QueueCapacity) * 100
+	}
+
+	return stats
+}
+
+// VirtIOStats represents VirtIO statistics without polling_count (VirtIO is not polled, only seeded)
+type VirtIOStats struct {
+	QueueCurrent    int     `json:"queue_current"`
+	QueueCapacity   int     `json:"queue_capacity"`
+	QueuePercentage float64 `json:"queue_percentage"`
+	QueueDropped    int64   `json:"queue_dropped"`
+	ConsumedCount   int64   `json:"consumed_count"`
+	UnconsumedCount int     `json:"unconsumed_count"`
+	TotalGenerated  int64   `json:"total_generated"`
+	// Note: polling_count is intentionally omitted - VirtIO is not polled by the API
+}
+
+// StatusResponse represents the status response with custom VirtIO stats
+type StatusResponse struct {
+	TRNG        database.DataSourceStats `json:"trng"`
+	Fortuna     database.DataSourceStats `json:"fortuna"`
+	VirtIO      VirtIOStats              `json:"virtio"`
+	Database    database.Stats           `json:"database"`
+	TRNGQuality database.QualityMetrics  `json:"trng_quality"`
+}
+
 // GetStatus returns the system status.
 // @Summary Get system status
-// @Description Get detailed status of TRNG and Fortuna systems with comprehensive metrics
+// @Description Get detailed status of TRNG, Fortuna, and VirtIO systems with comprehensive metrics. VirtIO metrics are queried directly from the VirtIO service. Note: VirtIO does not have polling_count as it is not polled by the API (only seeded).
 // @Tags            status
 // @Accept          json
 // @Produce         json
-// @Success         200 {object} database.DetailedStats
+// @Success         200 {object} StatusResponse
 // @Failure         500 {object} map[string]string "Server error"
 // @Router          /status [get]
 func (s *Server) GetStatus(c *gin.Context) {
@@ -527,6 +701,9 @@ func (s *Server) GetStatus(c *gin.Context) {
 
 	// Add quality metrics from tracker
 	stats.TRNGQuality = s.trngQualityTracker.GetQualityMetrics()
+
+	// Get VirtIO metrics from VirtIO service directly (not from API database)
+	virtioStats := s.getVirtIOQueueMetrics()
 
 	// Update Prometheus metrics
 	s.metrics.TRNGQueueCurrent.Set(float64(stats.TRNG.QueueCurrent))
@@ -541,14 +718,37 @@ func (s *Server) GetStatus(c *gin.Context) {
 	s.metrics.FortunaConsumed.Set(float64(stats.Fortuna.ConsumedCount))
 	s.metrics.FortunaUnconsumed.Set(float64(stats.Fortuna.UnconsumedCount))
 
+	s.metrics.VirtIOQueueCurrent.Set(float64(virtioStats.QueueCurrent))
+	s.metrics.VirtIOQueueCapacity.Set(float64(virtioStats.QueueCapacity))
+	s.metrics.VirtIOQueuePercentage.Set(virtioStats.QueuePercentage)
+	s.metrics.VirtIOConsumed.Set(float64(virtioStats.ConsumedCount))
+	s.metrics.VirtIOUnconsumed.Set(float64(virtioStats.UnconsumedCount))
+
 	s.metrics.DatabaseSizeBytes.Set(float64(stats.Database.SizeBytes))
 
-	c.JSON(http.StatusOK, stats)
+	// Build response with custom VirtIO stats (without polling_count)
+	response := StatusResponse{
+		TRNG:        stats.TRNG,
+		Fortuna:     stats.Fortuna,
+		Database:    stats.Database,
+		TRNGQuality: stats.TRNGQuality,
+		VirtIO: VirtIOStats{
+			QueueCurrent:    virtioStats.QueueCurrent,
+			QueueCapacity:   virtioStats.QueueCapacity,
+			QueuePercentage: virtioStats.QueuePercentage,
+			QueueDropped:    virtioStats.QueueDropped,
+			ConsumedCount:   virtioStats.ConsumedCount,
+			UnconsumedCount: virtioStats.UnconsumedCount,
+			TotalGenerated:  virtioStats.TotalGenerated,
+		},
+	}
+
+	c.JSON(http.StatusOK, response)
 }
 
 // HealthCheck performs a health check on the API server and its dependencies.
 // @Summary Health check endpoint
-// @Description Checks health of the API server and its dependencies
+// @Description Checks health of the API server and its dependencies (Controller, Fortuna, VirtIO, and Database services)
 // @Tags status
 // @Accept json
 // @Produce json
@@ -572,8 +772,11 @@ func (s *Server) HealthCheck(c *gin.Context) {
 	// Check Fortuna service
 	response.Details.Fortuna = s.checkServiceHealth(s.FortunaAddr)
 
+	// Check VirtIO service
+	response.Details.VirtIO = s.checkServiceHealth(s.VirtioAddr)
+
 	// Determine overall status
-	if !response.Details.Database || !response.Details.Controller || !response.Details.Fortuna {
+	if !response.Details.Database || !response.Details.Controller || !response.Details.Fortuna || !response.Details.VirtIO {
 		response.Status = "degraded"
 	}
 
@@ -602,4 +805,132 @@ func (s *Server) checkServiceHealth(serviceAddr string) bool {
 // MetricsHandler serves Prometheus metrics
 func (s *Server) MetricsHandler(c *gin.Context) {
 	promhttp.HandlerFor(s.registry, promhttp.HandlerOpts{}).ServeHTTP(c.Writer, c.Request)
+}
+
+// GetVirtIOConfig returns the current VirtIO configuration.
+// @Summary Get VirtIO configuration
+// @Description Get current VirtIO configuration including seeding source (TRNG, Fortuna, or both) and queue size. Queue size is queried from the VirtIO service.
+// @Tags configuration
+// @Accept json
+// @Produce json
+// @Success 200 {object} VirtIOConfig
+// @Failure 500 {object} map[string]string "Server error"
+// @Router /api/v1/config/virtio [get]
+func (s *Server) GetVirtIOConfig(c *gin.Context) {
+	s.virtioConfigMutex.RLock()
+	seedingSource := s.virtioSeedingSource
+	s.virtioConfigMutex.RUnlock()
+
+	// Get queue size from VirtIO service or database
+	queueSize := 0
+	if s.VirtioAddr != "" {
+		client := &http.Client{Timeout: 5 * time.Second}
+		queueConfigURL := fmt.Sprintf("%s/config/queue", s.VirtioAddr)
+		resp, err := client.Get(queueConfigURL)
+		if err == nil {
+			defer resp.Body.Close()
+			var queueInfo map[string]int
+			if err := json.NewDecoder(resp.Body).Decode(&queueInfo); err == nil {
+				queueSize = queueInfo["queue_size"]
+			}
+		}
+	}
+
+	// Fallback to database if VirtIO service unavailable
+	if queueSize == 0 {
+		queueInfo, err := s.DB.GetQueueInfo()
+		if err == nil {
+			queueSize = queueInfo["virtio_queue_capacity"]
+		}
+	}
+
+	c.JSON(http.StatusOK, VirtIOConfig{
+		SeedingSource: seedingSource,
+		QueueSize:     queueSize,
+	})
+}
+
+// UpdateVirtIOConfig updates the VirtIO configuration.
+// @Summary Update VirtIO configuration
+// @Description Update VirtIO seeding source (TRNG, Fortuna, or both) and queue size. Queue size changes are forwarded to the VirtIO service. Seeding source changes take effect immediately.
+// @Tags configuration
+// @Accept json
+// @Produce json
+// @Param config body VirtIOConfig true "VirtIO configuration"
+// @Success 200 {object} VirtIOConfig
+// @Failure 400 {object} map[string]string "Invalid request"
+// @Failure 500 {object} map[string]string "Server error"
+// @Router /api/v1/config/virtio [put]
+func (s *Server) UpdateVirtIOConfig(c *gin.Context) {
+	var config VirtIOConfig
+	if err := c.ShouldBindJSON(&config); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request body"})
+		return
+	}
+
+	if err := s.validate.Struct(config); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Update internal state
+	s.virtioConfigMutex.Lock()
+	oldSource := s.virtioSeedingSource
+	s.virtioSeedingSource = config.SeedingSource
+	s.virtioConfigMutex.Unlock()
+
+	// Send queue size update to VirtIO service
+	if s.VirtioAddr != "" && config.QueueSize > 0 {
+		client := &http.Client{Timeout: 5 * time.Second}
+		queueUpdateURL := fmt.Sprintf("%s/config/queue", s.VirtioAddr)
+		queueUpdateBody := map[string]int{"queue_size": config.QueueSize}
+		jsonBody, _ := json.Marshal(queueUpdateBody)
+		req, _ := http.NewRequest("PUT", queueUpdateURL, bytes.NewBuffer(jsonBody))
+		req.Header.Set("Content-Type", "application/json")
+		_, _ = client.Do(req) // Ignore errors - VirtIO service might not be available
+	}
+
+	// Update database queue size
+	if err := s.DB.UpdateQueueSizes(0, 0, config.QueueSize); err != nil {
+		// Log but don't fail - queue size update is best-effort
+		log.Printf("[WARN] Failed to update VirtIO queue size in database: %v", err)
+	}
+
+	// If seeding source changed, notify polling manager (will be handled in polling.go)
+	if oldSource != config.SeedingSource {
+		// This will be handled by the polling manager when it checks the source
+		log.Printf("[INFO] VirtIO seeding source changed from %s to %s", oldSource, config.SeedingSource)
+	}
+
+	c.JSON(http.StatusOK, config)
+}
+
+// SetVirtIOSeedingSource sets the VirtIO seeding source
+func (s *Server) SetVirtIOSeedingSource(source string) {
+	s.virtioConfigMutex.Lock()
+	defer s.virtioConfigMutex.Unlock()
+	s.virtioSeedingSource = source
+}
+
+// isVirtIOSeedingCircuitOpen checks if the VirtIO seeding circuit breaker is open
+func (s *Server) isVirtIOSeedingCircuitOpen() bool {
+	if !s.virtioSeedingCircuitOpen.Load() {
+		return false
+	}
+
+	// Check if cooldown period has passed
+	lastFailure := s.lastVirtIOSeedingFailure.Load()
+	if lastFailure == 0 {
+		return false
+	}
+
+	cooldownEnd := time.Unix(lastFailure, 0).Add(s.virtioSeedingCooldown)
+	if time.Now().After(cooldownEnd) {
+		// Cooldown expired, try to close circuit
+		s.virtioSeedingCircuitOpen.Store(false)
+		s.virtioSeedingFailures.Store(0)
+		return false
+	}
+
+	return true
 }
