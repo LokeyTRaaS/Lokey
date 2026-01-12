@@ -815,7 +815,7 @@ func (s *Server) MetricsHandler(c *gin.Context) {
 // @Produce json
 // @Success 200 {object} VirtIOConfig
 // @Failure 500 {object} map[string]string "Server error"
-// @Router /api/v1/config/virtio [get]
+// @Router /config/virtio [get]
 func (s *Server) GetVirtIOConfig(c *gin.Context) {
 	s.virtioConfigMutex.RLock()
 	seedingSource := s.virtioSeedingSource
@@ -860,7 +860,7 @@ func (s *Server) GetVirtIOConfig(c *gin.Context) {
 // @Success 200 {object} VirtIOConfig
 // @Failure 400 {object} map[string]string "Invalid request"
 // @Failure 500 {object} map[string]string "Server error"
-// @Router /api/v1/config/virtio [put]
+// @Router /config/virtio [put]
 func (s *Server) UpdateVirtIOConfig(c *gin.Context) {
 	var config VirtIOConfig
 	if err := c.ShouldBindJSON(&config); err != nil {
