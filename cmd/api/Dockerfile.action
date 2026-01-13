@@ -15,13 +15,21 @@ LABEL org.opencontainers.image.documentation="https://github.com/LokeyTRaaS/Loke
 # wget: for healthcheck
 RUN apk --no-cache add ca-certificates libc6-compat wget
 
-WORKDIR /app
+# Create app-bin directory for binaries (will be copied to tmpfs /app at runtime)
+RUN mkdir -p /app-bin
 
-# Copy pre-built binary (standardized name created in CI)
-COPY build/lokey-api /app/lokey-api
+# Copy pre-built binary (rename to standardized name)
+COPY build/lokey-api /app-bin/api
 
 # Copy Swagger documentation (required for /swagger endpoint)
-COPY pkg/api/docs /app/pkg/api/docs
+COPY pkg/api/docs /app-bin/pkg/api/docs
+
+# Create entrypoint script to copy binaries to tmpfs /app
+RUN echo '#!/bin/sh' > /entrypoint.sh && \
+    echo 'mkdir -p /app' >> /entrypoint.sh && \
+    echo 'cp -r /app-bin/* /app/' >> /entrypoint.sh && \
+    echo 'exec /app/api "$@"' >> /entrypoint.sh && \
+    chmod +x /entrypoint.sh
 
 # Create data directory for BoltDB
 RUN mkdir -p /data
@@ -43,5 +51,6 @@ EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
   CMD wget --no-verbose --tries=1 -O /dev/null http://localhost:8080/api/v1/health || exit 1
 
-# Run the application
-CMD ["/app/lokey-api"]
+# Use entrypoint to copy binaries to tmpfs /app before running
+ENTRYPOINT ["/entrypoint.sh"]
+CMD []

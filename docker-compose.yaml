@@ -4,16 +4,13 @@ networks:
     driver: bridge
 
 x-logging: &logging-common
-  driver: "json-file"
-  options:
-    max-size: "10m"
-    max-file: "3"
+  driver: "none"
 
 x-api-common: &api-common
   deploy:
     resources:
       limits:
-        memory: 192M # accounts for the serivce AND tmpfs! so 64M + 128M = 192M
+        memory: 242M # accounts for service (64M) + /data tmpfs (128M) + /app tmpfs (50M)
   networks:
     - lokey-internal
   image: ghcr.io/lokeytraas/lokey/api:prerelease-major-refactor-arm64
@@ -26,6 +23,10 @@ x-api-common: &api-common
       target: /data
       tmpfs:
         size: 128M
+    - type: tmpfs
+      target: /app
+      tmpfs:
+        size: 50M
 
 x-api-env: &api-env
   PORT: 8080
@@ -48,7 +49,7 @@ x-controller-common: &controller-common
   deploy:
     resources:
       limits:
-        memory: 20M
+        memory: 42M # accounts for service (20M) + /app tmpfs (22M)
   networks:
     - lokey-internal
   devices:
@@ -57,6 +58,11 @@ x-controller-common: &controller-common
   privileged: true
   restart: unless-stopped
   logging: *logging-common
+  volumes:
+    - type: tmpfs
+      target: /app
+      tmpfs:
+        size: 22M
 
 x-controller-env: &controller-env
   PORT: 8081
@@ -67,12 +73,17 @@ x-fortuna-common: &fortuna-common
   deploy:
     resources:
       limits:
-        memory: 20M
+        memory: 52M # accounts for service (20M) + /app tmpfs (32M)
   networks:
     - lokey-internal
   image: ghcr.io/lokeytraas/lokey/fortuna:prerelease-major-refactor-arm64
   restart: unless-stopped
   logging: *logging-common
+  volumes:
+    - type: tmpfs
+      target: /app
+      tmpfs:
+        size: 32M
 
 x-fortuna-env: &fortuna-env
   PORT: 8082
@@ -82,20 +93,73 @@ x-virtio-common: &virtio-common
   deploy:
     resources:
       limits:
-        memory: 20M
+        memory: 52M # accounts for service (20M) + /app tmpfs (32M)
   networks:
     - lokey-internal
   image: ghcr.io/lokeytraas/lokey/virtio:prerelease-major-refactor-arm64
   restart: unless-stopped
   logging: *logging-common
   volumes:
-    - /var/run/lokey:/var/run/lokey
+    - type: tmpfs
+      target: /app
+      tmpfs:
+        size: 32M
 
 x-virtio-common-with-devices: &virtio-common-with-devices
   <<: *virtio-common
   devices:
     - /dev/hwrng:/dev/hwrng
     - /dev/random:/dev/random
+
+# Common definitions WITHOUT tmpfs (for local profile)
+x-api-common-no-tmpfs: &api-common-no-tmpfs
+  deploy:
+    resources:
+      limits:
+        memory: 128M # service only, no tmpfs, 128M if you use the ringbuffer database
+  networks:
+    - lokey-internal
+  image: ghcr.io/lokeytraas/lokey/api:prerelease-major-refactor-arm64
+  restart: unless-stopped
+  logging: *logging-common
+  ports:
+    - '8080:8080'
+
+x-controller-common-no-tmpfs: &controller-common-no-tmpfs
+  deploy:
+    resources:
+      limits:
+        memory: 20M # service only, no tmpfs
+  networks:
+    - lokey-internal
+  devices:
+    - /dev/i2c-1:/dev/i2c-1
+  image: ghcr.io/lokeytraas/lokey/controller:prerelease-major-refactor-arm64
+  privileged: true
+  restart: unless-stopped
+  logging: *logging-common
+
+x-fortuna-common-no-tmpfs: &fortuna-common-no-tmpfs
+  deploy:
+    resources:
+      limits:
+        memory: 20M # service only, no tmpfs
+  networks:
+    - lokey-internal
+  image: ghcr.io/lokeytraas/lokey/fortuna:prerelease-major-refactor-arm64
+  restart: unless-stopped
+  logging: *logging-common
+
+x-virtio-common-no-tmpfs: &virtio-common-no-tmpfs
+  deploy:
+    resources:
+      limits:
+        memory: 20M # service only, no tmpfs
+  networks:
+    - lokey-internal
+  image: ghcr.io/lokeytraas/lokey/virtio:prerelease-major-refactor-arm64
+  restart: unless-stopped
+  logging: *logging-common
 
 x-virtio-env: &virtio-env
   PORT: 8083
@@ -204,9 +268,9 @@ services:
     profiles:
       - debug
 
-  # Local registry profile - uses images from local Docker registry
+  # Local registry profile - uses images from local Docker registry (NO tmpfs)
   api-local:
-    <<: *api-common
+    <<: *api-common-no-tmpfs
     image: ${DEV_MACHINE_IP:-localhost}:5000/lokey-api:latest
     depends_on:
       - controller-local
@@ -225,7 +289,7 @@ services:
       - local
 
   controller-local:
-    <<: *controller-common
+    <<: *controller-common-no-tmpfs
     image: ${DEV_MACHINE_IP:-localhost}:5000/lokey-controller:latest
     environment:
       <<: *controller-env
@@ -238,7 +302,7 @@ services:
       - local
 
   fortuna-local:
-    <<: *fortuna-common
+    <<: *fortuna-common-no-tmpfs
     image: ${DEV_MACHINE_IP:-localhost}:5000/lokey-fortuna:latest
     depends_on:
       - controller-local
@@ -252,7 +316,7 @@ services:
       - local
 
   virtio-local:
-    <<: *virtio-common
+    <<: *virtio-common-no-tmpfs
     image: ${DEV_MACHINE_IP:-localhost}:5000/lokey-virtio:latest
     environment:
       <<: *virtio-env
@@ -262,6 +326,63 @@ services:
       - '8083:8083'  # HTTP API
     profiles:
       - local
+
+  # Local registry profile WITH tmpfs - optimized for Raspberry Pi (reduced disk I/O)
+  api-local-tmpfs:
+    <<: *api-common
+    image: ${DEV_MACHINE_IP:-localhost}:5000/lokey-api:latest
+    depends_on:
+      - controller-local-tmpfs
+      - fortuna-local-tmpfs
+      - virtio-local-tmpfs
+    environment:
+      <<: *api-env
+      CONTROLLER_ADDR: http://controller-local-tmpfs:8081
+      FORTUNA_ADDR: http://fortuna-local-tmpfs:8082
+      VIRTIO_ADDR: http://virtio-local-tmpfs:8083
+      GIN_MODE: release
+      LOG_LEVEL: WARN
+    profiles:
+      - local-tmpfs
+
+  controller-local-tmpfs:
+    <<: *controller-common
+    image: ${DEV_MACHINE_IP:-localhost}:5000/lokey-controller:latest
+    environment:
+      <<: *controller-env
+      FORCE_CONFIG: "true"
+      GIN_MODE: release
+      LOG_LEVEL: WARN
+    ports:
+      - '8081:8081'
+    profiles:
+      - local-tmpfs
+
+  fortuna-local-tmpfs:
+    <<: *fortuna-common
+    image: ${DEV_MACHINE_IP:-localhost}:5000/lokey-fortuna:latest
+    depends_on:
+      - controller-local-tmpfs
+    environment:
+      <<: *fortuna-env
+      GIN_MODE: release
+      LOG_LEVEL: WARN
+    ports:
+      - '8082:8082'
+    profiles:
+      - local-tmpfs
+
+  virtio-local-tmpfs:
+    <<: *virtio-common
+    image: ${DEV_MACHINE_IP:-localhost}:5000/lokey-virtio:latest
+    environment:
+      <<: *virtio-env
+      GIN_MODE: release
+      LOG_LEVEL: WARN
+    ports:
+      - '8083:8083'  # HTTP API
+    profiles:
+      - local-tmpfs
 
 volumes:
   api-data-local:

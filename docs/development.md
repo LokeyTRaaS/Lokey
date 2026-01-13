@@ -63,8 +63,27 @@ task build
 ### Development Workflow
 
 **Using Docker Compose (Recommended):**
+
+**With local registry (for cross-compilation):**
+```bash
+# Start services without tmpfs (lower memory usage)
+docker compose --profile local up -d
+
+# Or with tmpfs (optimized for Raspberry Pi, higher memory usage)
+docker compose --profile local-tmpfs up -d
+
+# View logs
+docker compose --profile local logs -f
+
+# Restart after changes
+docker compose --profile local restart api
+
+# Stop services
+docker compose --profile local down
 ```
-bash
+
+**Without profiles (default development):**
+```bash
 # Start all services
 docker compose up -d
 
@@ -77,6 +96,10 @@ docker compose restart api
 # Stop services
 docker compose down
 ```
+
+**Profile Selection:**
+- Use `local` profile: For development on systems with fast storage (SSD) or limited RAM
+- Use `local-tmpfs` profile: For Raspberry Pi deployment or when you want to reduce disk I/O
 **Running Locally:**
 
 ```bash
@@ -172,16 +195,33 @@ GOOS=linux GOARCH=amd64 go build -o bin/controller-amd64 ./cmd/controller
 
 ### Docker Build
 
+All Dockerfiles use a unified pattern that supports tmpfs mounts for reduced disk I/O:
+
+- **Binaries stored in `/app-bin`** (in the image)
+- **Entrypoint script copies to `/app`** at runtime (may be tmpfs/RAM)
+- **Works with or without tmpfs mounts** - same Dockerfile pattern
+
+**Benefits:**
+- Reduced disk I/O on microSD cards (binaries run from RAM)
+- Consistent pattern across all services
+- Works in both development and production
+
 ```shell script
-# Development images
+# Development images (builds from source)
 docker compose build
 
-# Production images (optimized)
+# Production images (uses pre-built binaries)
 docker build -t lokey-api:latest -f cmd/api/Dockerfile.action .
 
 # Multi-architecture (for Raspberry Pi)
 task build_images_and_registry
 ```
+
+**Dockerfile Types:**
+- `Dockerfile` - Builds from source (for local development)
+- `Dockerfile.action` - Uses pre-built binaries (for CI/CD and production)
+
+Both use the same unified pattern with entrypoint scripts for tmpfs support.
 
 
 ## Code Quality

@@ -26,10 +26,18 @@ FROM alpine:latest
 # ca-certificates for HTTPS, libc6-compat for dynamic linking, i2c-tools for I2C support
 RUN apk --no-cache add ca-certificates libc6-compat i2c-tools
 
-WORKDIR /app
+# Create app-bin directory for binaries (will be copied to tmpfs /app at runtime)
+RUN mkdir -p /app-bin
 
-# Copy the binary from the builder stage
-COPY --from=builder /app/controller /app/controller
+# Copy the binary from the builder stage to /app-bin
+COPY --from=builder /app/controller /app-bin/controller
+
+# Create entrypoint script to copy binaries to tmpfs /app
+RUN echo '#!/bin/sh' > /entrypoint.sh && \
+    echo 'mkdir -p /app' >> /entrypoint.sh && \
+    echo 'cp -r /app-bin/* /app/' >> /entrypoint.sh && \
+    echo 'exec /app/controller "$@"' >> /entrypoint.sh && \
+    chmod +x /entrypoint.sh
 
 # Set environment variables
 ENV PORT=8081 \
@@ -44,5 +52,6 @@ EXPOSE 8081
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
   CMD wget --no-verbose --tries=1 -O /dev/null http://localhost:8081/health || exit 1
 
-# Run the application
-CMD ["/app/controller"]
+# Use entrypoint to copy binaries to tmpfs /app before running
+ENTRYPOINT ["/entrypoint.sh"]
+CMD []

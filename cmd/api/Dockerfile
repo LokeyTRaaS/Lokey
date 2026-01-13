@@ -39,12 +39,20 @@ FROM alpine:latest
 # ca-certificates for HTTPS, libc6-compat for dynamic linking
 RUN apk --no-cache add ca-certificates libc6-compat
 
-WORKDIR /app
+# Create app-bin directory for binaries (will be copied to tmpfs /app at runtime)
+RUN mkdir -p /app-bin
 
-# Copy the binary from the builder stage
-COPY --from=builder /app/api /app/api
+# Copy the binary from the builder stage to /app-bin
+COPY --from=builder /app/api /app-bin/api
 # Copy the generated Swagger docs
-COPY --from=builder /app/pkg/api/docs /app/pkg/api/docs
+COPY --from=builder /app/pkg/api/docs /app-bin/pkg/api/docs
+
+# Create entrypoint script to copy binaries to tmpfs /app
+RUN echo '#!/bin/sh' > /entrypoint.sh && \
+    echo 'mkdir -p /app' >> /entrypoint.sh && \
+    echo 'cp -r /app-bin/* /app/' >> /entrypoint.sh && \
+    echo 'exec /app/api "$@"' >> /entrypoint.sh && \
+    chmod +x /entrypoint.sh
 
 # Create data directory
 RUN mkdir -p /data
@@ -62,5 +70,6 @@ EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
   CMD wget --no-verbose --tries=1 -O /dev/null http://localhost:8080/api/v1/health || exit 1
 
-# Run the application
-CMD ["/app/api"]
+# Use entrypoint to copy binaries to tmpfs /app before running
+ENTRYPOINT ["/entrypoint.sh"]
+CMD []

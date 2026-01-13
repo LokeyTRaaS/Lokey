@@ -174,6 +174,19 @@ i2cdetect -y 1
 ```
 ### Step 3: Create Docker Compose File on Pi
 
+**Option A: Use the provided docker-compose.yaml (Recommended)**
+
+Copy the `docker-compose.yaml` from the repository to your Raspberry Pi. Then use the `local-tmpfs` profile for optimal performance on microSD cards:
+
+```bash
+# On Raspberry Pi
+docker compose --profile local-tmpfs up -d
+```
+
+The `local-tmpfs` profile automatically configures tmpfs mounts for binaries, reducing disk I/O on microSD cards.
+
+**Option B: Create custom docker-compose.yaml**
+
 **Create `docker-compose.yaml` on the Raspberry Pi:**
 ```
 yaml
@@ -242,8 +255,27 @@ max-size: "10m"
 max-file: "3"
 ```
 ### Step 4: Deploy on Raspberry Pi
+
+**Using the provided docker-compose.yaml (Recommended):**
+```bash
+# Pull images from your local registry
+docker compose --profile local-tmpfs pull
+
+# Start services with tmpfs optimization
+docker compose --profile local-tmpfs up -d
+
+# Verify all services are running
+docker compose --profile local-tmpfs ps
+
+# Check logs
+docker compose --profile local-tmpfs logs -f
+
+# Test API
+curl http://localhost:8080/api/v1/health
 ```
-bash
+
+**Using custom docker-compose.yaml:**
+```bash
 # Pull images from your local registry
 docker compose pull
 
@@ -259,6 +291,8 @@ docker compose logs -f
 # Test API
 curl http://localhost:8080/api/v1/health
 ```
+
+> **Note**: For Raspberry Pi with microSD cards, using the `local-tmpfs` profile is highly recommended as it runs binaries from RAM, significantly reducing disk I/O and extending SD card life.
 ### Step 5: Set Up as System Service (Optional)
 
 To start LoKey automatically on boot:
@@ -640,6 +674,48 @@ environment:
 ```
 ## Docker Images
 
+### Unified Dockerfile Pattern
+
+All LoKey Dockerfiles use a unified pattern that supports tmpfs mounts for optimal performance on resource-constrained devices (e.g., Raspberry Pi with microSD cards):
+
+**How it works:**
+1. Binaries are stored in `/app-bin` within the Docker image
+2. An entrypoint script copies binaries to `/app` at container startup
+3. If `/app` is mounted as tmpfs (RAM), binaries run from memory instead of disk
+4. This dramatically reduces disk I/O, especially important for microSD cards
+
+**Benefits:**
+- **Reduced disk I/O**: Binaries and health check tools (`wget`) run from RAM
+- **Faster execution**: No disk reads for binary execution
+- **Extended SD card life**: Less wear on flash storage
+- **Works everywhere**: Same pattern works with or without tmpfs mounts
+
+**Docker Compose Profiles:**
+
+Two local profiles are available for different use cases:
+
+1. **`local` profile** (no tmpfs):
+   - Binaries run from disk (normal Docker behavior)
+   - Lower memory usage (~124M total)
+   - Suitable for development or systems with sufficient RAM
+   - API uses persistent volume for `/data`
+   ```bash
+   docker compose --profile local up
+   ```
+
+2. **`local-tmpfs` profile** (with tmpfs):
+   - Binaries run from RAM (`/app` tmpfs)
+   - Optimized for Raspberry Pi (reduced disk I/O on microSD)
+   - Higher memory usage (~388M total)
+   - API uses tmpfs for both `/data` and `/app`
+   ```bash
+   docker compose --profile local-tmpfs up
+   ```
+
+**When to use each:**
+- Use `local` for: Development, systems with fast storage (SSD), or when RAM is limited
+- Use `local-tmpfs` for: Raspberry Pi with microSD cards, systems with slow storage, or when you want to reduce disk I/O
+
 ### Official Images
 
 Pre-built images are available on GitHub Container Registry:
@@ -654,6 +730,8 @@ docker pull ghcr.io/lokeytraas/lokey/fortuna:latest-arm64
 docker pull ghcr.io/lokeytraas/lokey/api:v1.0.0-arm64
 ```
 ### Building Custom Images
+
+**Development builds (from source):**
 ```
 bash
 # Build all services
@@ -661,10 +739,20 @@ docker compose build
 
 # Build specific service
 docker compose build api
+```
 
-# Build with specific Dockerfile
+**Production builds (pre-built binaries):**
+```
+bash
+# Build with Dockerfile.action (uses pre-built binaries)
 docker build -t lokey-api:custom -f cmd/api/Dockerfile.action .
 ```
+
+**Dockerfile Types:**
+- `Dockerfile` - Builds from Go source code (development)
+- `Dockerfile.action` - Uses pre-built binaries (CI/CD, production)
+
+Both use the same unified entrypoint pattern for tmpfs support.
 ## Monitoring
 
 ### Health Checks

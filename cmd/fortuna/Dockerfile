@@ -26,10 +26,18 @@ FROM alpine:latest
 # ca-certificates for HTTPS, libc6-compat for dynamic linking
 RUN apk --no-cache add ca-certificates libc6-compat
 
-WORKDIR /app
+# Create app-bin directory for binaries (will be copied to tmpfs /app at runtime)
+RUN mkdir -p /app-bin
 
-# Copy the binary from the builder stage
-COPY --from=builder /app/fortuna /app/fortuna
+# Copy the binary from the builder stage to /app-bin
+COPY --from=builder /app/fortuna /app-bin/fortuna
+
+# Create entrypoint script to copy binaries to tmpfs /app
+RUN echo '#!/bin/sh' > /entrypoint.sh && \
+    echo 'mkdir -p /app' >> /entrypoint.sh && \
+    echo 'cp -r /app-bin/* /app/' >> /entrypoint.sh && \
+    echo 'exec /app/fortuna "$@"' >> /entrypoint.sh && \
+    chmod +x /entrypoint.sh
 
 # Set environment variables
 ENV PORT=8082 \
@@ -42,5 +50,6 @@ EXPOSE 8082
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
   CMD wget --no-verbose --tries=1 -O /dev/null http://localhost:8082/health || exit 1
 
-# Run the application
-CMD ["/app/fortuna"]
+# Use entrypoint to copy binaries to tmpfs /app before running
+ENTRYPOINT ["/entrypoint.sh"]
+CMD []

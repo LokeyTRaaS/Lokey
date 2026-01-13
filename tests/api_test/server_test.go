@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -67,17 +69,24 @@ func TestServer_GetQueueConfig(t *testing.T) {
 }
 
 func TestServer_UpdateQueueConfig(t *testing.T) {
-	server, db := setupTestServer()
-
-	t.Run("valid config", func(t *testing.T) {
-		// Skip this test for ChannelDBHandler as it doesn't support UpdateQueueSizes
-		if err := db.UpdateQueueSizes(50, 60, 55); err != nil {
-			t.Skipf("UpdateQueueSizes not supported: %v", err)
+	t.Run("valid config with BoltDBHandler", func(t *testing.T) {
+		// Test with BoltDBHandler which supports UpdateQueueSizes
+		tmpDir := t.TempDir()
+		dbPath := filepath.Join(tmpDir, "test.db")
+		db, err := database.NewBoltDBHandler(dbPath, 10, 20, 15)
+		if err != nil {
+			t.Fatalf("Failed to create BoltDB handler: %v", err)
 		}
+		defer db.Close()
+		defer os.RemoveAll(tmpDir)
+
+		testRegistry := prometheus.NewRegistry()
+		server := api.NewServer(db, "http://localhost:8081", "http://localhost:8082", "http://localhost:8083", 0, testRegistry)
 
 		config := api.QueueConfig{
 			TRNGQueueSize:    50,
 			FortunaQueueSize: 60,
+			VirtIOQueueSize:  70,
 		}
 		body, _ := json.Marshal(config)
 		w := httptest.NewRecorder()
@@ -96,9 +105,38 @@ func TestServer_UpdateQueueConfig(t *testing.T) {
 		if response.TRNGQueueSize != 50 {
 			t.Errorf("Expected TRNG queue size 50, got %d", response.TRNGQueueSize)
 		}
+		if response.FortunaQueueSize != 60 {
+			t.Errorf("Expected Fortuna queue size 60, got %d", response.FortunaQueueSize)
+		}
+		if response.VirtIOQueueSize != 70 {
+			t.Errorf("Expected VirtIO queue size 70, got %d", response.VirtIOQueueSize)
+		}
+	})
+
+	t.Run("valid config with ChannelDBHandler", func(t *testing.T) {
+		// Test with ChannelDBHandler which doesn't support UpdateQueueSizes
+		// Should return 500 Internal Server Error
+		server, _ := setupTestServer()
+
+		config := api.QueueConfig{
+			TRNGQueueSize:    50,
+			FortunaQueueSize: 60,
+			VirtIOQueueSize:  70,
+		}
+		body, _ := json.Marshal(config)
+		w := httptest.NewRecorder()
+		req, _ := http.NewRequest("PUT", "/api/v1/config/queue", bytes.NewBuffer(body))
+		req.Header.Set("Content-Type", "application/json")
+		server.Router.ServeHTTP(w, req)
+
+		// ChannelDBHandler doesn't support UpdateQueueSizes, so should return 500
+		if w.Code != http.StatusInternalServerError {
+			t.Errorf("Expected status 500 for ChannelDBHandler, got %d: %s", w.Code, w.Body.String())
+		}
 	})
 
 	t.Run("invalid config - too small", func(t *testing.T) {
+		server, _ := setupTestServer()
 		config := api.QueueConfig{
 			TRNGQueueSize:    5, // Below minimum of 10
 			FortunaQueueSize: 60,
@@ -115,6 +153,7 @@ func TestServer_UpdateQueueConfig(t *testing.T) {
 	})
 
 	t.Run("invalid JSON", func(t *testing.T) {
+		server, _ := setupTestServer()
 		w := httptest.NewRecorder()
 		req, _ := http.NewRequest("PUT", "/api/v1/config/queue", bytes.NewBufferString("invalid json"))
 		req.Header.Set("Content-Type", "application/json")

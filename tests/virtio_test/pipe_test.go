@@ -29,13 +29,6 @@ func TestNamedPipe_Creation(t *testing.T) {
 	}
 }
 
-func TestNamedPipe_Write(t *testing.T) {
-	// Skip this test as it requires complex synchronization between writer and reader
-	// The pipe write loop blocks until a reader opens the pipe, making it difficult to test
-	// in a unit test environment. Integration tests would be more appropriate.
-	t.Skip("Skipping - requires complex pipe reader/writer synchronization")
-}
-
 func TestNamedPipe_Stop(t *testing.T) {
 	tmpDir := t.TempDir()
 	pipePath := filepath.Join(tmpDir, "test-pipe")

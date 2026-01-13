@@ -73,10 +73,14 @@ func NewVirtIOService(devicePath string, queueSize int, port int, pipePath strin
 		return nil, fmt.Errorf("failed to initialize VirtIO RNG: %w", err)
 	}
 
-	// Initialize named pipe
-	pipe, err := virtio.NewNamedPipe(pipePath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to initialize named pipe: %w", err)
+	// Initialize named pipe (optional - only needed for filesystem access)
+	var pipe *virtio.NamedPipe
+	if pipePath != "" {
+		var err error
+		pipe, err = virtio.NewNamedPipe(pipePath)
+		if err != nil {
+			return nil, fmt.Errorf("failed to initialize named pipe: %w", err)
+		}
 	}
 
 	// Initialize router based on log level
@@ -116,9 +120,11 @@ func (v *VirtIOService) Start() error {
 	// Setup routes
 	v.setupRoutes()
 
-	// Start named pipe
-	if err := v.pipe.Start(v.device); err != nil {
-		return fmt.Errorf("failed to start named pipe: %w", err)
+	// Start named pipe (if enabled)
+	if v.pipe != nil {
+		if err := v.pipe.Start(v.device); err != nil {
+			return fmt.Errorf("failed to start named pipe: %w", err)
+		}
 	}
 
 	// Start HTTP server
@@ -160,9 +166,11 @@ func (v *VirtIOService) Start() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	// Stop named pipe first
-	if err := v.pipe.Stop(); err != nil {
-		log.Printf("[WARN] Error stopping named pipe: %v", err)
+	// Stop named pipe first (if enabled)
+	if v.pipe != nil {
+		if err := v.pipe.Stop(); err != nil {
+			log.Printf("[WARN] Error stopping named pipe: %v", err)
+		}
 	}
 
 	// Then shutdown HTTP server
@@ -196,10 +204,13 @@ func (v *VirtIOService) healthCheckHandler(ctx *gin.Context) {
 }
 
 func (v *VirtIOService) infoHandler(ctx *gin.Context) {
-	ctx.JSON(http.StatusOK, gin.H{
-		"status":    "running",
-		"pipe_path": v.pipe.Path(),
-	})
+	info := gin.H{
+		"status": "running",
+	}
+	if v.pipe != nil {
+		info["pipe_path"] = v.pipe.Path()
+	}
+	ctx.JSON(http.StatusOK, info)
 }
 
 func (v *VirtIOService) generateHandler(ctx *gin.Context) {
@@ -433,10 +444,11 @@ func main() {
 		}
 	}
 
-	pipePath := DefaultPipePath
+	pipePath := ""
 	if val, ok := os.LookupEnv("VIRTIO_PIPE_PATH"); ok && val != "" {
 		pipePath = val
 	}
+	// Default to empty (pipe disabled) - use HTTP endpoints instead
 
 	// Create and start VirtIO service
 	service, err := NewVirtIOService(devicePath, queueSize, port, pipePath)

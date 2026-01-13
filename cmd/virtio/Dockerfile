@@ -23,10 +23,18 @@ FROM alpine:latest
 # ca-certificates for HTTPS
 RUN apk --no-cache add ca-certificates
 
-WORKDIR /app
+# Create app-bin directory for binaries (will be copied to tmpfs /app at runtime)
+RUN mkdir -p /app-bin
 
-# Copy the binary from the builder stage
-COPY --from=builder /app/virtio /app/virtio
+# Copy the binary from the builder stage to /app-bin
+COPY --from=builder /app/virtio /app-bin/virtio
+
+# Create entrypoint script to copy binaries to tmpfs /app
+RUN echo '#!/bin/sh' > /entrypoint.sh && \
+    echo 'mkdir -p /app' >> /entrypoint.sh && \
+    echo 'cp -r /app-bin/* /app/' >> /entrypoint.sh && \
+    echo 'exec /app/virtio "$@"' >> /entrypoint.sh && \
+    chmod +x /entrypoint.sh
 
 # Set environment variables
 ENV PORT=8083 \
@@ -41,5 +49,6 @@ EXPOSE 8083
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
   CMD wget --no-verbose --tries=1 -O /dev/null http://localhost:8083/health || exit 1
 
-# Run the application
-CMD ["/app/virtio"]
+# Use entrypoint to copy binaries to tmpfs /app before running
+ENTRYPOINT ["/entrypoint.sh"]
+CMD []
