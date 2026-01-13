@@ -4,7 +4,10 @@ networks:
     driver: bridge
 
 x-logging: &logging-common
-  driver: "none"
+  driver: "json-file"
+  options:
+    max-size: "10m"
+    max-file: "3"
 
 x-api-common: &api-common
   deploy:
