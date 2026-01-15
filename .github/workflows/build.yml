@@ -47,7 +47,7 @@ jobs:
           ls -lah ./pkg/api/docs/
 
       - name: Upload Swagger documentation
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: swagger-docs
           path: pkg/api/docs/
@@ -136,7 +136,7 @@ jobs:
           ls -lh build/lokey-${{ matrix.service }}-${{ matrix.arch }}
 
       - name: Upload binary artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: lokey-${{ matrix.service }}-${{ matrix.arch }}
           path: build/lokey-${{ matrix.service }}-${{ matrix.arch }}
@@ -311,7 +311,7 @@ jobs:
 
       - name: Upload digest
         if: github.event_name != 'pull_request'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: digest-${{ matrix.service }}-${{ matrix.arch }}
           path: /tmp/digests/
