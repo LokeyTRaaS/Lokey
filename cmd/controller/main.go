@@ -232,10 +232,14 @@ func main() {
 
 	logLevel := os.Getenv("LOG_LEVEL")
 	if logLevel == "DEBUG" || logLevel == "INFO" || logLevel == "" {
+		displayLevel := "INFO"
+		if logLevel == "DEBUG" {
+			displayLevel = "DEBUG"
+		}
 		log.Printf("[INFO] Starting TRNG controller with configuration:")
 		log.Printf("[INFO]   I2C Bus Number: %d", i2cBusNumber)
 		log.Printf("[INFO]   Port: %d", port)
-		log.Printf("[INFO]   Log Level: %s", logLevel)
+		log.Printf("[INFO]   Log Level: %s", displayLevel)
 	}
 
 	err = controller.Start()

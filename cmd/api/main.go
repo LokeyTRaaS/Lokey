@@ -120,7 +120,11 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to initialize database: %v", err)
 	}
-	defer db.Close()
+	defer func() {
+		if err := db.Close(); err != nil {
+			log.Printf("Error closing database: %v", err)
+		}
+	}()
 
 	// Create API server
 	server := api.NewServer(db, controllerAddr, fortunaAddr, port)
@@ -156,6 +160,8 @@ func main() {
 	log.Printf("  Fortuna Poll Interval: %s", fortunaPollInterval)
 
 	if err := server.Run(); err != nil {
+		cancel()
+		//nolint:gocritic // deliberate exit; polling was cancelled above and the OS reclaims the rest
 		log.Fatalf("API server error: %v", err)
 	}
 }

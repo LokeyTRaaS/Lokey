@@ -117,7 +117,7 @@ func NewBoltDBHandler(dbPath string, trngQueueSize, fortunaQueueSize int) (*Bolt
 	})
 
 	if err != nil {
-		db.Close()
+		_ = db.Close()
 		return nil, fmt.Errorf("failed to initialize database: %w", err)
 	}
 

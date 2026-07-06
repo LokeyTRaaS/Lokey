@@ -126,7 +126,7 @@ func (s *Server) fetchAndStoreFortunaData() error {
 	}()
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("Fortuna service returned status %d", resp.StatusCode)
+		return fmt.Errorf("fortuna service returned status %d", resp.StatusCode)
 	}
 
 	// Parse response which contains a data field with hex-encoded random data
@@ -235,7 +235,7 @@ func (s *Server) seedFortuna() error {
 	}()
 
 	if seedResp.StatusCode != http.StatusOK {
-		return fmt.Errorf("Fortuna seeding failed with status: %d", seedResp.StatusCode)
+		return fmt.Errorf("fortuna seeding failed with status: %d", seedResp.StatusCode)
 	}
 
 	log.Printf("Successfully seeded Fortuna with %d TRNG samples", len(result.Data))

@@ -203,9 +203,10 @@ func (h *ChannelDBHandler) GetFortunaData(limit, offset int, consume bool) ([][]
 
 // IncrementPollingCount increments the polling counter for a data source
 func (h *ChannelDBHandler) IncrementPollingCount(source string) error {
-	if source == "trng" {
+	switch source {
+	case "trng":
 		h.trngQueue.stats.pollingCount.Add(1)
-	} else if source == "fortuna" {
+	case "fortuna":
 		h.fortunaQueue.stats.pollingCount.Add(1)
 	}
 	return nil
@@ -213,9 +214,10 @@ func (h *ChannelDBHandler) IncrementPollingCount(source string) error {
 
 // IncrementDroppedCount increments the dropped counter for a data source
 func (h *ChannelDBHandler) IncrementDroppedCount(source string) error {
-	if source == "trng" {
+	switch source {
+	case "trng":
 		h.trngQueue.stats.droppedCount.Add(1)
-	} else if source == "fortuna" {
+	case "fortuna":
 		h.fortunaQueue.stats.droppedCount.Add(1)
 	}
 	return nil
