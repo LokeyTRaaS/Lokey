@@ -12,7 +12,7 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  GO_VERSION: '1.24'
+  GO_VERSION: '1.26'
   PROJECT_URL: https://lokey.cloud
   LICENSE: MIT
 
