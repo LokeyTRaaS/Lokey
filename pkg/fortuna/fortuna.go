@@ -162,7 +162,34 @@ func (g *Generator) GenerateRandomData(length int) ([]byte, error) {
 		g.counter++
 	}
 
+	// Rotate the key after every request (Fortuna spec) so a later
+	// compromise of the generator state cannot reveal past output
+	if err := g.rekeyUnlocked(); err != nil {
+		return nil, err
+	}
+
 	return result, nil
+}
+
+// rekeyUnlocked replaces the key with two freshly generated blocks.
+// Caller must hold g.mutex.
+func (g *Generator) rekeyUnlocked() error {
+	newKey := make([]byte, MinimumSeedLength)
+	for i := 0; i < len(newKey); i += g.blockSize {
+		ctrBytes := make([]byte, 16)
+		binary.BigEndian.PutUint64(ctrBytes[8:], g.counter)
+		g.cipher.Encrypt(newKey[i:i+g.blockSize], ctrBytes)
+		g.counter++
+	}
+
+	aesCipher, err := aes.NewCipher(newKey)
+	if err != nil {
+		return fmt.Errorf("failed to rotate generator key: %w", err)
+	}
+
+	g.key = newKey
+	g.cipher = aesCipher
+	return nil
 }
 
 // ReseedFromPools reseeds using available entropy pools

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/hex"
 	"fmt"
 	"log"
@@ -26,7 +27,6 @@ type FortunaProcessor struct {
 	port                int
 	amplificationFactor int
 	router              *gin.Engine
-	lastReseedTime      time.Time
 }
 
 // customLogger only logs non-200 responses
@@ -75,10 +75,12 @@ func NewFortunaProcessor(port int, amplificationFactor int) (*FortunaProcessor, 
 		router = gin.Default()
 	}
 
-	// Initialize Fortuna with a temporary seed (will be reseeded by API service)
+	// Initialize Fortuna with a random seed (will be reseeded by API service).
+	// The seed must be unpredictable: the /generate endpoint serves data
+	// before the first TRNG reseed arrives.
 	initialSeed := make([]byte, 32)
-	for i := range initialSeed {
-		initialSeed[i] = byte(i)
+	if _, err := rand.Read(initialSeed); err != nil {
+		return nil, fmt.Errorf("failed to generate initial seed: %w", err)
 	}
 
 	generator, err := fortuna.NewGenerator(initialSeed)
@@ -91,7 +93,6 @@ func NewFortunaProcessor(port int, amplificationFactor int) (*FortunaProcessor, 
 		port:                port,
 		amplificationFactor: amplificationFactor,
 		router:              router,
-		lastReseedTime:      time.Now(),
 	}, nil
 }
 
@@ -111,8 +112,9 @@ func (p *FortunaProcessor) Start() error {
 	// Start HTTP server
 	serverErr := make(chan error, 1)
 	server := &http.Server{
-		Addr:    fmt.Sprintf(":%d", p.port),
-		Handler: p.router,
+		Addr:              fmt.Sprintf(":%d", p.port),
+		Handler:           p.router,
+		ReadHeaderTimeout: 10 * time.Second,
 	}
 
 	logLevel := os.Getenv("LOG_LEVEL")
@@ -176,7 +178,7 @@ func (p *FortunaProcessor) infoHandler(ctx *gin.Context) {
 	ctx.JSON(http.StatusOK, gin.H{
 		"status":               "running",
 		"amplification_factor": p.amplificationFactor,
-		"last_reseeded":        p.lastReseedTime.Format(time.RFC3339),
+		"last_reseeded":        p.generator.GetLastReseedTime().Format(time.RFC3339),
 	})
 }
 
@@ -228,7 +230,10 @@ func (p *FortunaProcessor) seedHandler(ctx *gin.Context) {
 			return
 		}
 
-		p.generator.AddRandomEvent(byte(i%32), seed)
+		if err := p.generator.AddRandomEvent(byte(i%32), seed); err != nil {
+			ctx.JSON(http.StatusBadRequest, gin.H{"error": "Invalid seed data"})
+			return
+		}
 	}
 
 	// Reseed the generator
@@ -238,13 +243,10 @@ func (p *FortunaProcessor) seedHandler(ctx *gin.Context) {
 		return
 	}
 
-	// Update last reseed time
-	p.lastReseedTime = time.Now()
-
 	ctx.JSON(http.StatusOK, gin.H{
 		"status":        "reseeded",
 		"count":         len(request.Seeds),
-		"last_reseeded": p.lastReseedTime.Format(time.RFC3339),
+		"last_reseeded": p.generator.GetLastReseedTime().Format(time.RFC3339),
 	})
 }
 
