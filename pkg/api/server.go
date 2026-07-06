@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"sync"
 	"time"
 
@@ -26,6 +27,7 @@ type Server struct {
 	router         *gin.Engine
 	validate       *validator.Validate
 	metrics        *Metrics
+	httpClient     *http.Client // Client for controller/fortuna requests
 	consumeMode    bool         // Global consume setting
 	consumeMutex   sync.RWMutex // Protects consumeMode
 }
@@ -157,6 +159,7 @@ func NewServer(db database.DBHandler, controllerAddr, fortunaAddr string, port i
 		router:         router,
 		validate:       validate,
 		metrics:        metrics,
+		httpClient:     &http.Client{Timeout: 10 * time.Second},
 		consumeMode:    false, // Default: don't consume (read-only mode)
 	}
 
@@ -167,8 +170,13 @@ func NewServer(db database.DBHandler, controllerAddr, fortunaAddr string, port i
 // setupRoutes configures the API routes
 func (s *Server) setupRoutes() {
 	// Add CORS middleware
+	// Allowed origin can be restricted via CORS_ALLOWED_ORIGIN (default: "*")
+	allowedOrigin := os.Getenv("CORS_ALLOWED_ORIGIN")
+	if allowedOrigin == "" {
+		allowedOrigin = "*"
+	}
 	s.router.Use(func(c *gin.Context) {
-		c.Header("Access-Control-Allow-Origin", "*")
+		c.Header("Access-Control-Allow-Origin", allowedOrigin)
 		c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 		c.Header("Access-Control-Allow-Headers", "Content-Type, Authorization, Accept")
 
@@ -207,7 +215,12 @@ func (s *Server) setupRoutes() {
 
 // Run starts the API server
 func (s *Server) Run() error {
-	return s.router.Run(fmt.Sprintf(":%d", s.port))
+	server := &http.Server{
+		Addr:              fmt.Sprintf(":%d", s.port),
+		Handler:           s.router,
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+	return server.ListenAndServe()
 }
 
 // @Summary         Get queue configuration
@@ -541,7 +554,7 @@ func (s *Server) checkServiceHealth(serviceAddr string) bool {
 	url := serviceAddr + "/health"
 
 	// URL is constructed from validated server configuration, not user input
-	resp, err := http.Get(url) // #nosec G107
+	resp, err := s.httpClient.Get(url) // #nosec G107
 	if err != nil {
 		return false
 	}

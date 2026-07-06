@@ -49,7 +49,7 @@ func (s *Server) pollTRNGService(ctx context.Context, interval time.Duration) {
 // fetchAndStoreTRNGData fetches and stores TRNG data from the controller
 func (s *Server) fetchAndStoreTRNGData() error {
 	// Attempt to fetch data from the controller service
-	resp, err := http.Get(s.controllerAddr + "/generate")
+	resp, err := s.httpClient.Get(s.controllerAddr + "/generate")
 	if err != nil {
 		return fmt.Errorf("error connecting to TRNG controller: %w", err)
 	}
@@ -115,7 +115,7 @@ func (s *Server) pollFortunaService(ctx context.Context, interval time.Duration)
 func (s *Server) fetchAndStoreFortunaData() error {
 	// Attempt to fetch data from the Fortuna service using the correct endpoint
 	// Specify size=256 for a reasonable amount of random data
-	resp, err := http.Get(s.fortunaAddr + "/generate?size=256")
+	resp, err := s.httpClient.Get(s.fortunaAddr + "/generate?size=256")
 	if err != nil {
 		return fmt.Errorf("error connecting to Fortuna service: %w", err)
 	}
@@ -181,7 +181,7 @@ func (s *Server) seedFortunaWithTRNG(ctx context.Context, interval time.Duration
 // seedFortuna fetches TRNG data and seeds the Fortuna generator
 func (s *Server) seedFortuna() error {
 	// Fetch multiple TRNG samples from controller for good entropy
-	resp, err := http.Get(s.controllerAddr + "/generate?count=5")
+	resp, err := s.httpClient.Get(s.controllerAddr + "/generate?count=5")
 	if err != nil {
 		return fmt.Errorf("error fetching TRNG data for seeding: %w", err)
 	}
@@ -220,7 +220,7 @@ func (s *Server) seedFortuna() error {
 		return fmt.Errorf("error marshaling seed request: %w", err)
 	}
 
-	seedResp, err := http.Post(
+	seedResp, err := s.httpClient.Post(
 		s.fortunaAddr+"/seed",
 		"application/json",
 		bytes.NewBuffer(seedData),
