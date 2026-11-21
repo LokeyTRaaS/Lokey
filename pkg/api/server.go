@@ -65,8 +65,8 @@ type Server struct {
 	virtioSeedingSource string
 	virtioConfigMutex   sync.RWMutex
 
-	controllerRoundRobin uint64
-	fortunaSeedBytesAcc  atomic.Uint64
+	controllerRoundRobin  uint64
+	fortunaSeedBytesAcc   atomic.Uint64
 	fortunaOutputBytesAcc atomic.Uint64
 }
 
@@ -132,28 +132,28 @@ type Metrics struct {
 	DatabaseSizeBytes prometheus.Gauge
 
 	// Labeled queue / quality / amplification metrics
-	QueueCurrent      *prometheus.GaugeVec
-	QueueCapacity     *prometheus.GaugeVec
-	QueuePercentage   *prometheus.GaugeVec
-	ConsumedTotal     *prometheus.GaugeVec
-	Unconsumed        *prometheus.GaugeVec
-	MonobitAverage    *prometheus.GaugeVec
-	MonobitOnes       *prometheus.GaugeVec
-	MonobitZeros      *prometheus.GaugeVec
-	MonobitTotal      *prometheus.GaugeVec
-	RepetitionFails   *prometheus.CounterVec
-	RepetitionCurrent *prometheus.GaugeVec // absolute failure count (always published)
-	APTBiasTotal      *prometheus.CounterVec
-	APTBiasCurrent    *prometheus.GaugeVec // absolute bias count (always published)
-	APTSamplesTotal   *prometheus.CounterVec
-	BytesProduced     *prometheus.CounterVec
-	FortunaSeedBytes  prometheus.Counter
-	FortunaOutputBytes prometheus.Counter
+	QueueCurrent         *prometheus.GaugeVec
+	QueueCapacity        *prometheus.GaugeVec
+	QueuePercentage      *prometheus.GaugeVec
+	ConsumedTotal        *prometheus.GaugeVec
+	Unconsumed           *prometheus.GaugeVec
+	MonobitAverage       *prometheus.GaugeVec
+	MonobitOnes          *prometheus.GaugeVec
+	MonobitZeros         *prometheus.GaugeVec
+	MonobitTotal         *prometheus.GaugeVec
+	RepetitionFails      *prometheus.CounterVec
+	RepetitionCurrent    *prometheus.GaugeVec // absolute failure count (always published)
+	APTBiasTotal         *prometheus.CounterVec
+	APTBiasCurrent       *prometheus.GaugeVec // absolute bias count (always published)
+	APTSamplesTotal      *prometheus.CounterVec
+	BytesProduced        *prometheus.CounterVec
+	FortunaSeedBytes     prometheus.Counter
+	FortunaOutputBytes   prometheus.Counter
 	FortunaAmplification prometheus.Gauge
-	FortunaReseedTotal prometheus.Counter
-	FortunaLastReseed  prometheus.Gauge
-	ServiceUp          *prometheus.GaugeVec // lokey_service_up{service=...}
-	ControllerUp       *prometheus.GaugeVec // lokey_controller_up{device_id=...}
+	FortunaReseedTotal   prometheus.Counter
+	FortunaLastReseed    prometheus.Gauge
+	ServiceUp            *prometheus.GaugeVec // lokey_service_up{service=...}
+	ControllerUp         *prometheus.GaugeVec // lokey_controller_up{device_id=...}
 }
 
 // NewServer creates a new API server
@@ -543,16 +543,8 @@ func (s *Server) UpdateQueueConfig(c *gin.Context) {
 		return
 	}
 
-	// Send queue size update to VirtIO service if it changed
-	if s.VirtioAddr != "" && config.VirtIOQueueSize > 0 {
-		client := &http.Client{Timeout: 5 * time.Second}
-		queueUpdateURL := fmt.Sprintf("%s/config/queue", s.VirtioAddr)
-		queueUpdateBody := map[string]int{"queue_size": config.VirtIOQueueSize}
-		jsonBody, _ := json.Marshal(queueUpdateBody)
-		req, _ := http.NewRequest("PUT", queueUpdateURL, bytes.NewBuffer(jsonBody))
-		req.Header.Set("Content-Type", "application/json")
-		_, _ = client.Do(req) // Ignore errors - VirtIO service might not be available
-	}
+	// Best-effort notify VirtIO service of queue size change
+	s.notifyVirtIOQueueSize(config.VirtIOQueueSize)
 
 	c.JSON(http.StatusOK, config)
 }
@@ -735,7 +727,7 @@ func convertToIntFormat(data [][]byte, maxCount, bytesPerValue int, signed bool)
 			switch bytesPerValue {
 			case 1:
 				if signed {
-					result = append(result, int8(chunk[i]))
+					result = append(result, int8(chunk[i])) // #nosec G115 -- intentional random byte reinterpret
 				} else {
 					result = append(result, uint8(chunk[i]))
 				}
@@ -1121,16 +1113,8 @@ func (s *Server) UpdateVirtIOConfig(c *gin.Context) {
 	s.virtioSeedingSource = config.SeedingSource
 	s.virtioConfigMutex.Unlock()
 
-	// Send queue size update to VirtIO service
-	if s.VirtioAddr != "" && config.QueueSize > 0 {
-		client := &http.Client{Timeout: 5 * time.Second}
-		queueUpdateURL := fmt.Sprintf("%s/config/queue", s.VirtioAddr)
-		queueUpdateBody := map[string]int{"queue_size": config.QueueSize}
-		jsonBody, _ := json.Marshal(queueUpdateBody)
-		req, _ := http.NewRequest("PUT", queueUpdateURL, bytes.NewBuffer(jsonBody))
-		req.Header.Set("Content-Type", "application/json")
-		_, _ = client.Do(req) // Ignore errors - VirtIO service might not be available
-	}
+	// Best-effort notify VirtIO service of queue size change
+	s.notifyVirtIOQueueSize(config.QueueSize)
 
 	// Update database queue size
 	if err := s.DB.UpdateQueueSizes(0, 0, config.QueueSize); err != nil {
@@ -1148,6 +1132,32 @@ func (s *Server) UpdateVirtIOConfig(c *gin.Context) {
 }
 
 // SetVirtIOSeedingSource sets the VirtIO seeding source
+// notifyVirtIOQueueSize best-effort pushes a queue size update to the VirtIO service.
+func (s *Server) notifyVirtIOQueueSize(queueSize int) {
+	if s.VirtioAddr == "" || queueSize <= 0 {
+		return
+	}
+	client := &http.Client{Timeout: 5 * time.Second}
+	queueUpdateURL := fmt.Sprintf("%s/config/queue", s.VirtioAddr)
+	jsonBody, err := json.Marshal(map[string]int{"queue_size": queueSize})
+	if err != nil {
+		log.Printf("[WARN] Failed to marshal VirtIO queue update: %v", err)
+		return
+	}
+	req, err := http.NewRequest("PUT", queueUpdateURL, bytes.NewBuffer(jsonBody))
+	if err != nil {
+		log.Printf("[WARN] Failed to create VirtIO queue update request: %v", err)
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Printf("[WARN] VirtIO queue update failed (service may be unavailable): %v", err)
+		return
+	}
+	_ = resp.Body.Close()
+}
+
 func (s *Server) SetVirtIOSeedingSource(source string) {
 	s.virtioConfigMutex.Lock()
 	defer s.virtioConfigMutex.Unlock()

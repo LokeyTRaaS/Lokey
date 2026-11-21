@@ -397,7 +397,7 @@ func (h *ChannelDBHandler) GetQueueInfo() (map[string]int, error) {
 	info := map[string]int{
 		"trng_queue_capacity":    h.TRNGQueue.Capacity(),
 		"fortuna_queue_capacity": h.FortunaQueue.Capacity(),
-		"virtio_queue_capacity": h.VirtIOQueue.Capacity(),
+		"virtio_queue_capacity":  h.VirtIOQueue.Capacity(),
 		"trng_queue_current":     h.TRNGQueue.Size(),
 		"fortuna_queue_current":  h.FortunaQueue.Size(),
 		"virtio_queue_current":   h.VirtIOQueue.Size(),

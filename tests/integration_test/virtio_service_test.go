@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
+
 	"github.com/lokey/rng-service/pkg/virtio"
 )
 
@@ -425,7 +426,7 @@ func TestVirtIOService_GetQueueConfig(t *testing.T) {
 	if result.QueueSize <= 0 {
 		t.Error("Expected positive queue size")
 	}
-	
+
 	// Verify new metrics fields are present (may be 0 initially)
 	if result.TotalGenerated < 0 {
 		t.Error("total_generated should be non-negative")

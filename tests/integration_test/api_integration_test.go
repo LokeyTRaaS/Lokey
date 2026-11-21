@@ -29,12 +29,13 @@ func setupIntegrationServer(handler database.DBHandler, controllerURL, fortunaUR
 // setupMockController creates a mock HTTP server for the controller service
 func setupMockController(t *testing.T) (*httptest.Server, func()) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/generate" {
+		switch r.URL.Path {
+		case "/generate":
 			data := hex.EncodeToString([]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10})
 			response := map[string]string{"data": data}
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(response)
-		} else if r.URL.Path == "/health" {
+		case "/health":
 			w.WriteHeader(http.StatusOK)
 			json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 		}
@@ -45,12 +46,13 @@ func setupMockController(t *testing.T) (*httptest.Server, func()) {
 // setupMockFortuna creates a mock HTTP server for the Fortuna service
 func setupMockFortuna(t *testing.T) (*httptest.Server, func()) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/generate" {
+		switch r.URL.Path {
+		case "/generate":
 			data := hex.EncodeToString([]byte{10, 20, 30, 40, 50, 60, 70, 80, 90, 100})
 			response := map[string]string{"data": data}
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(response)
-		} else if r.URL.Path == "/health" {
+		case "/health":
 			w.WriteHeader(http.StatusOK)
 			json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 		}
@@ -569,7 +571,8 @@ func testStartPolling(t *testing.T, setupDB func() (database.DBHandler, func()))
 	defer cleanupDB()
 
 	controllerServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/generate" {
+		switch r.URL.Path {
+		case "/generate":
 			if r.URL.Query().Get("count") != "" {
 				data := []string{
 					hex.EncodeToString([]byte{1, 2, 3, 4, 5}),
@@ -587,7 +590,7 @@ func testStartPolling(t *testing.T, setupDB func() (database.DBHandler, func()))
 				w.Header().Set("Content-Type", "application/json")
 				json.NewEncoder(w).Encode(response)
 			}
-		} else if r.URL.Path == "/health" {
+		case "/health":
 			w.WriteHeader(http.StatusOK)
 			json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 		}
@@ -595,7 +598,8 @@ func testStartPolling(t *testing.T, setupDB func() (database.DBHandler, func()))
 	defer controllerServer.Close()
 
 	fortunaServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/generate" {
+		switch r.URL.Path {
+		case "/generate":
 			data := hex.EncodeToString([]byte{10, 20, 30, 40, 50, 60, 70, 80, 90, 100})
 			response := map[string]interface{}{
 				"data": data,
@@ -603,10 +607,10 @@ func testStartPolling(t *testing.T, setupDB func() (database.DBHandler, func()))
 			}
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(response)
-		} else if r.URL.Path == "/seed" {
+		case "/seed":
 			w.WriteHeader(http.StatusOK)
 			json.NewEncoder(w).Encode(map[string]string{"status": "seeded"})
-		} else if r.URL.Path == "/health" {
+		case "/health":
 			w.WriteHeader(http.StatusOK)
 			json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 		}

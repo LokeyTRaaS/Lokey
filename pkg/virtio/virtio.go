@@ -69,7 +69,6 @@ func NewVirtIORNG(devicePath string, queueSize int) (*VirtIORNG, error) {
 	return v, nil
 }
 
-
 // GenerateRandom is deprecated - VirtIO should not read from device.
 // Use PullBytes() to get data from the queue instead.
 // This method is kept for backward compatibility but returns an error.
@@ -245,11 +244,11 @@ func (v *VirtIORNG) GetQueueCurrent() int {
 func (v *VirtIORNG) GetQueueStats() (totalGenerated, consumedCount, droppedCount uint64) {
 	v.queueMutex.RLock()
 	defer v.queueMutex.RUnlock()
-	
+
 	if v.queue == nil {
 		return 0, 0, 0
 	}
-	
+
 	return v.queue.Stats.TotalCount.Load(),
 		v.queue.Stats.ConsumedCount.Load(),
 		v.queue.Stats.DroppedCount.Load()

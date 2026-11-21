@@ -177,7 +177,7 @@ func (p *NamedPipe) Write(data []byte) error {
 // Stop gracefully stops the named pipe
 func (p *NamedPipe) Stop() error {
 	p.mu.Lock()
-	
+
 	// Check if already stopped
 	select {
 	case <-p.stopCh:

@@ -48,4 +48,3 @@ func TestNamedPipe_Stop(t *testing.T) {
 		t.Errorf("Second stop should be idempotent: %v", err)
 	}
 }
-

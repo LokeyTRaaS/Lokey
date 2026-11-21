@@ -21,9 +21,9 @@ type DetailedStats struct {
 
 // QualityMetrics represents TRNG randomness quality metrics
 type QualityMetrics struct {
-	Monobit        MonobitMetrics        `json:"monobit"`
+	Monobit         MonobitMetrics         `json:"monobit"`
 	RepetitionCount RepetitionCountMetrics `json:"repetition_count"`
-	APT            APTMetrics            `json:"apt"`
+	APT             APTMetrics             `json:"apt"`
 }
 
 // MonobitMetrics represents monobit (frequency) test results

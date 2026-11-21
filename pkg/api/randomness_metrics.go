@@ -37,14 +37,13 @@ type RepetitionState struct {
 
 // APTState tracks the adaptive proportion test state
 type APTState struct {
-	window          []byte
-	windowSize      int
-	cutoff          int
-	biasCount       int64
+	window           []byte
+	windowSize       int
+	cutoff           int
+	biasCount        int64
 	samplesProcessed int64
-	writeIndex      int
+	writeIndex       int
 }
-
 
 // NewTRNGQualityTracker creates a new TRNG quality tracker
 // aptWindowSize is the window size for the Adaptive Proportion Test (default: 512)
@@ -193,4 +192,3 @@ func (t *TRNGQualityTracker) GetQualityMetrics() database.QualityMetrics {
 		},
 	}
 }
-

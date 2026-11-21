@@ -25,14 +25,14 @@ const (
 
 // Generator implements the Fortuna algorithm for random number generation
 type Generator struct {
-	key              []byte
-	Counter          uint64
-	BlockSize        int
-	cipher           cipher.Block
-	mutex            sync.Mutex
-	lastReseed       time.Time
-	pools            [NumberOfPools][]byte
-	IsHealthy        bool
+	key               []byte
+	Counter           uint64
+	BlockSize         int
+	cipher            cipher.Block
+	mutex             sync.Mutex
+	lastReseed        time.Time
+	pools             [NumberOfPools][]byte
+	IsHealthy         bool
 	maxReseedInterval time.Duration
 }
 

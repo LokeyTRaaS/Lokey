@@ -395,9 +395,9 @@ func TestServer_pollTRNGService_Cancellation(t *testing.T) {
 	}))
 	defer controllerServer.Close()
 
-		db, _ := database.NewChannelDBHandler(10, 20, 15)
-		testRegistry := prometheus.NewRegistry()
-		server := api.NewServer(db, controllerServer.URL, "http://localhost:8082", "http://localhost:8083", 0, testRegistry)
+	db, _ := database.NewChannelDBHandler(10, 20, 15)
+	testRegistry := prometheus.NewRegistry()
+	server := api.NewServer(db, controllerServer.URL, "http://localhost:8082", "http://localhost:8083", 0, testRegistry)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // Cancel immediately
@@ -568,4 +568,3 @@ func TestServer_SeedVirtIOFromFortuna(t *testing.T) {
 		}
 	})
 }
-

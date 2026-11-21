@@ -1,31 +1,24 @@
+version: "2"
+
 run:
-  timeout: 5m
   tests: true
 
 linters:
+  default: standard
   enable:
-    - errcheck
-    - gosimple
-    - govet
-    - ineffassign
-    - staticcheck
-    - typecheck
-    - unused
     - gosec
-    - gofmt
-    - goimports
+    - unused
   disable:
-    - revive
     - dupl
+    - err113
     - goconst
     - gocritic
     - gocyclo
-    - err113
     - lll
     - noctx
     - nolintlint
+    - revive
     - rowserrcheck
-    - stylecheck
     - tagliatelle
     - thelper
     - unconvert
@@ -33,65 +26,84 @@ linters:
     - whitespace
     - wrapcheck
     - wsl
-
-linters-settings:
-  errcheck:
-    check-type-assertions: true
-    check-blank: true
-    exclude-functions:
-      - (io.Writer).Write
-      - (*encoding/json.Encoder).Encode
-      - os.RemoveAll
-      - os.Setenv
-      - os.Unsetenv
-      - (*testing.T).Fatal
-      - (*testing.T).Fatalf
-      - (*testing.T).Error
-      - (*testing.T).Errorf
-      - (*testing.T).Skip
-      - (*testing.T).Skipf
-
-  gofmt:
-    simplify: true
-
-  goimports:
-    local-prefixes: github.com/lokey/rng-service
-
-  govet:
-    enable-all: true
-    disable:
-      - fieldalignment
-      - shadow
-
-  gosec:
-    severity: medium
-    confidence: medium
-    excludes:
-      - G104
-      - G107
-      - G115
-      - G204
+  settings:
+    errcheck:
+      check-type-assertions: true
+      check-blank: true
+      exclude-functions:
+        - (io.Writer).Write
+        - (*encoding/json.Encoder).Encode
+        - os.RemoveAll
+        - os.Setenv
+        - os.Unsetenv
+        - (*testing.T).Fatal
+        - (*testing.T).Fatalf
+        - (*testing.T).Error
+        - (*testing.T).Errorf
+        - (*testing.T).Skip
+        - (*testing.T).Skipf
+    gosec:
+      excludes:
+        - G104
+        - G107
+        - G115
+        - G204
+      severity: medium
+      confidence: medium
+    govet:
+      disable:
+        - fieldalignment
+        - shadow
+      enable-all: true
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    rules:
+      - linters:
+          - errcheck
+          - gosec
+          - govet
+          - ineffassign
+        path: _test\.go
+        text: Error return value of .* is not checked
+      - linters:
+          - gosec
+        path: _test\.go
+        text: 'G104: Errors unhandled'
+      - linters:
+          - gosec
+        path: _test\.go
+        text: 'G107: Potential HTTP request made with variable url'
+      - linters:
+          - govet
+        path: _test\.go
+        text: 'buildtag:'
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
 
 issues:
-  exclude-rules:
-    - path: _test\.go
-      linters:
-        - errcheck
-        - gosec
-        - govet
-        - ineffassign
-      text: "Error return value of .* is not checked"
-    - path: _test\.go
-      linters:
-        - gosec
-      text: "G104: Errors unhandled"
-    - path: _test\.go
-      linters:
-        - gosec
-      text: "G107: Potential HTTP request made with variable url"
-    - path: _test\.go
-      linters:
-        - govet
-      text: "buildtag:"
   max-issues-per-linter: 0
   max-same-issues: 0
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    gofmt:
+      simplify: true
+    goimports:
+      local-prefixes:
+        - github.com/lokey/rng-service
+  exclusions:
+    generated: lax
+    paths:
+      - third_party$
+      - builtin$
+      - examples$

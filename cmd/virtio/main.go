@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+
 	"github.com/lokey/rng-service/pkg/virtio"
 )
 
@@ -218,15 +219,15 @@ func (v *VirtIOService) infoHandler(ctx *gin.Context) {
 	}
 
 	info := gin.H{
-		"status":          "running",
-		"service":         "virtio",
-		"queue_size":      queueSize,
-		"queue_current":   queueCurrent,
+		"status":           "running",
+		"service":          "virtio",
+		"queue_size":       queueSize,
+		"queue_current":    queueCurrent,
 		"queue_percentage": pct,
-		"total_generated": int64(totalGenerated),
-		"consumed_count":  int64(consumedCount),
+		"total_generated":  int64(totalGenerated),
+		"consumed_count":   int64(consumedCount),
 		"unconsumed_count": int64(unconsumed),
-		"queue_dropped":   int64(droppedCount),
+		"queue_dropped":    int64(droppedCount),
 	}
 	if v.pipe != nil {
 		info["pipe_path"] = v.pipe.Path()

@@ -148,16 +148,16 @@ type Controller struct {
 	recoveryMutex    sync.Mutex
 
 	// Circuit breaker fields
-	circuitState         atomic.Int32 // CircuitBreakerState
-	consecutiveFailures  atomic.Int64
+	circuitState        atomic.Int32 // CircuitBreakerState
+	consecutiveFailures atomic.Int64
 	lastFailureTime     atomic.Int64 // Unix timestamp
-	circuitOpenDuration  time.Duration
-	failureCount         atomic.Int64
-	recoveryStarted      atomic.Bool
+	circuitOpenDuration time.Duration
+	failureCount        atomic.Int64
+	recoveryStarted     atomic.Bool
 
 	// Recovery validation fields
-	recoveryCooldown     time.Duration
-	validationAttempts  int
+	recoveryCooldown   time.Duration
+	validationAttempts int
 }
 
 // NewController creates a new ATECC608A controller
@@ -704,8 +704,8 @@ func (c *Controller) sendCommand(opcode byte, param1 byte, param2 uint16, data [
 
 	// Word address
 	commandPacket[0] = 0x03
-	// Count (total packet length - 1)
-	commandPacket[1] = byte(len(commandPacket) - 1)
+	// Count (total packet length - 1); ATECC packets are always < 256 bytes
+	commandPacket[1] = byte(len(commandPacket) - 1) // #nosec G115
 	// Opcode
 	commandPacket[2] = opcode
 	// Param1
