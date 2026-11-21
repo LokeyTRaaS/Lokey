@@ -60,7 +60,36 @@ Swagger UI (via Traefik): `https://localhost/swagger/`. Grafana: `https://localh
 - Raspberry Pi 5 (ARM64) or x86_64 host
 - ATECC608A chip properly connected (see [Hardware Setup](hardware-setup.md))
 - Raspberry Pi OS 64-bit (or NixOS) on Pi 5
-- Docker installed on the Pi
+- Docker Engine + Compose plugin
+
+### Host notes (Pi OS / Debian multiarch)
+
+On some Raspberry Pi OS images, `iptables` is installed as **armhf** while the kernel/userspace is **arm64**. That makes `iptables` segfault and Docker fail to start (`failed to create NAT chain DOCKER`). Fix by installing the arm64 package:
+
+```bash
+# Confirm: file $(sudo which xtables-nft-multi) should say ARM aarch64, not ARM EABI5
+curl -fsSLO http://deb.debian.org/debian/pool/main/i/iptables/libip4tc2_1.8.11-2_arm64.deb
+curl -fsSLO http://deb.debian.org/debian/pool/main/i/iptables/libip6tc2_1.8.11-2_arm64.deb
+curl -fsSLO http://deb.debian.org/debian/pool/main/i/iptables/iptables_1.8.11-2_arm64.deb
+sudo dpkg -i libip4tc2_1.8.11-2_arm64.deb libip6tc2_1.8.11-2_arm64.deb iptables_1.8.11-2_arm64.deb
+sudo systemctl restart docker
+```
+
+Also ensure the `lokey` user is in the `docker` group (`sudo usermod -aG docker lokey`).
+
+### Quick bring-up (GHCR images)
+
+```bash
+git clone https://github.com/LokeyTRaaS/Lokey.git && cd Lokey
+mkdir -p run/lokey
+cp .env.template .env
+# Pin released images, e.g.:
+# LOKEY_IMAGE_API=ghcr.io/lokeytraas/lokey/api:1.1.0
+# (same for controller/fortuna/virtio)
+docker compose pull
+docker compose up -d
+curl -k https://localhost/api/v1/health
+```
 
 ### Step 1: Set Up Development Machine
 
