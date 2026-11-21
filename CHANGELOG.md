@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.2.1](https://github.com/LokeyTRaaS/Lokey/compare/v1.2.0...v1.2.1) (2026-11-21)
+
+### Bug Fixes
+
+* always pull floating :latest LoKey images in Compose. ([d36070b](https://github.com/LokeyTRaaS/Lokey/commit/d36070b6dcdf8d07f545e18c2026d9b2ab2b760c))
+
 ## Unreleased
 
 ### Continuous Integration
