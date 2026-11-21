@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Flash a LoKey Raspberry Pi 5 NixOS SD image to a block device.
+# CI does not publish this image — build it locally from the flake.
 #
 # Usage:
 #   ./scripts/flash-sd.sh /dev/sdX

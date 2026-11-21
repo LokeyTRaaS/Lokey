@@ -1,48 +1,59 @@
 # NixOS deployment
 
-LoKey can be deployed on NixOS (Raspberry Pi 5 ARM64 or x86_64) with Docker Compose and Traefik HTTPS.
+LoKey’s most reproducible deploy path is the Nix flake in this repo. It builds a bootable Raspberry Pi 5 microSD image with Docker Compose, Traefik HTTPS prerequisites, and I2C/cgroup support.
 
-## Flashable microSD image (Pi 5)
+CI **does not** build or publish the SD image (that is too heavy for GitHub Actions). CI only validates the flake. You build and flash locally.
 
-This repository ships a Nix flake that builds a bootable SD card image with:
+## Requirements
 
-- NixOS on Raspberry Pi 5 (`nixos-hardware` + unstable aarch64 SD image)
-- I2C / cgroup / Docker prerequisites
-- LoKey compose stack staged under `/etc/lokey`
-- Default user `lokey` / password `lokey` (change on first boot)
-- Controllers default to **emulated** mode so first boot works without ATECC wiring
+- [Nix](https://nixos.org/download/) with flakes enabled
+- An **aarch64** builder, or `qemu-aarch64` binfmt on x86_64
+- A microSD card and a block device path (check with `lsblk`)
 
-### Build
-
-On an aarch64 builder (or with `qemu-aarch64` binfmt):
+## Build the SD image
 
 ```bash
 nix build .#packages.aarch64-linux.sdcard
+# result -> compressed image (usually *.img.zst)
 ```
 
-Release tags also publish `lokey-pi5-sdcard.img.zst` as a GitHub Release asset.
+The image includes:
 
-### Flash
+- NixOS for Raspberry Pi 5 (`nixos-hardware` + unstable aarch64 SD image)
+- I2C / cgroup / Docker prerequisites
+- LoKey compose + deploy tree staged for first boot
+- User `lokey` / password `lokey` (change on first boot)
+- Controllers in **emulated** mode so first boot works without ATECC wiring
+
+## Flash
 
 ```bash
-# From a release asset:
-zstd -d lokey-pi5-sdcard.img.zst -o lokey-pi5.img
-sudo dd if=lokey-pi5.img of=/dev/sdX bs=4M status=progress conv=fsync
-
-# Or build + flash in one step (interactive confirmation):
+# Helper (asks for confirmation before dd):
 ./scripts/flash-sd.sh /dev/sdX
+
+# Or manually:
+zstd -d result/sd-image/*.img.zst -o lokey-pi5.img   # path may vary
+sudo dd if=lokey-pi5.img of=/dev/sdX bs=4M status=progress conv=fsync
 ```
 
-Replace `/dev/sdX` with the SD device (not a partition). Use `lsblk` to confirm.
+Use the whole disk device (`/dev/sdX` / `/dev/mmcblk0`), not a partition.
 
-### First boot
+## First boot
 
 1. SSH: `ssh lokey@lokey-pi5.local` (or the DHCP address), password `lokey`
-2. `passwd` immediately
-3. Docker pulls LoKey images from GHCR on first start (needs network)
-4. HTTPS: set `services.lokey.domain` / ACME email for a real hostname, or use Traefik file certs
+2. Run `passwd` immediately
+3. On first start Docker pulls LoKey images from GHCR (needs network)
+4. For a real hostname/TLS, set `services.lokey.domain` and ACME email (or file certs)
 
-To switch to hardware ATECC devices, update the NixOS config `services.lokey.devices` modes to `"hardware"` and rebuild, or override compose env `CONTROLLER_MODE=hardware`.
+To use hardware ATECC devices, set `services.lokey.devices.*.mode = "hardware"` and rebuild, or override compose `CONTROLLER_MODE=hardware`.
+
+## Flake check (what CI runs)
+
+```bash
+nix flake show
+nix eval .#nixosConfigurations.lokey-pi5.config.networking.hostName --raw
+# -> lokey-pi5
+```
 
 ## Module options
 
@@ -51,8 +62,8 @@ The NixOS module ([`nix/modules/lokey.nix`](../nix/modules/lokey.nix)) enables:
 | Requirement | Setting |
 |-------------|---------|
 | I2C | `hardware.i2c.enable = true`, `boot.kernelModules = [ "i2c-dev" ]` |
-| cgroups | `cgroup_enable=memory` / `cgroup_memory=1` kernel params where needed; Docker `cgroupdriver=systemd` |
-| namespaces | Provided by the standard NixOS kernel; required for container isolation |
+| cgroups | `cgroup_enable=memory` / `cgroup_memory=1` where needed; Docker `cgroupdriver=systemd` |
+| namespaces | Standard NixOS kernel |
 | Docker | `virtualisation.docker.enable = true` |
 
 Do **not** strip cgroup/namespace support — this stack assumes capable hardware (Pi 5 class or server).
@@ -80,10 +91,11 @@ services.lokey.devices = [
 
 Controllers attach only to the `lokey-devices` Docker network.
 
-## Example host
+## Example hosts
 
-See [`nix/hosts/pi5-example.nix`](../nix/hosts/pi5-example.nix) (module-only) and [`nix/hosts/pi5-sd.nix`](../nix/hosts/pi5-sd.nix) (SD appliance).
+- [`nix/hosts/pi5-sd.nix`](../nix/hosts/pi5-sd.nix) — appliance image used by `packages.aarch64-linux.sdcard`
+- [`nix/hosts/pi5-example.nix`](../nix/hosts/pi5-example.nix) — module-only example for an existing NixOS host
 
 ## Local laptop (no ATECC)
 
-Use Docker Compose defaults with `CONTROLLER_MODE=emulated` — no NixOS required. Hardware mode is for Pi deployment.
+Prefer Docker Compose with `CONTROLLER_MODE=emulated` — see the [README](../ReadMe.md). Hardware mode is for Pi deployment.

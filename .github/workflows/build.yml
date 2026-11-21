@@ -450,8 +450,8 @@ jobs:
         run: |
           mkdir -p releases
           cd artifacts
-          
-          # Create architecture-specific archives for each service
+
+          # Per-service, per-architecture archives only (no mega-tarballs).
           for service in controller api fortuna virtio; do
             for arch in amd64 arm64; do
               if [ -d "lokey-${service}-${arch}" ]; then
@@ -460,26 +460,7 @@ jobs:
               fi
             done
           done
-          
-          # Create combined archive with all binaries (all architectures)
-          mkdir -p combined
-          find . -name "lokey-*" -type f -exec cp {} combined/ \;
-          tar -czf ../releases/lokey-all-binaries.tar.gz -C combined .
-          
-          # Create per-architecture combined archives
-          for arch in amd64 arm64; do
-            mkdir -p combined-${arch}
-            for service in controller api fortuna virtio; do
-              if [ -f "lokey-${service}-${arch}/lokey-${service}-${arch}" ]; then
-                cp "lokey-${service}-${arch}/lokey-${service}-${arch}" combined-${arch}/
-              fi
-            done
-            if [ -d "combined-${arch}" ] && [ "$(ls -A combined-${arch})" ]; then
-              tar -czf ../releases/lokey-all-services-${arch}.tar.gz -C combined-${arch} .
-            fi
-          done
-          
-          # Create swagger docs archive
+
           if [ -d "swagger-docs" ]; then
             tar -czf ../releases/swagger-docs.tar.gz -C swagger-docs .
           fi
@@ -487,129 +468,41 @@ jobs:
       - name: Generate release notes
         run: |
           VERSION="${GITHUB_REF#refs/tags/}"
+          # Strip leading v for container tags published by metadata-action.
+          VERSION_NOPREFIX="${VERSION#v}"
           REPO_LOWER=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
-          
-          cat << 'EOF' > release_notes.md
-          ## 🚀 LoKey ${VERSION} - Multi-Architecture Release
 
-          ### 📦 What's Included
-          - **Controller service** - ATECC608A hardware TRNG interface
-          - **API service** - Main REST API with in-memory queues
-          - **Fortuna service** - Cryptographic RNG amplifier
-          - **OpenAPI/Swagger** documentation
-          - **VirtIO service** - Named pipe / HTTP entropy consumer
-          - **Multi-arch Docker images** (AMD64, ARM64) including multi-arch manifests
+          cat << EOF > release_notes.md
+          ## LoKey ${VERSION}
 
-          ### 🏗️ Supported Architectures
-          - **AMD64** (x86_64) - Desktop, laptop, cloud servers
-          - **ARM64** (aarch64) - Raspberry Pi 5, Apple Silicon, cloud ARM
+          ### Containers (GHCR, multi-arch)
+          \`\`\`bash
+          docker pull ghcr.io/${REPO_LOWER}/api:${VERSION_NOPREFIX}
+          docker pull ghcr.io/${REPO_LOWER}/controller:${VERSION_NOPREFIX}
+          docker pull ghcr.io/${REPO_LOWER}/fortuna:${VERSION_NOPREFIX}
+          docker pull ghcr.io/${REPO_LOWER}/virtio:${VERSION_NOPREFIX}
+          \`\`\`
 
-          ### 🐳 Docker Images
+          Prefer these multi-arch tags; arch-specific tags also exist as \`${VERSION_NOPREFIX}-amd64\` / \`${VERSION_NOPREFIX}-arm64\`.
 
-          **Pull architecture-specific images:**
-          ```bash
-          # AMD64 (x86_64)
-          docker pull ghcr.io/${REPO_LOWER}/controller:${VERSION}-amd64
-          docker pull ghcr.io/${REPO_LOWER}/api:${VERSION}-amd64
-          docker pull ghcr.io/${REPO_LOWER}/fortuna:${VERSION}-amd64
-          docker pull ghcr.io/${REPO_LOWER}/virtio:${VERSION}-amd64
+          ### Binaries
+          Per-service archives are attached (e.g. \`lokey-api-arm64.tar.gz\`). See the README for run instructions.
 
-          # ARM64 (aarch64) - Raspberry Pi 5
-          docker pull ghcr.io/${REPO_LOWER}/controller:${VERSION}-arm64
-          docker pull ghcr.io/${REPO_LOWER}/api:${VERSION}-arm64
-          docker pull ghcr.io/${REPO_LOWER}/fortuna:${VERSION}-arm64
-          docker pull ghcr.io/${REPO_LOWER}/virtio:${VERSION}-arm64
+          ### NixOS (most reproducible)
+          Build and flash a Pi 5 SD image locally — CI does not ship the image:
 
-          # Multi-arch manifests (prefer these)
-          docker pull ghcr.io/${REPO_LOWER}/controller:${VERSION}
-          docker pull ghcr.io/${REPO_LOWER}/api:${VERSION}
-          docker pull ghcr.io/${REPO_LOWER}/fortuna:${VERSION}
-          docker pull ghcr.io/${REPO_LOWER}/virtio:${VERSION}
-          ```
+          \`\`\`bash
+          nix build .#packages.aarch64-linux.sdcard
+          ./scripts/flash-sd.sh /dev/sdX
+          \`\`\`
 
-          ### 📥 Download Binaries
+          Details: [docs/nixos.md](https://github.com/${{ github.repository }}/blob/main/docs/nixos.md)
 
-          **All architectures in one archive:**
-          ```bash
-          wget https://github.com/${{ github.repository }}/releases/download/${VERSION}/lokey-all-binaries.tar.gz
-          tar -xzf lokey-all-binaries.tar.gz
-          ```
-
-          **Architecture-specific complete sets:**
-          ```bash
-          # AMD64
-          wget https://github.com/${{ github.repository }}/releases/download/${VERSION}/lokey-all-services-amd64.tar.gz
-          
-          # ARM64
-          wget https://github.com/${{ github.repository }}/releases/download/${VERSION}/lokey-all-services-arm64.tar.gz
-          
-          ```
-
-          **Individual service binaries:**
-          ```bash
-          wget https://github.com/${{ github.repository }}/releases/download/${VERSION}/lokey-controller-amd64.tar.gz
-          wget https://github.com/${{ github.repository }}/releases/download/${VERSION}/lokey-controller-arm64.tar.gz
-          wget https://github.com/${{ github.repository }}/releases/download/${VERSION}/lokey-api-amd64.tar.gz
-          wget https://github.com/${{ github.repository }}/releases/download/${VERSION}/lokey-api-arm64.tar.gz
-          wget https://github.com/${{ github.repository }}/releases/download/${VERSION}/lokey-fortuna-amd64.tar.gz
-          wget https://github.com/${{ github.repository }}/releases/download/${VERSION}/lokey-fortuna-arm64.tar.gz
-          wget https://github.com/${{ github.repository }}/releases/download/${VERSION}/lokey-virtio-amd64.tar.gz
-          wget https://github.com/${{ github.repository }}/releases/download/${VERSION}/lokey-virtio-arm64.tar.gz
-          ```
-
-          ### 📚 API Documentation
-
-          **Download OpenAPI/Swagger specification:**
-          ```bash
-          wget https://github.com/${{ github.repository }}/releases/download/${VERSION}/swagger-docs.tar.gz
-          tar -xzf swagger-docs.tar.gz
-          ```
-
-          **View live documentation:**
-          ```
-          http://your-api-host:8080/swagger/index.html
-          ```
-
-          ### 🥧 Raspberry Pi Quick Start
-
-          **Raspberry Pi 4/5 (ARM64):**
-          ```bash
-          wget https://github.com/${{ github.repository }}/releases/download/${VERSION}/lokey-all-services-arm64.tar.gz
-          tar -xzf lokey-all-services-arm64.tar.gz
-          chmod +x lokey-*-arm64
-          sudo ./lokey-controller-arm64
-          ```
-
-          ### 🔐 Verify Downloads
-          ```bash
-          # Download checksums
-          wget https://github.com/${{ github.repository }}/releases/download/${VERSION}/all-checksums.txt
-          
-          # Verify
-          sha256sum -c all-checksums.txt
-          ```
-
-          ### 📖 Documentation
-          - [Hardware Setup](https://github.com/${{ github.repository }}/blob/main/device/HowToSetup.md)
-          - [API Documentation](https://github.com/${{ github.repository }}/blob/main/README.md)
-          - [Docker Compose Setup](https://github.com/${{ github.repository }}/blob/main/docker-compose.yaml)
-          - [Project Website](https://lokey.cloud)
-
-          ### 🔧 System Requirements
-          - **OS**: Linux (any architecture listed above)
-          - **Hardware**: 
-            - Desktop/Laptop (AMD64)
-            - Raspberry Pi 5 (ARM64)
-            - Cloud ARM instances (ARM64)
-          - **Optional**: ATECC608A chip for hardware TRNG
-
-          ---
-          **Full Changelog**: https://github.com/${{ github.repository }}/compare/...
+          ### Docs
+          - [README](https://github.com/${{ github.repository }}/blob/main/ReadMe.md)
+          - [Hardware setup](https://github.com/${{ github.repository }}/blob/main/docs/hardware-setup.md)
+          - Swagger: \`swagger-docs.tar.gz\` on this release
           EOF
-          
-          # Substitute variables
-          sed -i "s|\${VERSION}|${VERSION}|g" release_notes.md
-          sed -i "s|\${REPO_LOWER}|${REPO_LOWER}|g" release_notes.md  
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2

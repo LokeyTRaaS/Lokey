@@ -83,3 +83,24 @@ jobs:
           name: codecov-umbrella
           fail_ci_if_error: false
         if: always()
+
+  nix-flake:
+    name: Nix flake check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@v16
+
+      - name: Validate flake
+        run: |
+          set -euo pipefail
+          # Lightweight checks only — never build the SD image in CI.
+          nix flake metadata
+          nix flake show
+          host="$(nix eval .#nixosConfigurations.lokey-pi5.config.networking.hostName --raw)"
+          test "${host}" = "lokey-pi5"
+          nix eval .#packages.aarch64-linux.sdcard.name --raw
+          echo "Nix flake OK"

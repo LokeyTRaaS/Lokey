@@ -13,12 +13,68 @@
 
 ATECC608A TRNG + Fortuna CSPRNG + VirtIO entropy delivery, fronted by Traefik (HTTPS), with Prometheus/Grafana observability. Local development uses an emulated controller (no chip required).
 
+## Choose a deploy path
+
+| Path | Best for | Reproducibility |
+|------|----------|-----------------|
+| **NixOS SD image** (recommended for Pi) | Flash-and-boot Raspberry Pi 5 appliance | Highest — pinned flake lock |
+| **Containers (Compose / GHCR)** | Laptops, servers, quick bring-up | High — image digests on GHCR |
+| **Release binaries** | Bare metal / custom init | Medium — static Go builds per arch |
+
+### 1. NixOS (most reproducible)
+
+Build a flashable microSD image for Raspberry Pi 5 from the flake (CI only *validates* the flake; it does not build the image):
+
+```bash
+# Needs Nix + flakes; aarch64 host or qemu-aarch64 binfmt
+nix build .#packages.aarch64-linux.sdcard
+./scripts/flash-sd.sh /dev/sdX          # confirms before dd
+```
+
+Default SSH user after flash: `lokey` / `lokey` (change immediately). Controllers start in **emulated** mode so first boot works without ATECC wiring.
+
+Full options, TLS, and multi-device setup: **[docs/nixos.md](docs/nixos.md)**.
+
+### 2. Containers
+
+From a release (multi-arch manifests on GHCR):
+
+```bash
+export VER=1.1.0   # or latest
+docker pull ghcr.io/lokeytraas/lokey/api:${VER}
+docker pull ghcr.io/lokeytraas/lokey/controller:${VER}
+docker pull ghcr.io/lokeytraas/lokey/fortuna:${VER}
+docker pull ghcr.io/lokeytraas/lokey/virtio:${VER}
+```
+
+Or build/run the full stack locally (emulator by default):
+
+```bash
+git clone https://github.com/LokeyTRaaS/Lokey.git
+cd Lokey
+mkdir -p run/lokey
+docker compose up -d --build
+curl -k https://localhost/api/v1/health
+```
+
+### 3. Binaries
+
+Download per-service archives from the [GitHub Releases](https://github.com/LokeyTRaaS/Lokey/releases) page, e.g. `lokey-api-arm64.tar.gz`, `lokey-controller-amd64.tar.gz`. There is one archive per service × architecture — no combined mega-tarball.
+
+```bash
+tar -xzf lokey-api-arm64.tar.gz
+chmod +x lokey-api-arm64
+./lokey-api-arm64
+```
+
+Wire services with the env vars documented in [docs/deployment.md](docs/deployment.md) (or use Compose).
+
 ## Quick Links
 
 - **[Quickstart](docs/quickstart.md)** — full stack locally with emulator
 - **[Hardware Setup](docs/hardware-setup.md)** — Pi 5 + ATECC608A
 - **[Deployment](docs/deployment.md)** — production / Traefik HTTPS
-- **[NixOS](docs/nixos.md)** — NixOS module, I2C + cgroups boot
+- **[NixOS](docs/nixos.md)** — flake, SD image, I2C + cgroups
 - **[API Reference](https://lokeytraas.github.io/Lokey/api-reference.html)**
 - **[Architecture](docs/architecture.md)**
 
@@ -29,18 +85,6 @@ ATECC608A TRNG + Fortuna CSPRNG + VirtIO entropy delivery, fronted by Traefik (H
 - VirtIO named pipe + HTTPS streaming via Traefik
 - Multi-device controllers on an isolated `lokey-devices` network + seccomp profiles
 - Platforms: **linux/amd64** and **linux/arm64** only
-
-## Quick Start (no hardware)
-
-```bash
-git clone https://github.com/LokeyTRaaS/Lokey.git
-cd Lokey
-mkdir -p run/lokey
-docker compose up -d --build
-curl -k https://localhost/api/v1/health
-```
-
-Controllers default to **emulated** mode. On a Raspberry Pi 5 with ATECC608A, use the `hardware` compose profile / NixOS module.
 
 ## Architecture
 
@@ -56,6 +100,7 @@ Prometheus scrapes app + devices
 
 - Production-oriented Docker Compose + NixOS deploy path
 - Multi-arch CI (amd64, arm64) including VirtIO
+- Nix flake is checked in CI; SD images are built locally from the flake
 - Pi Zero 2 / ARMv7 are **unsupported** (insufficient for cgroups/namespaces + Compose)
 
 ## License
