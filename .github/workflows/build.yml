@@ -301,6 +301,9 @@ jobs:
       - name: Build and push Docker image for ${{ matrix.platform }}
         id: build-push
         uses: docker/build-push-action@v6
+        env:
+          # Non-zip build records break download-artifact when jobs pull "all" artifacts.
+          DOCKER_BUILD_RECORD_UPLOAD: false
         with:
           context: .
           file: ./cmd/${{ matrix.service }}/Dockerfile.action
@@ -525,10 +528,14 @@ jobs:
     needs: [generate-swagger, build-binaries, build-containers, create-manifests]
     if: always()
     steps:
-      - name: Download all artifacts
+      - name: Download binary artifacts
         uses: actions/download-artifact@v8
         with:
+          # Exclude digest-* and docker/build-push-action *.dockerbuild records
+          # (non-zip uploads that fail extract after retries).
+          pattern: lokey-*
           path: ./artifacts
+          merge-multiple: false
 
       - name: Generate comprehensive summary
         run: |
