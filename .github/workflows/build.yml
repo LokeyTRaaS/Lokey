@@ -23,7 +23,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       - name: Set up Go
         uses: actions/setup-go@v6
@@ -107,7 +107,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       - name: Set up Go
         uses: actions/setup-go@v6
@@ -128,7 +128,7 @@ jobs:
       # Download swagger docs for ALL API builds
       - name: Download Swagger documentation for API builds
         if: matrix.service == 'api'
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v8
         with:
           name: swagger-docs
           path: ./pkg/api/docs
@@ -193,13 +193,13 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       - name: Create build directory
         run: mkdir -p build
 
       - name: Download binary artifact for ${{ matrix.arch }}
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v8
         with:
           name: lokey-${{ matrix.service }}-${{ matrix.arch }}
           path: ./build
@@ -207,7 +207,7 @@ jobs:
       # Download Swagger docs for API service
       - name: Download Swagger documentation
         if: matrix.service == 'api'
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v8
         with:
           name: swagger-docs
           path: ./pkg/api/docs
@@ -405,17 +405,17 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       - name: Download binary artifacts
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v8
         with:
           pattern: lokey-*
           path: ./artifacts
           merge-multiple: false
 
       - name: Download Swagger documentation
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v8
         with:
           name: swagger-docs
           path: ./artifacts/swagger-docs
@@ -505,7 +505,7 @@ jobs:
           EOF
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: |
             releases/*.tar.gz
@@ -526,7 +526,7 @@ jobs:
     if: always()
     steps:
       - name: Download all artifacts
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v8
         with:
           path: ./artifacts
 
