@@ -53,3 +53,10 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+
+  # semantic-release tooling (root package.json)
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5

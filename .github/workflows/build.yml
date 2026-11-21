@@ -471,7 +471,9 @@ jobs:
           - Swagger: \`swagger-docs.tar.gz\` on this release
           EOF
 
-      - name: Create GitHub Release
+      - name: Create or update GitHub Release
+        # semantic-release opens the GitHub Release (notes + tag); this step
+        # attaches binaries/checksums. Re-running on an existing tag updates assets.
         uses: softprops/action-gh-release@v3
         with:
           files: |
@@ -482,6 +484,7 @@ jobs:
           draft: false
           prerelease: false
           generate_release_notes: true
+          fail_on_unmatched_files: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

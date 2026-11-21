@@ -1,0 +1,88 @@
+name: Semantic Release
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+  actions: write
+
+concurrency:
+  group: semantic-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: semantic-release
+    runs-on: ubuntu-latest
+    # Skip the chore(release) commit itself.
+    if: ${{ !contains(github.event.head_commit.message, '[skip ci]') }}
+    outputs:
+      published: ${{ steps.semantic.outputs.new_release_published }}
+      version: ${{ steps.semantic.outputs.new_release_version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install release dependencies
+        run: npm ci
+
+      - name: Run semantic-release
+        id: semantic
+        uses: cycjimmy/semantic-release-action@v4
+        with:
+          semantic_version: 24
+          # Non-npm Go project: .releaserc.json omits @semantic-release/npm.
+          skip_npm_plugin: true
+          extra_plugins: |
+            @semantic-release/changelog@6.0.3
+            @semantic-release/git@10.0.1
+            @semantic-release/github@11.0.3
+            @semantic-release/commit-analyzer@13.0.1
+            @semantic-release/release-notes-generator@14.0.3
+            conventional-changelog-conventionalcommits@8.0.0
+        env:
+          # Prefer a PAT so tag/commit events can trigger build.yml. Without
+          # RELEASE_TOKEN we still dispatch build.yml explicitly below.
+          GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
+          GIT_AUTHOR_NAME: semantic-release-bot
+          GIT_AUTHOR_EMAIL: semantic-release-bot@users.noreply.github.com
+          GIT_COMMITTER_NAME: semantic-release-bot
+          GIT_COMMITTER_EMAIL: semantic-release-bot@users.noreply.github.com
+
+      - name: Trigger artifact build for the new tag
+        if: steps.semantic.outputs.new_release_published == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.semantic.outputs.new_release_version }}
+        run: |
+          set -euo pipefail
+          TAG="v${VERSION}"
+          echo "Dispatching build.yml for ${TAG}"
+          gh workflow run build.yml --repo "${{ github.repository }}" --ref "${TAG}"
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "## Semantic Release"
+            echo "- published: \`${{ steps.semantic.outputs.new_release_published || 'false' }}\`"
+            echo "- version: \`${{ steps.semantic.outputs.new_release_version || 'n/a' }}\`"
+            if [ "${{ steps.semantic.outputs.new_release_published }}" = "true" ]; then
+              echo "- next: \`build.yml\` dispatched for \`v${{ steps.semantic.outputs.new_release_version }}\`"
+              echo "- tip: set repo secret \`RELEASE_TOKEN\` (contents:write + actions:write) so automated tags reliably wake builds"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -363,20 +363,34 @@ docker compose exec api sh
 
 ## Release Process
 
-Releases are **manual tags**. Pushing `v*` to GitHub runs [`build.yml`](../.github/workflows/build.yml) `create-release` (binaries + GHCR manifests). There is no semantic-release bot.
+Releases are **automatic** on `main` via [semantic-release](https://semantic-release.gitbook.io/) ([`.github/workflows/release.yml`](../.github/workflows/release.yml) + [`.releaserc.json`](../.releaserc.json)).
 
-1. Update [`CHANGELOG.md`](../CHANGELOG.md) for the version.
-2. Tag and push:
+### Automatic (preferred)
+
+1. Merge conventional commits to `main` (`feat:`, `fix:`, `feat!:` / `BREAKING CHANGE:`, etc.).
+2. **Semantic Release** analyzes commits since the last `v*` tag, updates [`CHANGELOG.md`](../CHANGELOG.md), creates tag `vX.Y.Z`, and opens the GitHub Release.
+3. It then dispatches [`build.yml`](../.github/workflows/build.yml) for that tag, which:
+   - Builds multi-arch binaries and containers
+   - Creates multi-arch GHCR manifests (`X.Y.Z`, `vX.Y.Z`, `latest`)
+   - Attaches per-service archives to the GitHub Release
+
+| Commit type | Semver bump |
+|-------------|-------------|
+| `fix:` | patch |
+| `feat:` | minor |
+| `BREAKING CHANGE:` / `feat!:` | major |
+| `docs:`, `chore:`, `ci:`, `refactor:` (no break) | no release |
+
+**Secret:** set repo secret `RELEASE_TOKEN` (fine-grained or classic PAT with `contents:write` and `actions:write`) so the tag/commit from semantic-release can trigger `build.yml`. Without it, the workflow falls back to `GITHUB_TOKEN` and dispatches the build explicitly; a PAT is still recommended.
+
+### Manual tag (escape hatch)
 
 ```bash
-git tag -a v1.1.0 -m "Release v1.1.0"
-git push origin v1.1.0
+git tag -a v1.2.1 -m "Release v1.2.1"
+git push origin v1.2.1
 ```
 
-3. CI then:
-   - Builds multi-arch binaries and containers
-   - Creates multi-arch GHCR manifests
-   - Attaches per-service archives to the GitHub Release
+That still runs `build.yml` `create-release` for binaries + GHCR.
 
 ### Version Numbering
 

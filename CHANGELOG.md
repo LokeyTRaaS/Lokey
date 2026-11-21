@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Continuous Integration
+
+* semantic-release on `main` (conventional commits → `v*` tag, changelog, GitHub Release; dispatches `build.yml` for GHCR/binaries)
+
 ## 1.2.0 (2026-11-21)
 
 ### Features
