@@ -407,10 +407,18 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v5
 
-      - name: Download all artifacts
+      - name: Download binary artifacts
         uses: actions/download-artifact@v6
         with:
+          pattern: lokey-*
           path: ./artifacts
+          merge-multiple: false
+
+      - name: Download Swagger documentation
+        uses: actions/download-artifact@v6
+        with:
+          name: swagger-docs
+          path: ./artifacts/swagger-docs
 
       - name: Create checksums
         run: |
