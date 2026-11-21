@@ -154,9 +154,11 @@ func (v *VirtIOService) Start() error {
 
 	select {
 	case err := <-serverErr:
-		// Stop pipe on HTTP server error
-		if stopErr := v.pipe.Stop(); stopErr != nil {
-			log.Printf("[WARN] Error stopping named pipe: %v", stopErr)
+		// Stop pipe on HTTP server error (pipe may be disabled)
+		if v.pipe != nil {
+			if stopErr := v.pipe.Stop(); stopErr != nil {
+				log.Printf("[WARN] Error stopping named pipe: %v", stopErr)
+			}
 		}
 		return fmt.Errorf("server error: %w", err)
 	case sig := <-sigCh:

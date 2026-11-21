@@ -32,19 +32,10 @@ jobs:
           cache: true
 
       - name: Install Swag
-        run: go install github.com/swaggo/swag/cmd/swag@latest
+        run: go install github.com/swaggo/swag/cmd/swag@v1.16.6
 
       - name: Generate Swagger documentation
-        run: |
-          echo "=== Generating Swagger documentation ==="
-          swag init --parseDependency --parseInternal \
-            --generalInfo main.go \
-            --dir ./cmd/api/,./pkg/api \
-            --output ./pkg/api/docs
-
-          echo ""
-          echo "=== Generated Swagger files ==="
-          ls -lah ./pkg/api/docs/
+        run: ./scripts/generate-swagger.sh
 
       - name: Upload Swagger documentation
         uses: actions/upload-artifact@v5
@@ -171,15 +162,6 @@ jobs:
     permissions:
       contents: read
       packages: write
-    outputs:
-      controller-amd64-digest: ${{ steps.build-push.outputs.digest }}
-      controller-arm64-digest: ${{ steps.build-push.outputs.digest }}
-      api-amd64-digest: ${{ steps.build-push.outputs.digest }}
-      api-arm64-digest: ${{ steps.build-push.outputs.digest }}
-      fortuna-amd64-digest: ${{ steps.build-push.outputs.digest }}
-      fortuna-arm64-digest: ${{ steps.build-push.outputs.digest }}
-      virtio-amd64-digest: ${{ steps.build-push.outputs.digest }}
-      virtio-arm64-digest: ${{ steps.build-push.outputs.digest }}
     strategy:
       fail-fast: false
       matrix:
@@ -248,13 +230,10 @@ jobs:
           if [ "${{ matrix.service }}" == "api" ]; then
             echo ""
             echo "=== Swagger documentation verification ==="
-            if [ -d "./pkg/api/docs" ]; then
-              ls -la ./pkg/api/docs/
-              [ -f "./pkg/api/docs/swagger.json" ] && echo "✓ swagger.json found"
-              [ -f "./pkg/api/docs/swagger.yaml" ] && echo "✓ swagger.yaml found"
-            else
-              echo "⚠ Swagger docs directory not found"
-            fi
+            ls -la ./pkg/api/docs/
+            test -f "./pkg/api/docs/swagger.json"
+            test -f "./pkg/api/docs/swagger.yaml"
+            echo "swagger.json and swagger.yaml present"
           fi
 
       - name: Set up QEMU
@@ -315,22 +294,6 @@ jobs:
           cache-to: type=gha,mode=max,scope=${{ matrix.service }}-${{ matrix.arch }}
           provenance: false
           sbom: false
-
-      - name: Save digest to file
-        if: github.event_name != 'pull_request'
-        run: |
-          mkdir -p /tmp/digests
-          digest="${{ steps.build-push.outputs.digest }}"
-          echo "$digest" > "/tmp/digests/${{ matrix.service }}-${{ matrix.arch }}.txt"
-          echo "Saved digest for ${{ matrix.service }}-${{ matrix.arch }}: $digest"
-
-      - name: Upload digest
-        if: github.event_name != 'pull_request'
-        uses: actions/upload-artifact@v5
-        with:
-          name: digest-${{ matrix.service }}-${{ matrix.arch }}
-          path: /tmp/digests/
-          retention-days: 1
 
   # Create multi-arch manifest lists (amd64 + arm64)
   create-manifests:
@@ -397,12 +360,13 @@ jobs:
     name: Create Release
     runs-on: ubuntu-latest
     needs: [generate-swagger, build-binaries, build-containers, create-manifests]
-    # Publish binary/docs archives even if multi-arch manifests flake.
     if: |
       always() &&
       startsWith(github.ref, 'refs/tags/v') &&
+      needs.generate-swagger.result == 'success' &&
       needs.build-binaries.result == 'success' &&
-      needs.generate-swagger.result == 'success'
+      needs.build-containers.result == 'success' &&
+      needs.create-manifests.result == 'success'
     permissions:
       contents: write
 
@@ -502,7 +466,7 @@ jobs:
           Details: [docs/nixos.md](https://github.com/${{ github.repository }}/blob/main/docs/nixos.md)
 
           ### Docs
-          - [README](https://github.com/${{ github.repository }}/blob/main/ReadMe.md)
+          - [README](https://github.com/${{ github.repository }}/blob/main/README.md)
           - [Hardware setup](https://github.com/${{ github.repository }}/blob/main/docs/hardware-setup.md)
           - Swagger: \`swagger-docs.tar.gz\` on this release
           EOF
@@ -552,8 +516,12 @@ jobs:
 
           BINARY_STATUS="${{ needs.build-binaries.result }}"
           CONTAINER_STATUS="${{ needs.build-containers.result }}"
+          MANIFEST_STATUS="${{ needs.create-manifests.result }}"
+          SWAGGER_STATUS="${{ needs.generate-swagger.result }}"
 
-          if [ "$BINARY_STATUS" == "success" ] && [ "$CONTAINER_STATUS" == "success" ]; then
+          if [ "$BINARY_STATUS" == "success" ] && [ "$CONTAINER_STATUS" == "success" ] && \
+             { [ "$MANIFEST_STATUS" == "success" ] || [ "$MANIFEST_STATUS" == "skipped" ]; } && \
+             [ "$SWAGGER_STATUS" == "success" ]; then
             OVERALL="✅ All Passed"
           else
             OVERALL="❌ Failed"
@@ -631,23 +599,11 @@ jobs:
           if [ "${{ github.event_name }}" != "pull_request" ]; then
             echo "Multi-architecture images available:" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
-            echo "| Service | Architecture | Name | SHA |" >> $GITHUB_STEP_SUMMARY
-            echo "|---------|--------------|------|-----|" >> $GITHUB_STEP_SUMMARY
+            echo "| Service | Tags |" >> $GITHUB_STEP_SUMMARY
+            echo "|---------|------|" >> $GITHUB_STEP_SUMMARY
 
             for service in controller api fortuna virtio; do
-              for arch in amd64 arm64; do
-                # Read digest from artifact if it exists
-                DIGEST_FILE="./artifacts/digest-${service}-${arch}/${service}-${arch}.txt"
-                if [ -f "$DIGEST_FILE" ]; then
-                  FULL_DIGEST=$(cat "$DIGEST_FILE")
-                  # Extract just the SHA (remove 'sha256:' prefix if present)
-                  SHORT_SHA=$(echo "$FULL_DIGEST" | sed 's/sha256://' | cut -c1-12)
-                  IMAGE_NAME="ghcr.io/${REPO_LOWER}/${service}:${BRANCH_TAG}-${arch}"
-                  echo "| ${service} | ${arch} | \`${BRANCH_TAG}-${arch}\` | \`${SHORT_SHA}...\` |" >> $GITHUB_STEP_SUMMARY
-                else
-                  echo "| ${service} | ${arch} | \`${BRANCH_TAG}-${arch}\` | N/A |" >> $GITHUB_STEP_SUMMARY
-                fi
-              done
+              echo "| ${service} | \`${BRANCH_TAG}-{amd64,arm64}\`, \`${BRANCH_TAG}\` (multi-arch) |" >> $GITHUB_STEP_SUMMARY
             done
 
             echo "" >> $GITHUB_STEP_SUMMARY
@@ -656,21 +612,23 @@ jobs:
             echo "# AMD64" >> $GITHUB_STEP_SUMMARY
             echo "docker pull ghcr.io/${REPO_LOWER}/controller:${BRANCH_TAG}-amd64" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
-            echo "# ARM64 (Raspberry Pi 4/5)" >> $GITHUB_STEP_SUMMARY
+            echo "# ARM64 (Raspberry Pi 5)" >> $GITHUB_STEP_SUMMARY
             echo "docker pull ghcr.io/${REPO_LOWER}/controller:${BRANCH_TAG}-arm64" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "# Multi-arch manifest" >> $GITHUB_STEP_SUMMARY
             echo "docker pull ghcr.io/${REPO_LOWER}/controller:${BRANCH_TAG}" >> $GITHUB_STEP_SUMMARY
             echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "Manifests job: \`${MANIFEST_STATUS}\`" >> $GITHUB_STEP_SUMMARY
           else
-            echo "🔄 Pull request build - images not pushed." >> $GITHUB_STEP_SUMMARY
+            echo "Pull request build - images not pushed." >> $GITHUB_STEP_SUMMARY
           fi
 
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "---" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
 
-          echo "## ℹ️ Build Information" >> $GITHUB_STEP_SUMMARY
+          echo "## Build Information" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "- **Workflow**: ${{ github.workflow }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Run**: #${{ github.run_number }} (ID: ${{ github.run_id }})" >> $GITHUB_STEP_SUMMARY
@@ -678,13 +636,13 @@ jobs:
           echo "- **Branch**: \`${GITHUB_REF_NAME}\`" >> $GITHUB_STEP_SUMMARY
           echo "- **Go**: ${{ env.GO_VERSION }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Architectures**: AMD64, ARM64" >> $GITHUB_STEP_SUMMARY
-          echo "- **CGO**: Enabled" >> $GITHUB_STEP_SUMMARY
+          echo "- **CGO**: Disabled for release binaries (static builds)" >> $GITHUB_STEP_SUMMARY
           echo "- **Project**: [lokey.cloud](https://lokey.cloud)" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
 
-          if [ "$BINARY_STATUS" == "success" ] && [ "$CONTAINER_STATUS" == "success" ]; then
-            echo "### ✅ All builds completed successfully!" >> $GITHUB_STEP_SUMMARY
+          if [ "$OVERALL" == "✅ All Passed" ]; then
+            echo "### All builds completed successfully!" >> $GITHUB_STEP_SUMMARY
           else
-            echo "### ❌ Some builds failed" >> $GITHUB_STEP_SUMMARY
+            echo "### Some builds failed (binaries=${BINARY_STATUS}, containers=${CONTAINER_STATUS}, manifests=${MANIFEST_STATUS}, swagger=${SWAGGER_STATUS})" >> $GITHUB_STEP_SUMMARY
             exit 1
           fi

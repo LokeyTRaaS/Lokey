@@ -13,7 +13,7 @@ RUN cd cmd/virtio && CGO_ENABLED=0 GOOS=linux go build -trimpath -o /out/virtio
 
 FROM alpine:latest
 
-RUN apk --no-cache add ca-certificates
+RUN apk --no-cache add ca-certificates wget
 
 COPY --from=builder /out/virtio /usr/local/bin/virtio
 

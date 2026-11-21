@@ -17,7 +17,7 @@ if rg -n 'FROM golang:' cmd/*/Dockerfile | rg -v '1\.27'; then
 fi
 
 echo "== No ARMv7 in shipping paths =="
-if rg -n 'armv7|GOARM|linux/arm/v7' .github/workflows Taskfile.yaml docker-compose.yaml ReadMe.md docs \
+if rg -n 'armv7|GOARM|linux/arm/v7' .github/workflows Taskfile.yaml docker-compose.yaml README.md docs \
   --glob '!**/medium-article*.md' --glob '!**/nixos.md'; then
   exit 1
 fi

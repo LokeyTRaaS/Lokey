@@ -15,7 +15,7 @@ RUN cd cmd/controller && CGO_ENABLED=1 GOOS=linux go build -trimpath -o /out/con
 
 FROM alpine:latest
 
-RUN apk --no-cache add ca-certificates libc6-compat i2c-tools
+RUN apk --no-cache add ca-certificates libc6-compat i2c-tools wget
 
 COPY --from=builder /out/controller /usr/local/bin/controller
 

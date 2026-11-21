@@ -27,8 +27,7 @@ Guide for developers contributing to LoKey.
 - [swag](https://github.com/swaggo/swag) - Swagger documentation generator
 
 **Quick Install:**
-```
-bash
+```bash
 # Go (macOS)
 brew install go
 
@@ -40,8 +39,7 @@ go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
 go install github.com/swaggo/swag/cmd/swag@latest
 ```
 ### Clone and Build
-```
-bash
+```bash
 # Clone repository
 git clone https://github.com/LokeyTRaaS/Lokey.git
 cd Lokey
@@ -91,46 +89,45 @@ cd cmd/fortuna && go run main.go
 cd cmd/api && go run main.go
 
 # Terminal 4 - Test
-curl http://localhost:8080/api/v1/health
+curl -k https://localhost/api/v1/health
 ```
+
+Optional full-stack smoke (Compose must already be up): `./scripts/verify-stack.sh`.
 
 ## Project Structure
 
 ```
 .
 ├── cmd/                          # Service entry points
-│   ├── api/main.go              # API service
-│   ├── controller/main.go       # Controller service
-│   └── fortuna/main.go          # Fortuna service
+│   ├── api/                      # API service (+ go.mod)
+│   ├── controller/               # Controller service
+│   ├── fortuna/                  # Fortuna service
+│   └── virtio/                   # VirtIO pipe + HTTP streaming
 │
 ├── pkg/                          # Shared packages
-│   ├── api/                     # REST API implementation
-│   │   ├── server.go
-│   │   ├── polling.go
-│   │   └── docs/                # Generated Swagger docs
-│   ├── atecc608a/               # Hardware interface
-│   │   └── controller.go
-│   ├── database/                # In-memory entropy queues
-│   │   ├── interface.go
-│   │   ├── channel.go
-│   │   └── factory.go
-│   └── fortuna/                 # Cryptographic PRNG
-│       └── fortuna.go
+│   ├── api/                      # REST API implementation
+│   ├── atecc608a/                # Hardware / emulator interface
+│   ├── database/                 # In-memory entropy queues
+│   ├── fortuna/                  # Cryptographic PRNG
+│   └── virtio/                   # Named-pipe helpers
 │
 ├── docs/                         # Documentation
-├── .github/workflows/           # CI/CD pipelines
-├── docker-compose.yaml          # Development compose
-├── Taskfile.yaml                # Task definitions
+├── nix/                          # NixOS module + Pi 5 hosts
+├── scripts/                      # check-static, flash-sd, swagger, verify-stack
+├── .github/workflows/            # CI/CD pipelines
+├── docker-compose.yaml           # Full Traefik stack
+├── Taskfile.yaml                 # Task definitions
+├── flake.nix
 └── go.mod
 ```
-
 
 ### Key Packages
 
 - **`pkg/api`** - REST API, request handling, background polling
-- **`pkg/atecc608a`** - I2C communication with ATECC608A chip
+- **`pkg/atecc608a`** - I2C communication with ATECC608A chip (or emulator)
 - **`pkg/database`** - In-memory circular queues (`memory://channels`)
-- **`pkg/fortuna`** - Fortuna algorithm, AES-256 generation
+- **`pkg/fortuna`** - Fortuna algorithm, AES-256 generation + rekey
+- **`pkg/virtio`** - Named pipe helpers for VirtIO delivery
 
 ## Building from Source
 
@@ -220,16 +217,12 @@ golangci-lint run --fix
 
 ### Generate Swagger Docs
 
-```shell script
-# Generate API documentation
-task generate_swagger
+```bash
+# Same invocation as CI:
+./scripts/generate-swagger.sh
 
-# Or manually
-cd pkg/api
-swag init --parseDependency --parseInternal \
-  --generalInfo server.go \
-  --dir ./ \
-  --output ./docs
+# Or via Task (if defined):
+task generate_swagger
 ```
 
 
@@ -364,29 +357,26 @@ docker compose exec api sh
 
 **Common issues:**
 
-- **"i2c: no such file"** - Check device mapping in `docker-compose.yaml`
-- **"database locked"** - Only one API instance can run at a time
+- **"i2c: no such file"** - Check device mapping / `CONTROLLER_MODE` in Compose
 - **"no data available"** - Wait for polling cycle, check controller health
+- **HTTPS connection refused** - Traefik must be up; use `curl -k https://localhost/...`
 
 ## Release Process
 
-### Creating a Release
+Releases are **manual tags**. Pushing `v*` to GitHub runs [`build.yml`](../.github/workflows/build.yml) `create-release` (binaries + GHCR manifests). There is no semantic-release bot.
 
-1. **Update version and CHANGELOG**
+1. Update [`CHANGELOG.md`](../CHANGELOG.md) for the version.
+2. Tag and push:
 
-2. **Create git tag:**
-
-```shell script
+```bash
 git tag -a v1.1.0 -m "Release v1.1.0"
 git push origin v1.1.0
 ```
 
-
-3. **GitHub Actions automatically:**
-    - Builds multi-arch binaries
-    - Creates Docker images
-    - Generates documentation
-    - Creates GitHub release
+3. CI then:
+   - Builds multi-arch binaries and containers
+   - Creates multi-arch GHCR manifests
+   - Attaches per-service archives to the GitHub Release
 
 ### Version Numbering
 

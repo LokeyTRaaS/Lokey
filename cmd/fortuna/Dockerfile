@@ -15,7 +15,7 @@ RUN cd cmd/fortuna && CGO_ENABLED=1 GOOS=linux go build -trimpath -o /out/fortun
 
 FROM alpine:latest
 
-RUN apk --no-cache add ca-certificates libc6-compat
+RUN apk --no-cache add ca-certificates libc6-compat wget
 
 COPY --from=builder /out/fortuna /usr/local/bin/fortuna
 

@@ -184,6 +184,11 @@ func (p *FortunaProcessor) infoHandler(ctx *gin.Context) {
 
 // generateDataHandler generates random data using the Fortuna algorithm
 func (p *FortunaProcessor) generateDataHandler(ctx *gin.Context) {
+	if !p.generator.HealthCheck() {
+		ctx.JSON(http.StatusServiceUnavailable, gin.H{"error": "Generator is unhealthy"})
+		return
+	}
+
 	// Get requested size parameter
 	sizeStr := ctx.DefaultQuery("size", "128")
 	size, err := strconv.Atoi(sizeStr)
@@ -276,6 +281,11 @@ func (p *FortunaProcessor) amplifyDataHandler(ctx *gin.Context) {
 	// Validate size
 	if request.Size <= 0 || request.Size > 1024*1024 {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": "Invalid size parameter (1-1048576)"})
+		return
+	}
+
+	if !p.generator.HealthCheck() {
+		ctx.JSON(http.StatusServiceUnavailable, gin.H{"error": "Generator is unhealthy"})
 		return
 	}
 

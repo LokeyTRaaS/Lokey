@@ -24,7 +24,7 @@ Hardware-based true random number generation for **Raspberry Pi 5 (ARM64)** and 
 
 Supported: **linux/amd64**, **linux/arm64**.
 
-Unsupported: Raspberry Pi Zero 2, ARMv7 (see historical [medium article](../medium-article-docker-to-nerdctl.md)).
+Unsupported: Raspberry Pi Zero 2, ARMv7 (insufficient for cgroups/namespaces + Compose).
 
 ## What is LoKey?
 

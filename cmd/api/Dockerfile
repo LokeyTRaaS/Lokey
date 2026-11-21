@@ -27,7 +27,7 @@ RUN cd cmd/api && CGO_ENABLED=1 GOOS=linux go build -trimpath -o /out/api
 
 FROM alpine:latest
 
-RUN apk --no-cache add ca-certificates libc6-compat
+RUN apk --no-cache add ca-certificates libc6-compat wget
 
 COPY --from=builder /out/api /usr/local/bin/api
 

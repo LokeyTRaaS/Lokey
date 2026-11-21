@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -181,30 +182,41 @@ func main() {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
+	serverErr := make(chan error, 1)
 	go func() {
-		sig := <-sigCh
-		log.Printf("Received signal %s, shutting down gracefully", sig)
-		cancel() // Stop polling
-		// Give polling goroutines time to shut down
-		time.Sleep(500 * time.Millisecond)
-		os.Exit(0)
+		log.Printf("Starting API server with configuration:")
+		log.Printf("  Database: %s", db.GetDatabasePath())
+		log.Printf("  Port: %d", port)
+		log.Printf("  Controller Address: %s", controllerAddr)
+		log.Printf("  Fortuna Address: %s", fortunaAddr)
+		log.Printf("  VirtIO Address: %s", virtioAddr)
+		log.Printf("  TRNG Queue Size: %d", trngQueueSize)
+		log.Printf("  Fortuna Queue Size: %d", fortunaQueueSize)
+		log.Printf("  VirtIO Queue Size: %d", virtioQueueSize)
+		log.Printf("  TRNG Poll Interval: %s", trngPollInterval)
+		log.Printf("  Fortuna Poll Interval: %s", fortunaPollInterval)
+		log.Printf("  VirtIO Poll Interval: %s", virtioPollInterval)
+		log.Printf("  VirtIO Seeding Source: %s", virtioSeedingSource)
+
+		if err := server.Run(); err != nil && err != http.ErrServerClosed {
+			serverErr <- err
+		}
+		close(serverErr)
 	}()
 
-	log.Printf("Starting API server with configuration:")
-	log.Printf("  Database: %s", db.GetDatabasePath())
-	log.Printf("  Port: %d", port)
-	log.Printf("  Controller Address: %s", controllerAddr)
-	log.Printf("  Fortuna Address: %s", fortunaAddr)
-	log.Printf("  VirtIO Address: %s", virtioAddr)
-	log.Printf("  TRNG Queue Size: %d", trngQueueSize)
-	log.Printf("  Fortuna Queue Size: %d", fortunaQueueSize)
-	log.Printf("  VirtIO Queue Size: %d", virtioQueueSize)
-	log.Printf("  TRNG Poll Interval: %s", trngPollInterval)
-	log.Printf("  Fortuna Poll Interval: %s", fortunaPollInterval)
-	log.Printf("  VirtIO Poll Interval: %s", virtioPollInterval)
-	log.Printf("  VirtIO Seeding Source: %s", virtioSeedingSource)
-
-	if err := server.Run(); err != nil {
-		log.Fatalf("API server error: %v", err)
+	select {
+	case err := <-serverErr:
+		cancel()
+		if err != nil {
+			log.Fatalf("API server error: %v", err)
+		}
+	case sig := <-sigCh:
+		log.Printf("Received signal %s, shutting down gracefully", sig)
+		cancel()
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer shutdownCancel()
+		if err := server.Shutdown(shutdownCtx); err != nil {
+			log.Fatalf("API server shutdown error: %v", err)
+		}
 	}
 }

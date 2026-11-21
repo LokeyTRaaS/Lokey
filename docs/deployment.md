@@ -15,76 +15,44 @@ Complete guide for deploying LoKey to production environments.
 
 ## Local Development
 
+The root [`docker-compose.yaml`](../docker-compose.yaml) runs the **full stack**: Traefik (HTTPS), API, Fortuna, VirtIO, emulated controllers, Prometheus, and Grafana. Only Traefik publishes host ports; API/controllers are not bound to `localhost:8080`.
+
 ### Quick Start
-```
-bash
-# Clone repository
+
+```bash
 git clone https://github.com/LokeyTRaaS/Lokey.git
 cd Lokey
-
-# Start services
-docker compose up -d
-
-# Verify
-curl http://localhost:8080/api/v1/health
+cp .env.template .env   # optional; adjust ports/domain/passwords
+mkdir -p run/lokey
+docker compose up -d --build
+curl -k https://localhost/api/v1/health
 ```
+
+Override ports via `.env` (`TRAEFIK_HTTPS_PORT=9443`, etc.). Controllers default to `CONTROLLER_MODE=emulated`. For ATECC hardware, use the Compose `hardware` profile (see below) after [Hardware Setup](hardware-setup.md).
+
 ### Using Task
 
 If you have [Task](https://taskfile.dev/) installed:
-```
-bash
-# View available tasks
-task
 
-# Start development environment
+```bash
+task            # list tasks
 task dev_up
-
-# Stop services
 task dev_down
-
-# View logs
 task dev_logs
-
-# Rebuild services
 task dev_rebuild
 ```
-### Development Docker Compose
 
-The default `docker-compose.yaml` is configured for development:
-```
-yaml
-services:
-controller:
-build: ./cmd/controller
-ports:
-- "8081:8081"
-environment:
-- PORT=8081
-- I2C_BUS_NUMBER=1
-devices:
-- /dev/i2c-1:/dev/i2c-1  # Hardware access
+### Networks
 
-fortuna:
-build: ./cmd/fortuna
-ports:
-- "8082:8082"
-environment:
-- PORT=8082
-- AMPLIFICATION_FACTOR=4
+| Network         | Role                                      |
+|-----------------|-------------------------------------------|
+| `lokey-edge`    | Traefik                                   |
+| `lokey-app`     | API, Fortuna, VirtIO                      |
+| `lokey-devices` | Controllers only (no host publish)        |
+| `lokey-metrics` | Prometheus / Grafana                      |
 
-api:
-build: ./cmd/api
-ports:
-- "8080:8080"
-environment:
-- PORT=8080
-- CONTROLLER_ADDR=http://controller:8081
-- FORTUNA_ADDR=http://fortuna:8082
-- TRNG_QUEUE_SIZE=100
-- FORTUNA_QUEUE_SIZE=100
-- TRNG_POLL_INTERVAL_MS=1000
-- FORTUNA_POLL_INTERVAL_MS=5000
-```
+Swagger UI (via Traefik): `https://localhost/swagger/`. Grafana: `https://localhost/grafana/` (default password from `GRAFANA_PASSWORD`).
+
 ## Raspberry Pi Deployment
 
 ### Prerequisites
@@ -99,8 +67,7 @@ environment:
 Create a local registry for cross-compiled images.
 
 **Create `buildx.toml` in project root:**
-```
-toml
+```toml
 [registry."192.168.1.100:5000"]  # Replace with your dev machine IP
 insecure = true
 http = true
@@ -108,8 +75,7 @@ http = true
 insecure-entitlements = ["network.host", "security.insecure"]
 ```
 **Build and push images:**
-```
-bash
+```bash
 # Using Task (recommended)
 task build_images_and_registry
 
@@ -139,13 +105,11 @@ docker buildx build --platform linux/arm64 \
 ### Step 2: Configure Raspberry Pi
 
 **SSH into your Raspberry Pi:**
-```
-bash
+```bash
 ssh pi@raspberrypi.local
 ```
 **Configure Docker to trust your local registry:**
-```
-bash
+```bash
 # Replace with your development machine's IP
 DEV_IP=192.168.1.100
 
@@ -158,8 +122,7 @@ echo "{
 sudo systemctl restart docker
 ```
 **Verify I2C is enabled:**
-```
-bash
+```bash
 # Check I2C device exists
 ls -l /dev/i2c-1
 
@@ -182,8 +145,7 @@ Entropy queues are held in memory (no on-disk database). Prefer SSD/NVMe on Pi 5
 **Option B: Create custom docker-compose.yaml**
 
 **Create `docker-compose.yaml` on the Raspberry Pi:**
-```
-yaml
+```yaml
 version: '3.8'
 
 services:
@@ -289,8 +251,7 @@ curl http://localhost:8080/api/v1/health
 To start LoKey automatically on boot:
 
 **Create `/etc/systemd/system/lokey.service`:**
-```
-ini
+```ini
 [Unit]
 Description=LoKey Random Number Generation Service
 Requires=docker.service
@@ -308,8 +269,7 @@ User=pi
 WantedBy=multi-user.target
 ```
 **Enable and start:**
-```
-bash
+```bash
 sudo systemctl daemon-reload
 sudo systemctl enable lokey
 sudo systemctl start lokey
@@ -331,8 +291,7 @@ LoKey supports multiple architectures:
 The CI/CD pipeline automatically builds multi-architecture images. See `.github/workflows/build.yml`.
 
 **Pull pre-built images:**
-```
-bash
+```bash
 # AMD64
 docker pull ghcr.io/lokeytraas/lokey/controller:latest-amd64
 docker pull ghcr.io/lokeytraas/lokey/api:latest-amd64
@@ -347,8 +306,7 @@ docker pull ghcr.io/lokeytraas/lokey/fortuna:latest-arm64
 ### Local Cross-Compilation
 
 **Build for specific architecture:**
-```
-bash
+```bash
 # Set up buildx
 docker buildx create --use --name multi-arch-builder
 
@@ -386,8 +344,7 @@ server_name lokey.example.com;
 }
 ```
 **2. Restrict Network Access**
-```
-yaml
+```yaml
 # docker-compose.yaml
 services:
 controller:
@@ -418,8 +375,7 @@ Add authentication middleware in front of the API:
 **Queue Sizes:**
 
 Adjust based on your workload:
-```
-yaml
+```yaml
 environment:
 # High throughput
 - TRNG_QUEUE_SIZE=5000
@@ -430,8 +386,7 @@ environment:
 - FORTUNA_QUEUE_SIZE=1000
 ```
 **Polling Intervals:**
-```
-yaml
+```yaml
 environment:
 # Faster generation (higher CPU usage)
 - TRNG_POLL_INTERVAL_MS=100
@@ -442,8 +397,7 @@ environment:
 - FORTUNA_POLL_INTERVAL_MS=5000
 ```
 **Resource Limits:**
-```
-yaml
+```yaml
 services:
 api:
 deploy:
@@ -457,22 +411,8 @@ memory: 256M
 ```
 ### High Availability
 
-**Multiple Fortuna Instances:**
-```
-yaml
-services:
-fortuna-1:
-image: lokey-fortuna:latest
-# ... config ...
+`FORTUNA_ADDR` accepts a **single** URL. For higher availability today, run redundant full stacks behind Traefik/load balancer, or scale controllers via `CONTROLLER_ADDRS` (`id=http://host:port,...`). Multi-Fortuna round-robin is not implemented.
 
-fortuna-2:
-image: lokey-fortuna:latest
-# ... config ...
-
-api:
-environment:
-- FORTUNA_ADDR=http://fortuna-1:8082,http://fortuna-2:8082
-```
 **Queue / storage notes:**
 
 There is no on-disk entropy database to back up. Status reports in-memory usage:
@@ -485,34 +425,48 @@ curl -sk https://localhost/api/v1/status | jq '.database'
 After `docker compose down` / restart, queues are empty until polling refills them.
 ## Environment Variables
 
+Defaults below match [`cmd/api/main.go`](../cmd/api/main.go) and sibling services. Compose often **overrides** queues/intervals to smaller values — see `docker-compose.yaml`.
+
+### Compose / Traefik (host)
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `TRAEFIK_HTTP_PORT` | Host HTTP port | `80` |
+| `TRAEFIK_HTTPS_PORT` | Host HTTPS port | `443` |
+| `LOKEY_DOMAIN` | Hostname for Traefik / Grafana URLs | `localhost` |
+| `LOKEY_ACME_EMAIL` | ACME email when using Let's Encrypt | (empty / file certs) |
+| `GRAFANA_USER` / `GRAFANA_PASSWORD` | Grafana admin | `admin` / `lokey` |
+
 ### API Service
 
-| Variable                  | Description                          | Default                  | Valid Range         |
-|---------------------------|--------------------------------------|--------------------------|---------------------|
-| `PORT`                    | API server port                      | `8080`                   | 1-65535             |
-| `CONTROLLER_ADDR`         | Controller service URL               | `http://controller:8081` | Valid HTTP URL      |
-| `FORTUNA_ADDR`            | Fortuna service URL                  | `http://fortuna:8082`    | Valid HTTP URL      |
-| `TRNG_QUEUE_SIZE`         | TRNG data queue capacity             | `100`                    | 10-10000            |
-| `FORTUNA_QUEUE_SIZE`      | Fortuna data queue capacity          | `100`                    | 10-10000            |
-| `VIRTIO_QUEUE_SIZE`       | VirtIO data queue capacity           | `15000` (~480 KB)       | 10-1000000          |
-| `TRNG_POLL_INTERVAL_MS`   | TRNG polling interval (milliseconds) | `1000`                   | 100-60000           |
-| `VIRTIO_POLL_INTERVAL_MS` | (Deprecated - VirtIO is not polled) | N/A                    | N/A                 |
-| `VIRTIO_SEED_INTERVAL_SECONDS` | VirtIO seeding interval (seconds) | `30`              | 10-3600             |
-| `VIRTIO_SEEDING_SOURCE`   | VirtIO seeding source                | `trng`                   | trng, fortuna, both |
-| `VIRTIO_ADDR`             | VirtIO service address               | `http://virtio:8083`     | Valid HTTP URL      |
-| `FORTUNA_POLL_INTERVAL_MS`| Fortuna polling interval (ms)        | `5000`                   | 100-60000           |
+| Variable | Description | Default | Notes |
+|----------|-------------|---------|-------|
+| `PORT` | API listen port | `8080` | Not published on host when behind Traefik |
+| `CONTROLLER_ADDR` | Single controller URL (legacy) | `http://controller:8081` | Used if `CONTROLLER_ADDRS` unset |
+| `CONTROLLER_ADDRS` | Multi-controller list | (empty) | Format `id=http://host:port,id2=...` |
+| `FORTUNA_ADDR` | Fortuna URL (**single** host) | `http://fortuna:8082` | No CSV multi-instance support |
+| `VIRTIO_ADDR` | VirtIO URL | `http://virtio:8083` | |
+| `TRNG_QUEUE_SIZE` | In-memory TRNG queue capacity | `1000000` | Compose usually lowers this |
+| `FORTUNA_QUEUE_SIZE` | In-memory Fortuna queue capacity | `1000000` | |
+| `VIRTIO_QUEUE_SIZE` | API-side VirtIO queue capacity | `500000` | VirtIO service has its own queue |
+| `TRNG_POLL_INTERVAL_MS` | Controller poll interval | `100` | |
+| `FORTUNA_POLL_INTERVAL_MS` | Fortuna poll interval | `100` | |
+| `VIRTIO_POLL_INTERVAL_MS` | Parsed/logged only | `100` | VirtIO is **not** polled; seeding is timer-based (~30s hardcoded) |
+| `VIRTIO_SEEDING_SOURCE` | Seeding source | `trng` | `trng`, `fortuna`, or `both` |
+| `CORS_ALLOWED_ORIGIN` | CORS `Access-Control-Allow-Origin` | `*` | Restrict in browser-exposed deploys |
 
 ### Controller Service
 
-| Variable                              | Description                                    | Default      | Valid Range |
-|---------------------------------------|------------------------------------------------|--------------|-------------|
-| `PORT`                                | Controller server port                         | `8081`       | 1-65535     |
-| `I2C_BUS_NUMBER`                      | I2C bus for ATECC608A                          | `1`           | 0-10        |
-| `FORCE_CONFIG`                         | Force ATECC608A configuration                  | `false`       | true/false  |
-| `DISABLE_AUTO_CONFIG`                 | Disable automatic configuration                 | `false`       | true/false  |
-| `CONTROLLER_RECOVERY_COOLDOWN_SECONDS`| Cooldown period after recovery (seconds)        | `30`          | 10-300      |
-| `CONTROLLER_RECOVERY_VALIDATION_ATTEMPTS` | Number of validation samples after recovery | `3`           | 1-10        |
-| `CONTROLLER_CIRCUIT_BREAKER_COOLDOWN_MINUTES` | Circuit breaker cooldown (minutes)      | `5`           | 1-60        |
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `PORT` | Listen port | `8081` |
+| `CONTROLLER_MODE` | `emulated` or `hardware` | Compose: `emulated` |
+| `I2C_BUS_NUMBER` | I2C bus for ATECC608A | `1` |
+| `FORCE_CONFIG` | Force ATECC configuration | `false` |
+| `DISABLE_AUTO_CONFIG` | Disable automatic configuration | `false` |
+| `CONTROLLER_RECOVERY_COOLDOWN_SECONDS` | Cooldown after recovery | `30` |
+| `CONTROLLER_RECOVERY_VALIDATION_ATTEMPTS` | Validation samples after recovery | `3` |
+| `CONTROLLER_CIRCUIT_BREAKER_COOLDOWN_MINUTES` | Circuit breaker cooldown | `5` |
 
 ### API Service - Quality Metrics
 
@@ -596,8 +550,7 @@ qemu-system-x86_64 \
 ### Example Configuration
 
 **Development:**
-```
-yaml
+```yaml
 environment:
 - TRNG_QUEUE_SIZE=100
 - FORTUNA_QUEUE_SIZE=100
@@ -605,8 +558,7 @@ environment:
 - FORTUNA_POLL_INTERVAL_MS=5000
 ```
 **Production (High Throughput):**
-```
-yaml
+```yaml
 environment:
 - TRNG_QUEUE_SIZE=5000
 - FORTUNA_QUEUE_SIZE=50000
@@ -615,8 +567,7 @@ environment:
 - AMPLIFICATION_FACTOR=10
 ```
 **Production (Low Resource):**
-```
-yaml
+```yaml
 environment:
 - TRNG_QUEUE_SIZE=500
 - FORTUNA_QUEUE_SIZE=2000
@@ -640,8 +591,7 @@ Entropy queues are in-memory only — no `api-data` volume is required for the A
 ### Official Images
 
 Pre-built images are available on GitHub Container Registry:
-```
-bash
+```bash
 # Latest stable
 docker pull ghcr.io/lokeytraas/lokey/api:latest-arm64
 docker pull ghcr.io/lokeytraas/lokey/controller:latest-arm64
@@ -653,8 +603,7 @@ docker pull ghcr.io/lokeytraas/lokey/api:v1.0.0-arm64
 ### Building Custom Images
 
 **Development builds (from source):**
-```
-bash
+```bash
 # Build all services
 docker compose build
 
@@ -663,8 +612,7 @@ docker compose build api
 ```
 
 **Production builds (pre-built binaries):**
-```
-bash
+```bash
 # Build with Dockerfile.action (uses pre-built binaries)
 docker build -t lokey-api:custom -f cmd/api/Dockerfile.action .
 ```
@@ -679,8 +627,7 @@ Both ship the binary at `/usr/local/bin/<service>` with exec-form healthchecks.
 ### Health Checks
 
 All services provide health endpoints:
-```
-bash
+```bash
 # API health
 curl http://localhost:8080/api/v1/health
 
@@ -696,8 +643,7 @@ curl http://localhost:8083/health
 ### Prometheus Metrics
 
 Metrics available at `/metrics`:
-```
-bash
+```bash
 curl http://localhost:8080/metrics
 ```
 **Key metrics to monitor:**
@@ -710,8 +656,7 @@ curl http://localhost:8080/metrics
 ### Logging
 
 View logs:
-```
-bash
+```bash
 # All services
 docker compose logs -f
 
@@ -727,8 +672,7 @@ docker compose logs -f -t api
 ### Alerting Rules
 
 **Prometheus alert examples:**
-```
-yaml
+```yaml
 groups:
 - name: lokey
   rules:
@@ -878,8 +822,7 @@ If seeding fails with "low quality detected":
    - Check controller recovery status
 
 ### Services Won't Start
-```
-bash
+```bash
 # Check logs
 docker compose logs
 
@@ -890,8 +833,7 @@ sudo netstat -tulpn | grep -E '8080|8081|8082'
 sudo systemctl status docker
 ```
 ### No Hardware Detected
-```
-bash
+```bash
 # Check I2C device (on Raspberry Pi)
 ls -l /dev/i2c-1
 
@@ -902,8 +844,7 @@ i2cdetect -y 1
 docker compose exec controller ls -l /dev/i2c-1
 ```
 ### Queue / memory issues
-```
-bash
+```bash
 # Confirm in-memory storage
 curl -sk https://localhost/api/v1/status | jq '.database'
 # expect path: memory://channels
@@ -916,8 +857,7 @@ free -h
 docker stats
 ```
 ### Performance Issues
-```
-bash
+```bash
 # Check resource usage
 docker stats
 
@@ -928,8 +868,7 @@ curl http://localhost:8080/api/v1/status
 # Edit docker-compose.yaml and restart
 ```
 ### Network Issues
-```
-bash
+```bash
 # Test service connectivity
 docker compose exec api curl http://controller:8081/health
 docker compose exec api curl http://fortuna:8082/health

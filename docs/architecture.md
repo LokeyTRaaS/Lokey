@@ -98,7 +98,7 @@ Hardware TRNG           Cryptographic PRNG      VirtIO Consumer
 
 **Key Features:**
 - One-time device configuration (irreversible)
-- Fallback to time-based entropy if hardware unavailable
+- Hardware mode fails closed if the ATECC is unavailable (use `CONTROLLER_MODE=emulated` for laptop/CI)
 - Automatic wake/sleep cycles for power efficiency
 - CRC validation for data integrity
 
@@ -125,6 +125,9 @@ Hardware TRNG           Cryptographic PRNG      VirtIO Consumer
 - High throughput generation (1000s/sec)
 - Automatic pool rotation
 - Seed quality validation (entropy and pattern checks)
+- AES key rekey after every `GenerateRandomData`
+- Initial seed from `crypto/rand` at process start
+- `/generate` and `/amplify` return 503 when unhealthy
 - Configurable health check intervals
 - Explicit health state management
 
@@ -449,7 +452,7 @@ Configuration process (**one-time only**)
 - Requires `FORCE_CONFIG=true` environment variable
 - Logs all operations for audit trail
 - Checks lock status before attempting configuration
-- Fallback to time-based entropy if hardware fails
+- No time-based entropy fallback in hardware mode
 
 ### Endpoints
 
@@ -1132,7 +1135,7 @@ The API service prevents cascade failures through:
 3. **Deploy behind reverse proxy** - Add TLS, authentication, rate limiting
 4. **Monitor queue levels** - Alert on low levels or high drops
 5. **Secure physical access** - Protect Raspberry Pi and ATECC608A
-6. **Regular backups** - Backup database for statistics (not random data)
+6. **No entropy DB backups** - Queues are in-memory only; persist nothing sensitive from `/status`
 
 ## Performance Characteristics
 
@@ -1176,7 +1179,7 @@ The API service prevents cascade failures through:
 **API:**
 - CPU: 5-15% (request handling + polling)
 - Memory: ~50MB base + (queue size × 31 bytes × 2)
-- Disk: Grows with queue size, ~1KB per 31 bytes
+- RAM: Queue capacity is bounded by configured sizes (defaults are large; Compose overrides them)
 
 **Example:**
 - TRNG queue: 1000 items × 31 bytes = 31KB
@@ -1194,26 +1197,10 @@ The API service prevents cascade failures through:
 
 ### Horizontal Scaling
 
-**Multiple Fortuna instances:**
-```yaml
-services:
-  fortuna-1:
-    image: lokey-fortuna
-    ports: ["8082:8082"]
-
-  fortuna-2:
-    image: lokey-fortuna
-    ports: ["8083:8082"]
-
-  api:
-    environment:
-      - FORTUNA_ADDR=http://fortuna-1:8082
-      # Poll multiple instances in round-robin
-```
-
+`FORTUNA_ADDR` is a single URL (port **8082**). VirtIO owns **8083**. Scale by running multiple API/controller stacks behind Traefik; use `CONTROLLER_ADDRS` for multi-device controllers. Multi-Fortuna round-robin is not implemented.
 
 **Load balancing:**
-- Use Nginx/HAProxy / Traefik in front of API
+- Use Traefik (Compose default) or another reverse proxy in front of the API
 - Multiple API instances each hold their own in-memory queues (not shared)
 
 ### Limitations

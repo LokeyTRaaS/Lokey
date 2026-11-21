@@ -1,5 +1,32 @@
-# 1.0.0 (2025-11-01)
+# Changelog
 
+## 1.1.0 (2026-11-21)
+
+### Features
+
+* Nix flake + Raspberry Pi 5 SD image (local build/flash; CI validates flake only)
+* Multi-arch GHCR manifests for api, controller, fortuna, virtio
+* Pre-commit static checks aligned with CI (golangci-lint, Nix flake, Grype)
+* Traefik HTTPS Compose stack with isolated device network and seccomp profiles
+
+### Security
+
+* Fortuna initial seed from `crypto/rand`; AES rekey after every generate
+* HTTP `ReadHeaderTimeout` on all services; configurable `CORS_ALLOWED_ORIGIN`
+* Dependency bumps (gin/quic-go/validator and related modules)
+
+### Bug Fixes
+
+* Release downloads only `lokey-*` artifacts (exclude Docker build records)
+* Build Summary no longer pulls non-zip `*.dockerbuild` artifacts
+* GHCR cleanup hardened (dry-run on schedule; protect semver/manifest tags)
+
+### Documentation
+
+* Deploy paths: NixOS SD, Compose/GHCR, per-service release binaries (no mega-tarballs)
+* Hardware guide retargeted to Raspberry Pi 5
+
+## 1.0.0 (2025-11-01)
 
 ### Bug Fixes
 

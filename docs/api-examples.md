@@ -17,8 +17,7 @@ Complete OpenAPI specification with all endpoints, schemas, and response codes. 
 ### Get Random Integers (TRNG)
 
 Generate true random integers from hardware:
-```
-bash
+```bash
 curl -X POST http://localhost:8080/api/v1/data \
 -H "Content-Type: application/json" \
 -d '{
@@ -29,15 +28,13 @@ curl -X POST http://localhost:8080/api/v1/data \
 }'
 ```
 **Response:**
-```
-json
+```json
 [1847293847, -293847562, 847562938, 1923847562, -847293847, 293847562, -1847293847, 847293847, 1293847562, -923847562]
 ```
 ### Get Random Unsigned Integers (Fortuna)
 
 For high-throughput applications, use Fortuna amplified randomness:
-```
-bash
+```bash
 curl -X POST http://localhost:8080/api/v1/data \
 -H "Content-Type: application/json" \
 -d '{
@@ -47,15 +44,13 @@ curl -X POST http://localhost:8080/api/v1/data \
 }'
 ```
 **Response:**
-```
-json
+```json
 [18446744073709551615, 9223372036854775807, 4611686018427387903, ...]
 ```
 ### Get Binary Random Data
 
 Download raw binary random data (e.g., for cryptographic keys):
-```
-bash
+```bash
 curl -X POST http://localhost:8080/api/v1/data \
 -H "Content-Type: application/json" \
 -d '{
@@ -65,8 +60,7 @@ curl -X POST http://localhost:8080/api/v1/data \
 }' --output random.bin
 ```
 **Verify the file:**
-```
-bash
+```bash
 ls -lh random.bin
 # Output: -rw-r--r-- 1 user user 1.0K Jan 15 10:30 random.bin
 
@@ -75,8 +69,7 @@ hexdump -C random.bin | head
 ### Get Small Random Values
 
 Generate random bytes (0-255):
-```
-bash
+```bash
 curl -X POST http://localhost:8080/api/v1/data \
 -H "Content-Type: application/json" \
 -d '{
@@ -86,8 +79,7 @@ curl -X POST http://localhost:8080/api/v1/data \
 }'
 ```
 **Response:**
-```
-json
+```json
 [142, 37, 219, 88, 193, 42, 156, 77, 231, 19, 105, 244, 63, 128, 91, 177, 15, 203, 66, 184]
 ```
 ## Health & Status
@@ -95,8 +87,7 @@ json
 ### Check System Health
 
 Verify all services are operational:
-```
-bash
+```bash
 curl http://localhost:8080/api/v1/health
 ```
 
@@ -118,8 +109,7 @@ curl http://localhost:8080/api/v1/health
 ### Get System Status with Quality Metrics
 
 Get comprehensive system statistics including TRNG quality metrics:
-```
-bash
+```bash
 curl http://localhost:8080/api/v1/status
 ```
 
@@ -237,10 +227,9 @@ curl http://localhost:8080/api/v1/status
 }
 ```
 **Response:**
-```
-json
+```json
 {
-"status": "healthy",
+"status": "ok",
 "timestamp": "2024-01-15T10:30:00Z",
 "details": {
 "api": true,
@@ -252,20 +241,17 @@ json
 }
 ```
 **Status meanings:**
-- `healthy` - All systems operational
-- `degraded` - Some services unavailable but API still working
-- `unhealthy` - Critical failures
+- `ok` — All checked components healthy
+- `degraded` — One or more dependencies unavailable; API may still respond
 
 ### Get System Status
 
 View detailed queue levels, generation rates, and storage metrics:
-```
-bash
+```bash
 curl http://localhost:8080/api/v1/status
 ```
 **Response:**
-```
-json
+```json
 {
 "trng": {
 "polling_count": 1000,
@@ -304,13 +290,11 @@ json
 ## Configuration
 
 ### Get Queue Configuration
-```
-bash
+```bash
 curl http://localhost:8080/api/v1/config/queue
 ```
 **Response:**
-```
-json
+```json
 {
 "trng_queue_size": 100,
 "fortuna_queue_size": 100,
@@ -320,8 +304,7 @@ json
 ### Update Queue Sizes
 
 Adjust queue capacity for your workload:
-```
-bash
+```bash
 curl -X PUT http://localhost:8080/api/v1/config/queue \
 -H "Content-Type: application/json" \
 -d '{
@@ -330,8 +313,7 @@ curl -X PUT http://localhost:8080/api/v1/config/queue \
 }'
 ```
 **Response:**
-```
-json
+```json
 {
 "trng_queue_size": 1000,
 "fortuna_queue_size": 5000
@@ -362,20 +344,17 @@ json
 ### Format Examples
 
 **8-bit unsigned (bytes):**
-```
-bash
+```bash
 curl -X POST http://localhost:8080/api/v1/data \
 -d '{"format":"uint8","limit":16,"source":"trng"}'
 ```
 **16-bit signed:**
-```
-bash
+```bash
 curl -X POST http://localhost:8080/api/v1/data \
 -d '{"format":"int16","limit":100,"source":"fortuna"}'
 ```
 **64-bit unsigned (large numbers):**
-```
-bash
+```bash
 curl -X POST http://localhost:8080/api/v1/data \
 -d '{"format":"uint64","limit":10,"source":"trng"}'
 ```
@@ -384,8 +363,7 @@ curl -X POST http://localhost:8080/api/v1/data \
 ### TRNG (True Random Number Generator)
 
 Hardware-based true random numbers from ATECC608A chip.
-```
-json
+```json
 {
 "source": "trng"
 }
@@ -398,8 +376,7 @@ json
 - **Use case**: Cryptographic keys, seeds, nonces, high-security applications
 
 **Example:**
-```
-bash
+```bash
 curl -X POST http://localhost:8080/api/v1/data \
 -H "Content-Type: application/json" \
 -d '{
@@ -411,8 +388,7 @@ curl -X POST http://localhost:8080/api/v1/data \
 ### Fortuna (Cryptographic PRNG)
 
 Cryptographically secure pseudo-random numbers amplified from TRNG seeds.
-```
-json
+```json
 {
 "source": "fortuna"
 }
@@ -425,8 +401,7 @@ json
 - **Use case**: High-volume applications, simulations, gaming, testing
 
 **Example:**
-```
-bash
+```bash
 curl -X POST http://localhost:8080/api/v1/data \
 -H "Content-Type: application/json" \
 -d '{
@@ -440,8 +415,7 @@ curl -X POST http://localhost:8080/api/v1/data \
 ### Batch Requests
 
 Request multiple values efficiently:
-```
-bash
+```bash
 # Get 10,000 random integers
 curl -X POST http://localhost:8080/api/v1/data \
 -H "Content-Type: application/json" \
@@ -454,8 +428,7 @@ curl -X POST http://localhost:8080/api/v1/data \
 ### Pagination
 
 Use `offset` for pagination (note: data is consumed after reading by default):
-```
-bash
+```bash
 # First page
 curl -X POST http://localhost:8080/api/v1/data \
 -H "Content-Type: application/json" \
@@ -476,13 +449,12 @@ curl -X POST http://localhost:8080/api/v1/data \
 "source": "trng"
 }'
 ```
-**Note:** Data is consumed (deleted) after retrieval by default. Pagination works best when queue has sufficient data.
+**Note:** Data is returned without deletion by default (`consumeMode` is false; enable via `/api/v1/config/consume`). Pagination works best when queue has sufficient data.
 
 ### Stream Processing
 
 For continuous data needs:
-```
-bash
+```bash
 # Continuously fetch data
 while true; do
 curl -X POST http://localhost:8080/api/v1/data \
@@ -498,8 +470,7 @@ done
 ### Cryptographic Key Generation
 
 Generate a 256-bit AES key:
-```
-bash
+```bash
 curl -X POST http://localhost:8080/api/v1/data \
 -H "Content-Type: application/json" \
 -d '{
@@ -515,8 +486,7 @@ xxd aes-256-key.bin
 ### UUID Generation
 
 Generate random components for UUIDs:
-```
-bash
+```bash
 # Get random bytes for UUID v4
 curl -X POST http://localhost:8080/api/v1/data \
 -H "Content-Type: application/json" \
@@ -529,8 +499,7 @@ curl -X POST http://localhost:8080/api/v1/data \
 ### Password Salt Generation
 
 Generate cryptographic salts:
-```
-bash
+```bash
 # 16-byte salt
 curl -X POST http://localhost:8080/api/v1/data \
 -H "Content-Type: application/json" \
@@ -546,8 +515,7 @@ base64 salt.bin
 ### Monte Carlo Simulation
 
 Generate large datasets for simulations:
-```
-bash
+```bash
 # 100,000 random values for simulation
 curl -X POST http://localhost:8080/api/v1/data \
 -H "Content-Type: application/json" \
@@ -560,8 +528,7 @@ curl -X POST http://localhost:8080/api/v1/data \
 ### Gaming/Lottery
 
 Fair random number generation:
-```
-bash
+```bash
 # Roll a die (1-6)
 curl -X POST http://localhost:8080/api/v1/data \
 -H "Content-Type: application/json" \
@@ -579,8 +546,7 @@ curl -X POST http://localhost:8080/api/v1/data \
 ### Session Token Generation
 
 Generate secure session tokens:
-```
-bash
+```bash
 # 32-byte session token
 curl -X POST http://localhost:8080/api/v1/data \
 -H "Content-Type: application/json" \
@@ -598,8 +564,7 @@ xxd -p token.bin | tr -d '\n'
 ### Prometheus Metrics
 
 Metrics available at `/metrics` and `/api/v1/metrics`:
-```
-bash
+```bash
 curl http://localhost:8080/metrics
 ```
 **Key metrics:**
@@ -688,7 +653,7 @@ database_size_bytes
 ```
 
 
-**Solution:** Ensure queue sizes are within valid range (10-10000).
+**Solution:** Ensure queue sizes are within valid range (10-1000000).
 
 ## Python Integration Example
 
@@ -859,7 +824,7 @@ spec:
       mountPath: /dev/virtio-rng
       readOnly: true
   - name: virtio-sidecar
-    image: lokey/virtio-sidecar:latest
+    image: ghcr.io/lokeytraas/lokey/virtio:1.1.0
     env:
     - name: VIRTIO_API_URL
       value: "http://virtio-service:8083"

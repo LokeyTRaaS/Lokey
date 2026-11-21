@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -34,6 +35,7 @@ type Server struct {
 	VirtioAddr     string
 	port           int
 	Router         *gin.Engine
+	httpServer     *http.Server
 	validate       *validator.Validate
 	metrics        *Metrics
 	registry       *prometheus.Registry
@@ -486,12 +488,20 @@ func (s *Server) setupRoutes() {
 
 // Run starts the API server
 func (s *Server) Run() error {
-	server := &http.Server{
+	s.httpServer = &http.Server{
 		Addr:              fmt.Sprintf(":%d", s.port),
 		Handler:           s.Router,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
-	return server.ListenAndServe()
+	return s.httpServer.ListenAndServe()
+}
+
+// Shutdown gracefully stops the HTTP server.
+func (s *Server) Shutdown(ctx context.Context) error {
+	if s.httpServer == nil {
+		return nil
+	}
+	return s.httpServer.Shutdown(ctx)
 }
 
 // GetQueueConfig returns the current queue configuration.

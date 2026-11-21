@@ -22,6 +22,11 @@ updates:
     schedule:
       interval: "weekly"
 
+  - package-ecosystem: "gomod"
+    directory: "/cmd/virtio"
+    schedule:
+      interval: "weekly"
+
   # Docker
   - package-ecosystem: "docker"
     directory: "/cmd/controller"
@@ -35,6 +40,11 @@ updates:
 
   - package-ecosystem: "docker"
     directory: "/cmd/fortuna"
+    schedule:
+      interval: "weekly"
+
+  - package-ecosystem: "docker"
+    directory: "/cmd/virtio"
     schedule:
       interval: "weekly"
 

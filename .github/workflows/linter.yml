@@ -31,11 +31,27 @@ jobs:
       - name: Download dependencies
         run: |
           go mod download
-          go mod tidy
-          cd cmd/api && go mod download && go mod tidy && cd ../..
-          cd cmd/controller && go mod download && go mod tidy && cd ../..
-          cd cmd/fortuna && go mod download && go mod tidy && cd ../..
-          cd cmd/virtio && go mod download && go mod tidy && cd ../..
+          (cd cmd/api && go mod download)
+          (cd cmd/controller && go mod download)
+          (cd cmd/fortuna && go mod download)
+          (cd cmd/virtio && go mod download)
+
+      - name: Check go.mod / go.sum tidy
+        run: |
+          set -euo pipefail
+          tidy_one() {
+            local dir="$1"
+            (cd "$dir" && go mod tidy)
+          }
+          tidy_one .
+          tidy_one cmd/api
+          tidy_one cmd/controller
+          tidy_one cmd/fortuna
+          tidy_one cmd/virtio
+          if ! git diff --exit-code -- go.mod go.sum cmd/*/go.mod cmd/*/go.sum; then
+            echo "go mod tidy produced changes; commit the tidy result"
+            exit 1
+          fi
 
       - name: Run golangci-lint on source code
         uses: golangci/golangci-lint-action@v8
@@ -65,11 +81,10 @@ jobs:
       - name: Download dependencies
         run: |
           go mod download
-          go mod tidy
-          cd cmd/api && go mod download && go mod tidy && cd ../..
-          cd cmd/controller && go mod download && go mod tidy && cd ../..
-          cd cmd/fortuna && go mod download && go mod tidy && cd ../..
-          cd cmd/virtio && go mod download && go mod tidy && cd ../..
+          (cd cmd/api && go mod download)
+          (cd cmd/controller && go mod download)
+          (cd cmd/fortuna && go mod download)
+          (cd cmd/virtio && go mod download)
 
       - name: Run tests
         run: go test -race -coverprofile=coverage.out ./...
@@ -130,3 +145,27 @@ jobs:
         continue-on-error: true
         with:
           sarif_file: ${{ steps.scan.outputs.sarif }}
+
+  govulncheck:
+    name: govulncheck
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.27'
+          cache: true
+
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+
+      - name: Run govulncheck
+        run: |
+          govulncheck ./...
+          (cd cmd/api && govulncheck ./...)
+          (cd cmd/controller && govulncheck ./...)
+          (cd cmd/fortuna && govulncheck ./...)
+          (cd cmd/virtio && govulncheck ./...)

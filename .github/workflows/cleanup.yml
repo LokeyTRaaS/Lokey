@@ -2,7 +2,7 @@ name: Cleanup Container Images
 
 on:
   schedule:
-    # Run daily at 2 AM UTC
+    # Dry-run only on the nightly schedule until tag taxonomy is verified live.
     - cron: '0 2 * * *'
   workflow_dispatch:
     inputs:
@@ -51,9 +51,10 @@ jobs:
       - name: Cleanup images for ${{ matrix.service }}-${{ matrix.arch }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          DRY_RUN: ${{ inputs.dry_run || 'false' }}
+          # Schedule has no inputs → always dry-run. Manual dispatch uses the checkbox.
+          DRY_RUN: ${{ github.event_name == 'schedule' && 'true' || (inputs.dry_run && 'true' || 'false') }}
         run: |
-          set -e
+          set -euo pipefail
 
           PACKAGE_NAME="${{ matrix.service }}"
           ARCH="${{ matrix.arch }}"
@@ -63,10 +64,10 @@ jobs:
           echo "=================================================="
           echo "Cleaning up: ${PACKAGE_NAME} (${ARCH})"
           echo "Dry run: ${DRY_RUN}"
+          echo "Event: ${{ github.event_name }}"
           echo "=================================================="
           echo ""
 
-          # Get all versions for this package
           VERSIONS=$(gh api \
             -H "Accept: application/vnd.github+json" \
             -H "X-GitHub-Api-Version: 2022-11-28" \
@@ -78,14 +79,25 @@ jobs:
             exit 0
           fi
 
-          # Arrays to store versions by category
           declare -a RELEASE_VERSIONS=()
           declare -a PRERELEASE_VERSIONS=()
           declare -a BRANCH_VERSIONS=()
           declare -a LATEST_VERSIONS=()
+          declare -a MANIFEST_VERSIONS=()
+          declare -a PROTECTED_VERSIONS=()
           declare -a UNTAGGED_VERSIONS=()
 
-          # Categorize versions
+          # True if any tag on this version must never be deleted.
+          is_protected_tag() {
+            local tag="$1"
+            # Arch-specific release: 1.1.0-amd64 or v1.1.0-amd64
+            [[ "$tag" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+-${ARCH}$ ]] && return 0
+            # Multi-arch / manifest tags (no arch suffix)
+            [[ "$tag" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+$ ]] && return 0
+            [[ "$tag" == "latest" || "$tag" == "latest-${ARCH}" ]] && return 0
+            return 1
+          }
+
           while IFS= read -r version_json; do
             VERSION_ID=$(echo "$version_json" | jq -r '.id')
             TAGS=$(echo "$version_json" | jq -r '.metadata.container.tags[]?' 2>/dev/null || echo "")
@@ -96,56 +108,68 @@ jobs:
               continue
             fi
 
-            # Check each tag for this version
+            PROTECTED=false
             CATEGORIZED=false
+            PRIMARY_TAG=""
+
             for tag in $TAGS; do
-              # Skip if tag doesn't match our architecture
+              if is_protected_tag "$tag"; then
+                PROTECTED=true
+              fi
+            done
+
+            if [ "$PROTECTED" = true ]; then
+              # Prefer an arch-matching tag for logging, else first tag.
+              for tag in $TAGS; do
+                if [[ "$tag" =~ -${ARCH}$ ]] || [[ "$tag" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+$ ]] || [[ "$tag" == "latest" ]]; then
+                  PRIMARY_TAG="$tag"
+                  break
+                fi
+              done
+              [ -z "$PRIMARY_TAG" ] && PRIMARY_TAG=$(echo "$TAGS" | awk '{print $1}')
+
+              if [[ "$PRIMARY_TAG" == "latest" || "$PRIMARY_TAG" == "latest-${ARCH}" ]]; then
+                LATEST_VERSIONS+=("${VERSION_ID}|${PRIMARY_TAG}|${CREATED_AT}")
+              elif [[ "$PRIMARY_TAG" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+-${ARCH}$ ]]; then
+                RELEASE_VERSIONS+=("${VERSION_ID}|${PRIMARY_TAG}|${CREATED_AT}")
+              elif [[ "$PRIMARY_TAG" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+                MANIFEST_VERSIONS+=("${VERSION_ID}|${PRIMARY_TAG}|${CREATED_AT}")
+              else
+                PROTECTED_VERSIONS+=("${VERSION_ID}|${PRIMARY_TAG}|${CREATED_AT}")
+              fi
+              continue
+            fi
+
+            for tag in $TAGS; do
               if [[ ! "$tag" =~ -${ARCH}$ ]]; then
                 continue
               fi
-
-              # Release version (v1.2.3-arch)
-              if [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-${ARCH}$ ]]; then
-                RELEASE_VERSIONS+=("${VERSION_ID}|${tag}|${CREATED_AT}")
-                CATEGORIZED=true
-                break
-              fi
-
-              # Latest tag
-              if [[ "$tag" == "latest-${ARCH}" ]]; then
-                LATEST_VERSIONS+=("${VERSION_ID}|${tag}|${CREATED_AT}")
-                CATEGORIZED=true
-                break
-              fi
-
-              # Pre-release branches (prerelease/**-arch)
+              PRIMARY_TAG="$tag"
               if [[ "$tag" =~ ^prerelease- ]]; then
                 PRERELEASE_VERSIONS+=("${VERSION_ID}|${tag}|${CREATED_AT}")
-                CATEGORIZED=true
-                break
+              else
+                BRANCH_VERSIONS+=("${VERSION_ID}|${tag}|${CREATED_AT}")
               fi
-
-              # Branch builds (main-arch, feature-xyz-arch, etc.)
-              BRANCH_VERSIONS+=("${VERSION_ID}|${tag}|${CREATED_AT}")
               CATEGORIZED=true
               break
             done
 
-            # If not categorized, it's untagged for this arch
+            # Manifest-only or other-arch versions: never treat as untagged for delete.
             if [ "$CATEGORIZED" = false ]; then
-              UNTAGGED_VERSIONS+=("${VERSION_ID}|${TAGS}|${CREATED_AT}")
+              PROTECTED_VERSIONS+=("${VERSION_ID}|${TAGS}|${CREATED_AT}")
             fi
           done <<< "$VERSIONS"
 
-          echo "📊 Summary for ${PACKAGE_NAME}-${ARCH}:"
-          echo "  - Release versions: ${#RELEASE_VERSIONS[@]} (keeping all)"
+          echo "Summary for ${PACKAGE_NAME}-${ARCH}:"
+          echo "  - Release (arch) versions: ${#RELEASE_VERSIONS[@]} (keeping all)"
+          echo "  - Manifest (multi-arch) versions: ${#MANIFEST_VERSIONS[@]} (keeping all)"
+          echo "  - Other protected versions: ${#PROTECTED_VERSIONS[@]} (keeping all)"
           echo "  - Pre-release versions: ${#PRERELEASE_VERSIONS[@]} (keeping latest 3)"
           echo "  - Branch versions: ${#BRANCH_VERSIONS[@]} (keeping latest 3)"
           echo "  - Latest tags: ${#LATEST_VERSIONS[@]} (keeping all)"
-          echo "  - Untagged versions: ${#UNTAGGED_VERSIONS[@]} (deleting all)"
+          echo "  - Truly untagged versions: ${#UNTAGGED_VERSIONS[@]} (deleting)"
           echo ""
 
-          # Function to delete a version
           delete_version() {
             local version_id=$1
             local tag=$2
@@ -154,44 +178,57 @@ jobs:
             if [ "${DRY_RUN}" = "true" ]; then
               echo "  [DRY RUN] Would delete: ${tag} (ID: ${version_id}, created: ${created})"
             else
-              echo "  🗑️  Deleting: ${tag} (ID: ${version_id}, created: ${created})"
+              echo "  Deleting: ${tag} (ID: ${version_id}, created: ${created})"
               gh api \
                 --method DELETE \
                 -H "Accept: application/vnd.github+json" \
                 -H "X-GitHub-Api-Version: 2022-11-28" \
                 "/orgs/${REPO_OWNER}/packages/container/${REPO_LOWER}%2F${PACKAGE_NAME}/versions/${version_id}" \
-                || echo "  ⚠️  Failed to delete version ${version_id}"
+                || echo "  Failed to delete version ${version_id}"
             fi
           }
 
-          # Keep all release versions
-          echo "✅ Keeping all ${#RELEASE_VERSIONS[@]} release versions"
-          for version in "${RELEASE_VERSIONS[@]}"; do
+          echo "Keeping all ${#RELEASE_VERSIONS[@]} release versions"
+          for version in "${RELEASE_VERSIONS[@]+"${RELEASE_VERSIONS[@]}"}"; do
+            [ -z "${version:-}" ] && break
             IFS='|' read -r id tag created <<< "$version"
-            echo "  ✓ ${tag} (created: ${created})"
+            echo "  keep ${tag} (created: ${created})"
           done
           echo ""
 
-          # Keep latest tag
-          echo "✅ Keeping all ${#LATEST_VERSIONS[@]} latest tags"
-          for version in "${LATEST_VERSIONS[@]}"; do
+          echo "Keeping all ${#MANIFEST_VERSIONS[@]} manifest versions"
+          for version in "${MANIFEST_VERSIONS[@]+"${MANIFEST_VERSIONS[@]}"}"; do
+            [ -z "${version:-}" ] && break
             IFS='|' read -r id tag created <<< "$version"
-            echo "  ✓ ${tag} (created: ${created})"
+            echo "  keep ${tag} (created: ${created})"
           done
           echo ""
 
-          # Keep only latest 3 pre-release versions
+          echo "Keeping all ${#LATEST_VERSIONS[@]} latest tags"
+          for version in "${LATEST_VERSIONS[@]+"${LATEST_VERSIONS[@]}"}"; do
+            [ -z "${version:-}" ] && break
+            IFS='|' read -r id tag created <<< "$version"
+            echo "  keep ${tag} (created: ${created})"
+          done
+          echo ""
+
+          echo "Keeping all ${#PROTECTED_VERSIONS[@]} other protected versions"
+          for version in "${PROTECTED_VERSIONS[@]+"${PROTECTED_VERSIONS[@]}"}"; do
+            [ -z "${version:-}" ] && break
+            IFS='|' read -r id tag created <<< "$version"
+            echo "  keep ${tag} (created: ${created})"
+          done
+          echo ""
+
           if [ ${#PRERELEASE_VERSIONS[@]} -gt 0 ]; then
-            echo "🔍 Processing pre-release versions..."
-            # Sort by creation date (newest first)
+            echo "Processing pre-release versions..."
             IFS=$'\n' SORTED_PRERELEASE=($(sort -t'|' -k3 -r <<< "${PRERELEASE_VERSIONS[*]}"))
             unset IFS
-
             KEEP_COUNT=3
             for i in "${!SORTED_PRERELEASE[@]}"; do
               IFS='|' read -r id tag created <<< "${SORTED_PRERELEASE[$i]}"
-              if [ $i -lt $KEEP_COUNT ]; then
-                echo "  ✓ Keeping: ${tag} (created: ${created})"
+              if [ "$i" -lt "$KEEP_COUNT" ]; then
+                echo "  keep ${tag} (created: ${created})"
               else
                 delete_version "$id" "$tag" "$created"
               fi
@@ -199,18 +236,15 @@ jobs:
             echo ""
           fi
 
-          # Keep only latest 3 branch versions
           if [ ${#BRANCH_VERSIONS[@]} -gt 0 ]; then
-            echo "🔍 Processing branch versions..."
-            # Sort by creation date (newest first)
+            echo "Processing branch versions..."
             IFS=$'\n' SORTED_BRANCH=($(sort -t'|' -k3 -r <<< "${BRANCH_VERSIONS[*]}"))
             unset IFS
-
             KEEP_COUNT=3
             for i in "${!SORTED_BRANCH[@]}"; do
               IFS='|' read -r id tag created <<< "${SORTED_BRANCH[$i]}"
-              if [ $i -lt $KEEP_COUNT ]; then
-                echo "  ✓ Keeping: ${tag} (created: ${created})"
+              if [ "$i" -lt "$KEEP_COUNT" ]; then
+                echo "  keep ${tag} (created: ${created})"
               else
                 delete_version "$id" "$tag" "$created"
               fi
@@ -218,9 +252,8 @@ jobs:
             echo ""
           fi
 
-          # Delete all untagged versions
           if [ ${#UNTAGGED_VERSIONS[@]} -gt 0 ]; then
-            echo "🗑️  Deleting ${#UNTAGGED_VERSIONS[@]} untagged versions..."
+            echo "Deleting ${#UNTAGGED_VERSIONS[@]} truly untagged versions..."
             for version in "${UNTAGGED_VERSIONS[@]}"; do
               IFS='|' read -r id tag created <<< "$version"
               delete_version "$id" "$tag" "$created"
@@ -229,7 +262,7 @@ jobs:
           fi
 
           echo "=================================================="
-          echo "✅ Cleanup complete for ${PACKAGE_NAME}-${ARCH}"
+          echo "Cleanup complete for ${PACKAGE_NAME}-${ARCH}"
           echo "=================================================="
 
   cleanup-summary:
@@ -240,16 +273,19 @@ jobs:
     steps:
       - name: Generate summary
         run: |
-          echo "# 🧹 Container Image Cleanup Summary" >> $GITHUB_STEP_SUMMARY
+          DRY="${{ github.event_name == 'schedule' && 'true' || (inputs.dry_run && 'true' || 'false') }}"
+          echo "# Container Image Cleanup Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Dry Run**: ${{ inputs.dry_run || 'false' }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Dry Run**: ${DRY}" >> $GITHUB_STEP_SUMMARY
+          echo "**Event**: ${{ github.event_name }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "## Retention Policy" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ **Keep**: All release versions (v*.*.*)" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ **Keep**: Latest 3 pre-release versions per architecture" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ **Keep**: Latest 3 branch builds per architecture" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ **Keep**: All 'latest' tags" >> $GITHUB_STEP_SUMMARY
-          echo "- 🗑️ **Delete**: Untagged/dangling images" >> $GITHUB_STEP_SUMMARY
-          echo "- 🗑️ **Delete**: Older pre-release versions beyond 3 most recent" >> $GITHUB_STEP_SUMMARY
+          echo "- Keep: all semver arch tags (\`v?X.Y.Z-arch\`)" >> $GITHUB_STEP_SUMMARY
+          echo "- Keep: all multi-arch manifest tags (\`v?X.Y.Z\`, \`latest\`)" >> $GITHUB_STEP_SUMMARY
+          echo "- Keep: latest 3 pre-release versions per architecture" >> $GITHUB_STEP_SUMMARY
+          echo "- Keep: latest 3 branch builds per architecture" >> $GITHUB_STEP_SUMMARY
+          echo "- Keep: all \`latest\` / \`latest-arch\` tags" >> $GITHUB_STEP_SUMMARY
+          echo "- Delete: truly untagged/dangling images only" >> $GITHUB_STEP_SUMMARY
+          echo "- Schedule runs are always dry-run; use workflow_dispatch with dry_run=false for live deletes" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Check job logs for detailed information about deleted images." >> $GITHUB_STEP_SUMMARY
+          echo "Check job logs for detailed information." >> $GITHUB_STEP_SUMMARY

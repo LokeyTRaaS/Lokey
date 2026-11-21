@@ -37,29 +37,19 @@ jobs:
           cache: true
 
       - name: Install Swag
-        run: go install github.com/swaggo/swag/cmd/swag@latest
+        run: go install github.com/swaggo/swag/cmd/swag@v1.16.6
 
       - name: Generate Swagger specification
-        run: |
-          cd pkg/api
-          swag init \
-            --parseDependency \
-            --parseInternal \
-            --generalInfo server.go \
-            --dir ./ \
-            --output ./docs
-
-          echo "Generated Swagger files:"
-          ls -la ./docs/
+        run: ./scripts/generate-swagger.sh
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: '20'
+          node-version: '22'
 
       - name: Generate ReDoc HTML
         run: |
-          npx @redocly/cli build-docs \
+          npx @redocly/cli@1.34.3 build-docs \
             pkg/api/docs/swagger.json \
             -o docs/api-reference.html
 
