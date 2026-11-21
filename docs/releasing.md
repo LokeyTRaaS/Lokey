@@ -102,6 +102,8 @@ That still runs `build.yml` for GHCR + archives. Prefer letting semantic-release
 
 ## Local dry-run
 
+Release tooling needs Node.js >= 26.13.
+
 ```bash
 npm ci
 # Needs GITHUB_TOKEN or GH_TOKEN in the environment for the GitHub plugin:
