@@ -99,6 +99,143 @@ Verify all services are operational:
 bash
 curl http://localhost:8080/api/v1/health
 ```
+
+**Response:**
+```json
+{
+  "status": "ok",
+  "timestamp": "2026-01-12T10:00:00Z",
+  "details": {
+    "api": true,
+    "controller": true,
+    "virtio": true,
+    "fortuna": true,
+    "database": true
+  }
+}
+```
+
+### Get System Status with Quality Metrics
+
+Get comprehensive system statistics including TRNG quality metrics:
+```
+bash
+curl http://localhost:8080/api/v1/status
+```
+
+**Response:**
+```json
+{
+  "trng": {
+    "polling_count": 509976,
+    "queue_current": 89630,
+    "queue_capacity": 500000,
+    "queue_percentage": 17.926,
+    "queue_dropped": 9872,
+    "consumed_count": 410474,
+    "unconsumed_count": 89630,
+    "total_generated": 509976
+  },
+  "fortuna": {
+    "polling_count": 61886098,
+    "queue_current": 10000,
+    "queue_capacity": 10000,
+    "queue_percentage": 100,
+    "queue_dropped": 61876098,
+    "consumed_count": 0,
+    "unconsumed_count": 10000,
+    "total_generated": 61886098
+  },
+  "database": {
+    "size_bytes": 0,
+    "size_human": "0 B (in-memory)",
+    "path": "memory://channels"
+  },
+  "trng_quality": {
+    "monobit": {
+      "zeros": 12345678,
+      "ones": 12345678,
+      "total": 24691356,
+      "average": 0.5000123
+    },
+    "repetition_count": {
+      "failures": 0,
+      "current_run": 1,
+      "last_value": 66
+    },
+    "apt": {
+      "window_size": 512,
+      "cutoff": 290,
+      "bias_count": 0,
+      "samples_processed": 123456
+    }
+  }
+}
+```
+
+### Interpreting Quality Metrics
+
+**Monobit Test**:
+- **`average`**: Proportion of ones in the sequence
+  - **Good**: 0.49 - 0.51 (close to 0.5)
+  - **Warning**: 0.45 - 0.49 or 0.51 - 0.55
+  - **Critical**: < 0.45 or > 0.55
+- **`zeros`**, **`ones`**, **`total`**: Raw bit counts for monitoring
+
+**Repetition Count Test**:
+- **`failures`**: Number of times a value repeated >35 times consecutively
+  - **Good**: 0 (no failures detected)
+  - **Warning**: > 0 but stable
+  - **Critical**: Increasing rapidly
+- **`current_run`**: Current consecutive repetition count
+- **`last_value`**: Most recent sample value (decimal)
+
+**Adaptive Proportion Test (APT)**:
+- **`bias_count`**: Number of times bias detected in sliding window
+  - **Good**: 0 or very low
+  - **Warning**: Slowly increasing
+  - **Critical**: Increasing rapidly
+- **`window_size`**: Size of sliding window (configurable via `TRNG_APT_WINDOW_SIZE`)
+- **`cutoff`**: Threshold for bias detection (calculated from window size)
+- **`samples_processed`**: Total samples analyzed
+
+**Example: Healthy TRNG**:
+```json
+{
+  "trng_quality": {
+    "monobit": {
+      "average": 0.5001,
+      "total": 1000000
+    },
+    "repetition_count": {
+      "failures": 0
+    },
+    "apt": {
+      "bias_count": 0,
+      "samples_processed": 100000
+    }
+  }
+}
+```
+
+**Example: Degraded TRNG**:
+```json
+{
+  "trng_quality": {
+    "monobit": {
+      "average": 0.47,
+      "total": 1000000
+    },
+    "repetition_count": {
+      "failures": 5
+    },
+    "apt": {
+      "bias_count": 12,
+      "samples_processed": 100000
+    }
+  }
+}
+```
 **Response:**
 ```
 json
@@ -109,6 +246,7 @@ json
 "api": true,
 "controller": true,
 "fortuna": true,
+"virtio": true,
 "database": true
 }
 }
@@ -150,9 +288,9 @@ json
 "total_generated": 5000
 },
 "database": {
-"size_bytes": 10485760,
-"size_human": "10.0 MB",
-"path": "/data/api.db"
+"size_bytes": 0,
+"size_human": "0 B (in-memory)",
+"path": "memory://channels"
 }
 }
 ```
@@ -175,7 +313,8 @@ curl http://localhost:8080/api/v1/config/queue
 json
 {
 "trng_queue_size": 100,
-"fortuna_queue_size": 100
+"fortuna_queue_size": 100,
+"virtio_queue_size": 500000
 }
 ```
 ### Update Queue Sizes
@@ -523,7 +662,7 @@ database_size_bytes
 - `format` is one of the supported types
 - `limit` is between 1 and 100,000
 - `offset` is >= 0
-- `source` is either "trng" or "fortuna"
+- `source` is either "trng" or "fortuna" (VirtIO is a consumer endpoint, not a data source)
 - JSON is properly formatted
 
 ### Service Unavailable
@@ -593,6 +732,174 @@ random_ints = get_random_data(format="int32", limit=100, source="fortuna")
 random_bytes = get_random_bytes(32, source="trng")
 ```
 
+
+## VirtIO Access Methods
+
+The VirtIO service provides two high-performance access methods for random data:
+
+1. **Named Pipe (FIFO)**: For local VMs (QEMU, Proxmox, VirtualBox, VMware) - ~500x faster than legacy EGD
+2. **HTTP Streaming**: For remote servers and Kubernetes sidecars
+
+### Named Pipe (FIFO) Usage
+
+The named pipe provides the highest performance for local hypervisor access. It's a standard Unix FIFO that hypervisors can read from directly.
+
+**Default Path**: `/var/run/lokey/virtio-rng` (configurable via `VIRTIO_PIPE_PATH`)
+
+**Reading from Named Pipe:**
+```bash
+# Read 32 bytes from pipe
+dd if=/var/run/lokey/virtio-rng bs=32 count=1
+
+# Continuous reading (for testing)
+cat /var/run/lokey/virtio-rng | hexdump -C
+
+# Read specific amount
+head -c 1024 /var/run/lokey/virtio-rng > random_data.bin
+```
+
+**Python Example:**
+```python
+# Read from named pipe
+with open('/var/run/lokey/virtio-rng', 'rb') as pipe:
+    data = pipe.read(32)  # Read 32 bytes
+    print(f"Received: {data.hex()}")
+```
+
+**QEMU Configuration:**
+```bash
+# Start QEMU with named pipe as RNG source
+qemu-system-x86_64 \
+  -object rng-random,id=rng0,filename=/var/run/lokey/virtio-rng \
+  -device virtio-rng-pci,rng=rng0 \
+  ...
+```
+
+**Proxmox Configuration:**
+```bash
+# Set RNG device for VM
+qm set <vmid> -rng0 /var/run/lokey/virtio-rng
+```
+
+### HTTP Streaming Usage
+
+The HTTP streaming endpoint provides network-based access for remote servers and Kubernetes sidecars.
+
+**Endpoint**: `GET /stream`
+
+**Query Parameters:**
+- `chunk_size` (optional, default: 1024): Bytes per chunk
+- `max_bytes` (optional): Maximum total bytes to stream
+
+**Basic Usage:**
+```bash
+# Stream data continuously
+curl -N http://virtio:8083/stream
+
+# Stream with custom chunk size
+curl -N "http://virtio:8083/stream?chunk_size=2048"
+
+# Stream with maximum bytes limit
+curl -N "http://virtio:8083/stream?chunk_size=1024&max_bytes=10000" > random_data.bin
+```
+
+**Python Example:**
+```python
+import requests
+
+# Stream data continuously
+response = requests.get(
+    'http://virtio:8083/stream',
+    params={'chunk_size': 1024, 'max_bytes': 10000},
+    stream=True
+)
+
+for chunk in response.iter_content(chunk_size=1024):
+    if chunk:
+        print(f"Received {len(chunk)} bytes: {chunk.hex()[:64]}...")
+```
+
+**Go Example:**
+```go
+package main
+
+import (
+    "io"
+    "net/http"
+    "os"
+)
+
+func main() {
+    resp, err := http.Get("http://virtio:8083/stream?chunk_size=1024")
+    if err != nil {
+        panic(err)
+    }
+    defer resp.Body.Close()
+
+    // Stream to file
+    file, _ := os.Create("random_data.bin")
+    defer file.Close()
+
+    io.Copy(file, resp.Body)
+}
+```
+
+**Kubernetes Sidecar Example:**
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: app-with-random
+spec:
+  containers:
+  - name: app
+    image: myapp:latest
+    volumeMounts:
+    - name: virtio-rng
+      mountPath: /dev/virtio-rng
+      readOnly: true
+  - name: virtio-sidecar
+    image: lokey/virtio-sidecar:latest
+    env:
+    - name: VIRTIO_API_URL
+      value: "http://virtio-service:8083"
+    - name: PIPE_PATH
+      value: "/dev/virtio-rng"
+    volumeMounts:
+    - name: virtio-rng
+      mountPath: /dev
+```
+
+### Named Pipe vs HTTP Streaming
+
+| Feature | Named Pipe (FIFO) | HTTP Streaming |
+|---------|------------------|----------------|
+| **Path/Endpoint** | `/var/run/lokey/virtio-rng` | `GET /stream` |
+| **Protocol** | Unix FIFO | HTTP chunked |
+| **Latency** | Very low (~0.1ms) | Low (~1-5ms) |
+| **Throughput** | ~500x faster than EGD | High (network dependent) |
+| **Use Case** | Local VMs (QEMU, Proxmox, etc.) | Remote servers, Kubernetes |
+| **Max Request** | Unlimited | Configurable via query params |
+| **Access** | Local filesystem only | Network accessible |
+| **Setup** | Requires volume mount | Standard HTTP |
+
+### Configuration
+
+**Environment Variables:**
+- `VIRTIO_PIPE_PATH`: Named pipe filesystem path (default: `/var/run/lokey/virtio-rng`)
+- `VIRTIO_QUEUE_SIZE`: Internal queue capacity (default: 15000 items ≈ 480 KB)
+
+**Example Docker Compose:**
+```yaml
+virtio:
+  environment:
+    - VIRTIO_PIPE_PATH=/var/run/lokey/virtio-rng
+    - VIRTIO_QUEUE_SIZE=15000
+  volumes:
+    - /var/run/lokey:/var/run/lokey
+  ports:
+    - '8083:8083'  # HTTP API
+```
 
 ## Next Steps
 

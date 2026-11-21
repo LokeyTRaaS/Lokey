@@ -1,0 +1,109 @@
+version: "2"
+
+run:
+  tests: true
+
+linters:
+  default: standard
+  enable:
+    - gosec
+    - unused
+  disable:
+    - dupl
+    - err113
+    - goconst
+    - gocritic
+    - gocyclo
+    - lll
+    - noctx
+    - nolintlint
+    - revive
+    - rowserrcheck
+    - tagliatelle
+    - thelper
+    - unconvert
+    - unparam
+    - whitespace
+    - wrapcheck
+    - wsl
+  settings:
+    errcheck:
+      check-type-assertions: true
+      check-blank: true
+      exclude-functions:
+        - (io.Writer).Write
+        - (*encoding/json.Encoder).Encode
+        - os.RemoveAll
+        - os.Setenv
+        - os.Unsetenv
+        - (*testing.T).Fatal
+        - (*testing.T).Fatalf
+        - (*testing.T).Error
+        - (*testing.T).Errorf
+        - (*testing.T).Skip
+        - (*testing.T).Skipf
+    gosec:
+      excludes:
+        - G104
+        - G107
+        - G115
+        - G204
+      severity: medium
+      confidence: medium
+    govet:
+      disable:
+        - fieldalignment
+        - shadow
+      enable-all: true
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    rules:
+      - linters:
+          - errcheck
+          - gosec
+          - govet
+          - ineffassign
+        path: _test\.go
+        text: Error return value of .* is not checked
+      - linters:
+          - gosec
+        path: _test\.go
+        text: 'G104: Errors unhandled'
+      - linters:
+          - gosec
+        path: _test\.go
+        text: 'G107: Potential HTTP request made with variable url'
+      - linters:
+          - govet
+        path: _test\.go
+        text: 'buildtag:'
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    gofmt:
+      simplify: true
+    goimports:
+      local-prefixes:
+        - github.com/lokey/rng-service
+  exclusions:
+    generated: lax
+    paths:
+      - third_party$
+      - builtin$
+      - examples$

@@ -1,0 +1,80 @@
+http:
+  routers:
+    lokey-api:
+      rule: "PathPrefix(`/api`) || PathPrefix(`/metrics`) || PathPrefix(`/swagger`)"
+      entryPoints:
+        - websecure
+      service: lokey-api
+      tls: {}
+    lokey-virtio:
+      rule: "PathPrefix(`/virtio`)"
+      entryPoints:
+        - websecure
+      middlewares:
+        - virtio-strip
+      service: lokey-virtio
+      tls: {}
+    lokey-swagger:
+      # Explicit swagger router so /swagger and /swagger/ always hit the API
+      rule: "PathPrefix(`/swagger`)"
+      entryPoints:
+        - websecure
+      service: lokey-api
+      tls: {}
+      priority: 20
+    lokey-grafana:
+      # Keep /grafana prefix — Grafana serves the subpath itself (GF_SERVER_SERVE_FROM_SUB_PATH).
+      rule: "PathPrefix(`/grafana`)"
+      entryPoints:
+        - websecure
+      service: lokey-grafana
+      tls: {}
+    # Traefik dashboard UI + Traefik API paths (not /api/v1 — that stays LoKey).
+    # basic auth: admin / lokey
+    traefik-dashboard:
+      rule: >-
+        PathPrefix(`/dashboard`) ||
+        PathPrefix(`/api/http`) || PathPrefix(`/api/tcp`) || PathPrefix(`/api/udp`) ||
+        PathPrefix(`/api/overview`) || PathPrefix(`/api/version`) ||
+        PathPrefix(`/api/entrypoints`) || PathPrefix(`/api/rawdata`) ||
+        PathPrefix(`/api/ping`)
+      entryPoints:
+        - websecure
+      middlewares:
+        - traefik-auth
+      service: api@internal
+      tls: {}
+      priority: 100
+    # HTTP catch-all redirect handled by entrypoint; keep a plain HTTP health for local smoke
+    lokey-api-http:
+      rule: "PathPrefix(`/api`)"
+      entryPoints:
+        - web
+      service: lokey-api
+
+  middlewares:
+    virtio-strip:
+      stripPrefix:
+        prefixes:
+          - /virtio
+    traefik-auth:
+      basicAuth:
+        users:
+          # admin / lokey  (htpasswd -nbB)
+          - "admin:$2y$05$U0R8goi1FsYmEzPVsbt/lO6PRlCGusUNaig55108c9aJM4n8H0VjC"
+
+  services:
+    lokey-api:
+      loadBalancer:
+        servers:
+          - url: "http://api:8080"
+    lokey-virtio:
+      loadBalancer:
+        servers:
+          - url: "http://virtio:8083"
+        responseForwarding:
+          flushInterval: 1ms
+    lokey-grafana:
+      loadBalancer:
+        servers:
+          - url: "http://grafana:3000"

@@ -1,0 +1,667 @@
+{
+    "schemes": [
+        "http",
+        "https"
+    ],
+    "swagger": "2.0",
+    "info": {
+        "description": "LoKey is a high-availability, high-bandwidth true random number generation service named after Loki, the Norse god of chaos, reflecting the unpredictable nature of true randomness. This project provides affordable and accessible hardware-based true randomness through off-the-shelf components with a Go implementation.\n\n## Hardware Architecture\nThe system targets Raspberry Pi 5 (ARM64) and x86_64 hosts with one or more ATECC608A chips. Local development uses CONTROLLER_MODE=emulated (crypto/rand) without hardware. Production uses hardware TRNG via I2C.\n\n## System Architecture\nLoKey consists of four microservices:\n- **Controller Service**: Interfaces with the ATECC608A chip to harvest true random numbers and process SHA-256 hashes\n- **Fortuna Service**: Amplifies the entropy using the Fortuna algorithm for enhanced randomness\n- **VirtIO Service**: Provides high-performance random data access for virtualization via named pipe (FIFO) and HTTP streaming, serving VMs/containers\n- **API Service**: Provides endpoints for configuration, data retrieval from TRNG and Fortuna, and VirtIO seeding management. Entropy queues are held in memory only (`memory://channels`); there is no on-disk database.\n\n## VirtIO endpoints (via Traefik prefix /virtio)\nThe VirtIO microservice is exposed separately (not under /api/v1):\n- GET /virtio/health \u2014 VirtIO health\n- GET /virtio/info \u2014 status + pipe path + queue stats\n- GET /virtio/config/queue \u2014 queue depth and counters\n- GET /virtio/generate?count=1 \u2014 pull seeded entropy (hex)\n- GET /virtio/stream \u2014 chunked octet-stream for VMs/containers\n- POST /virtio/seed \u2014 seed queue (used by the API seeder)\n- GET /api/v1/config/virtio \u2014 seeding source / queue size (API)\n- GET /api/v1/status \u2014 includes virtio queue + quality metrics\n\n## Use Cases\nThis service is valuable for cryptographic key generation, password management, blockchain applications, Monte Carlo simulations, gaming systems, IoT device authentication, secure communications, financial services, and scientific research requiring provably random data.\n\n## Data Formats\nSupports multiple output formats: int8, int16, int32, int64, uint8, uint16, uint32, uint64, and raw binary data with configurable chunk sizes and pagination.\n\n## Repository & Support\nFor issues, feature requests, contributions, and detailed hardware setup instructions, visit: https://github.com/LokeyTRaaS/Lokey\nFor more information about the OSS initiative, please visit our website: https://lokey.cloud",
+        "title": "LoKey: True Random Number Generation Service API",
+        "contact": {
+            "name": "GitHub Repository",
+            "url": "https://github.com/LokeyTRaaS/Lokey"
+        },
+        "license": {
+            "name": "MIT License",
+            "url": "https://opensource.org/licenses/MIT"
+        },
+        "version": "1.0"
+    },
+    "basePath": "/api/v1",
+    "paths": {
+        "/config/consume": {
+            "get": {
+                "description": "Get current consume mode setting (true = delete-on-read, false = keep data in queue)",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "configuration"
+                ],
+                "summary": "Get consume configuration",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.ConsumeConfig"
+                        }
+                    }
+                }
+            },
+            "put": {
+                "description": "Update consume mode setting (true = delete-on-read, false = keep data in queue)",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "configuration"
+                ],
+                "summary": "Update consume configuration",
+                "parameters": [
+                    {
+                        "description": "Consume configuration",
+                        "name": "config",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/api.ConsumeConfig"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.ConsumeConfig"
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/config/queue": {
+            "get": {
+                "description": "Get current queue size configuration for TRNG, Fortuna, and VirtIO data",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "configuration"
+                ],
+                "summary": "Get queue configuration",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.QueueConfig"
+                        }
+                    },
+                    "500": {
+                        "description": "Database error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            },
+            "put": {
+                "description": "Update queue size configuration for TRNG, Fortuna, and VirtIO data. VirtIO queue size changes are forwarded to the VirtIO service.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "configuration"
+                ],
+                "summary": "Update queue configuration",
+                "parameters": [
+                    {
+                        "description": "Queue configuration",
+                        "name": "config",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/api.QueueConfig"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.QueueConfig"
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Server error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/config/virtio": {
+            "get": {
+                "description": "Get current VirtIO configuration including seeding source (TRNG, Fortuna, or both) and queue size. Queue size is queried from the VirtIO service.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "configuration"
+                ],
+                "summary": "Get VirtIO configuration",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.VirtIOConfig"
+                        }
+                    },
+                    "500": {
+                        "description": "Server error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            },
+            "put": {
+                "description": "Update VirtIO seeding source (TRNG, Fortuna, or both) and queue size. Queue size changes are forwarded to the VirtIO service. Seeding source changes take effect immediately.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "configuration"
+                ],
+                "summary": "Update VirtIO configuration",
+                "parameters": [
+                    {
+                        "description": "VirtIO configuration",
+                        "name": "config",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/api.VirtIOConfig"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.VirtIOConfig"
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Server error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/data": {
+            "post": {
+                "description": "Retrieve random data in various formats with pagination. Valid sources are \"trng\" (True Random Number Generator) and \"fortuna\" (Fortuna CSPRNG). Note: VirtIO is a consumer endpoint for virtualization (named pipe/HTTP streaming) and cannot be used as a data source here. To access VirtIO data, use the named pipe or HTTP streaming endpoint directly.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json",
+                    "application/octet-stream"
+                ],
+                "tags": [
+                    "data"
+                ],
+                "summary": "Get random data",
+                "parameters": [
+                    {
+                        "description": "Data request parameters",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/api.DataRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Random data in requested format",
+                        "schema": {
+                            "type": "array",
+                            "items": {}
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not enough data available",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Server error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/health": {
+            "get": {
+                "description": "Checks health of the API server and its dependencies (Controller, Fortuna, VirtIO, and Database services)",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "status"
+                ],
+                "summary": "Health check endpoint",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.HealthCheckResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/status": {
+            "get": {
+                "description": "Get detailed status of TRNG, Fortuna, and VirtIO systems with comprehensive metrics. VirtIO metrics are queried directly from the VirtIO service. Note: VirtIO does not have polling_count as it is not polled by the API (only seeded).",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "status"
+                ],
+                "summary": "Get system status",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.StatusResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Server error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    },
+    "definitions": {
+        "api.ConsumeConfig": {
+            "type": "object",
+            "properties": {
+                "consume": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "api.DataRequest": {
+            "type": "object",
+            "required": [
+                "format",
+                "limit",
+                "source"
+            ],
+            "properties": {
+                "format": {
+                    "type": "string",
+                    "enum": [
+                        "int8",
+                        "int16",
+                        "int32",
+                        "int64",
+                        "uint8",
+                        "uint16",
+                        "uint32",
+                        "uint64",
+                        "binary"
+                    ]
+                },
+                "limit": {
+                    "type": "integer",
+                    "maximum": 100000,
+                    "minimum": 1
+                },
+                "offset": {
+                    "type": "integer",
+                    "minimum": 0
+                },
+                "source": {
+                    "type": "string",
+                    "enum": [
+                        "trng",
+                        "fortuna",
+                        "virtio"
+                    ]
+                }
+            }
+        },
+        "api.HealthCheckResponse": {
+            "type": "object",
+            "properties": {
+                "details": {
+                    "type": "object",
+                    "properties": {
+                        "api": {
+                            "type": "boolean"
+                        },
+                        "controller": {
+                            "type": "boolean"
+                        },
+                        "database": {
+                            "type": "boolean"
+                        },
+                        "fortuna": {
+                            "type": "boolean"
+                        },
+                        "virtio": {
+                            "type": "boolean"
+                        }
+                    }
+                },
+                "status": {
+                    "type": "string"
+                },
+                "timestamp": {
+                    "type": "string"
+                }
+            }
+        },
+        "api.QueueConfig": {
+            "type": "object",
+            "required": [
+                "fortuna_queue_size",
+                "trng_queue_size",
+                "virtio_queue_size"
+            ],
+            "properties": {
+                "fortuna_queue_size": {
+                    "type": "integer",
+                    "maximum": 1000000,
+                    "minimum": 10
+                },
+                "trng_queue_size": {
+                    "type": "integer",
+                    "maximum": 1000000,
+                    "minimum": 10
+                },
+                "virtio_queue_size": {
+                    "type": "integer",
+                    "maximum": 1000000,
+                    "minimum": 10
+                }
+            }
+        },
+        "api.StatusResponse": {
+            "type": "object",
+            "properties": {
+                "controllers": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "boolean"
+                    }
+                },
+                "database": {
+                    "$ref": "#/definitions/database.Stats"
+                },
+                "fortuna": {
+                    "$ref": "#/definitions/database.DataSourceStats"
+                },
+                "trng": {
+                    "$ref": "#/definitions/database.DataSourceStats"
+                },
+                "trng_quality": {
+                    "$ref": "#/definitions/database.QualityMetrics"
+                },
+                "virtio": {
+                    "$ref": "#/definitions/api.VirtIOStats"
+                }
+            }
+        },
+        "api.VirtIOConfig": {
+            "type": "object",
+            "required": [
+                "queue_size",
+                "seeding_source"
+            ],
+            "properties": {
+                "queue_size": {
+                    "type": "integer",
+                    "maximum": 1000000,
+                    "minimum": 10
+                },
+                "seeding_source": {
+                    "type": "string",
+                    "enum": [
+                        "trng",
+                        "fortuna",
+                        "both"
+                    ]
+                }
+            }
+        },
+        "api.VirtIOStats": {
+            "type": "object",
+            "properties": {
+                "consumed_count": {
+                    "type": "integer"
+                },
+                "queue_capacity": {
+                    "type": "integer"
+                },
+                "queue_current": {
+                    "type": "integer"
+                },
+                "queue_dropped": {
+                    "type": "integer"
+                },
+                "queue_percentage": {
+                    "type": "number"
+                },
+                "total_generated": {
+                    "type": "integer"
+                },
+                "unconsumed_count": {
+                    "type": "integer"
+                }
+            }
+        },
+        "database.APTMetrics": {
+            "type": "object",
+            "properties": {
+                "bias_count": {
+                    "type": "integer"
+                },
+                "cutoff": {
+                    "type": "integer"
+                },
+                "samples_processed": {
+                    "type": "integer"
+                },
+                "window_size": {
+                    "type": "integer"
+                }
+            }
+        },
+        "database.DataSourceStats": {
+            "type": "object",
+            "properties": {
+                "consumed_count": {
+                    "description": "Total items consumed",
+                    "type": "integer"
+                },
+                "polling_count": {
+                    "description": "How many times data was polled/retrieved",
+                    "type": "integer"
+                },
+                "queue_capacity": {
+                    "description": "Maximum queue size",
+                    "type": "integer"
+                },
+                "queue_current": {
+                    "description": "Current items in queue",
+                    "type": "integer"
+                },
+                "queue_dropped": {
+                    "description": "Items dropped when queue was full",
+                    "type": "integer"
+                },
+                "queue_percentage": {
+                    "description": "Percentage of queue filled",
+                    "type": "number"
+                },
+                "total_generated": {
+                    "description": "Total items ever generated",
+                    "type": "integer"
+                },
+                "unconsumed_count": {
+                    "description": "Current unconsumed items",
+                    "type": "integer"
+                }
+            }
+        },
+        "database.MonobitMetrics": {
+            "type": "object",
+            "properties": {
+                "average": {
+                    "type": "number"
+                },
+                "ones": {
+                    "type": "integer"
+                },
+                "total": {
+                    "type": "integer"
+                },
+                "zeros": {
+                    "type": "integer"
+                }
+            }
+        },
+        "database.QualityMetrics": {
+            "type": "object",
+            "properties": {
+                "apt": {
+                    "$ref": "#/definitions/database.APTMetrics"
+                },
+                "monobit": {
+                    "$ref": "#/definitions/database.MonobitMetrics"
+                },
+                "repetition_count": {
+                    "$ref": "#/definitions/database.RepetitionCountMetrics"
+                }
+            }
+        },
+        "database.RepetitionCountMetrics": {
+            "type": "object",
+            "properties": {
+                "current_run": {
+                    "type": "integer"
+                },
+                "failures": {
+                    "type": "integer"
+                },
+                "last_value": {
+                    "type": "integer"
+                }
+            }
+        },
+        "database.Stats": {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "example": "memory://channels"
+                },
+                "size_bytes": {
+                    "type": "integer",
+                    "example": 0
+                },
+                "size_human": {
+                    "type": "string",
+                    "example": "0 B (in-memory)"
+                }
+            },
+            "description": "In-memory queue storage statistics (no on-disk database)."
+        }
+    }
+}

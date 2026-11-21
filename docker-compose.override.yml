@@ -1,0 +1,2 @@
+# Intentionally empty — local ports come from .env (TRAEFIK_HTTP_PORT / TRAEFIK_HTTPS_PORT)
+services: {}

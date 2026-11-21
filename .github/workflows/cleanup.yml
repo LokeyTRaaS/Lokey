@@ -24,8 +24,8 @@ jobs:
       contents: read
     strategy:
       matrix:
-        service: [controller, api, fortuna]
-        arch: [amd64, arm64, armv7]
+        service: [controller, api, fortuna, virtio]
+        arch: [amd64, arm64]
 
     steps:
       - name: Checkout code

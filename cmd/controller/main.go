@@ -9,10 +9,12 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/gin-gonic/gin"
+
 	"github.com/lokey/rng-service/pkg/atecc608a"
 )
 
@@ -22,7 +24,7 @@ const (
 )
 
 type Controller struct {
-	device *atecc608a.Controller
+	device atecc608a.EntropySource
 	port   int
 	router *gin.Engine
 }
@@ -34,10 +36,8 @@ func customLogger() gin.HandlerFunc {
 		path := c.Request.URL.Path
 		raw := c.Request.URL.RawQuery
 
-		// Process request
 		c.Next()
 
-		// Only log if status is not 200
 		if c.Writer.Status() != http.StatusOK {
 			end := time.Now()
 			latency := end.Sub(start)
@@ -58,64 +58,61 @@ func customLogger() gin.HandlerFunc {
 	}
 }
 
+func newRouter() *gin.Engine {
+	logLevel := os.Getenv("LOG_LEVEL")
+	if logLevel == "WARN" || logLevel == "ERROR" {
+		router := gin.New()
+		router.Use(gin.Recovery())
+		router.Use(customLogger())
+		return router
+	}
+	return gin.Default()
+}
+
+func NewControllerFromSource(device atecc608a.EntropySource, port int) *Controller {
+	return &Controller{
+		device: device,
+		port:   port,
+		router: newRouter(),
+	}
+}
+
 func NewController(i2cBusNumber int, port int) (*Controller, error) {
-	// Initialize ATECC608A controller
 	device, err := atecc608a.NewController(i2cBusNumber)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize ATECC608A: %w", err)
 	}
-
-	// Initialize router based on log level
-	var router *gin.Engine
-	logLevel := os.Getenv("LOG_LEVEL")
-
-	if logLevel == "WARN" || logLevel == "ERROR" {
-		// Production mode: no default middleware, only log errors
-		router = gin.New()
-		router.Use(gin.Recovery())
-		router.Use(customLogger()) // Only logs non-200
-	} else {
-		// Debug/Info mode: use default logger
-		router = gin.Default()
-	}
-
-	return &Controller{
-		device: device,
-		port:   port,
-		router: router,
-	}, nil
+	return NewControllerFromSource(device, port), nil
 }
 
 func (c *Controller) setupRoutes() {
-	// API routes
 	c.router.GET("/health", c.healthCheckHandler)
 	c.router.GET("/info", c.infoHandler)
 	c.router.GET("/generate", c.generateHandler)
 }
 
 func (c *Controller) Start() error {
-	// Setup routes
 	c.setupRoutes()
 
-	// Start HTTP server
 	serverErr := make(chan error, 1)
 	server := &http.Server{
-		Addr:    fmt.Sprintf(":%d", c.port),
-		Handler: c.router,
+		Addr:              fmt.Sprintf(":%d", c.port),
+		Handler:           c.router,
+		ReadHeaderTimeout: 10 * time.Second,
 	}
 
 	logLevel := os.Getenv("LOG_LEVEL")
 
 	go func() {
 		if logLevel == "DEBUG" || logLevel == "INFO" || logLevel == "" {
-			log.Printf("[INFO] Starting controller server on port %d", c.port)
+			log.Printf("[INFO] Starting controller server on port %d (mode=%s device_id=%s)",
+				c.port, c.device.Mode(), c.device.DeviceID())
 		}
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			serverErr <- err
 		}
 	}()
 
-	// Wait for shutdown signal
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
@@ -128,7 +125,6 @@ func (c *Controller) Start() error {
 		}
 	}
 
-	// Graceful shutdown
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -136,42 +132,37 @@ func (c *Controller) Start() error {
 		return fmt.Errorf("server shutdown error: %w", err)
 	}
 
-	// Close resources
 	if err := c.device.Close(); err != nil {
-		log.Printf("[WARN] Error closing ATECC608A: %v", err)
+		log.Printf("[WARN] Error closing entropy source: %v", err)
 	}
 
 	return nil
 }
 
-// HTTP Handlers
-
 func (c *Controller) healthCheckHandler(ctx *gin.Context) {
 	healthy := c.device.HealthCheck()
-	if healthy {
-		ctx.JSON(http.StatusOK, gin.H{
-			"status":    "healthy",
-			"timestamp": time.Now().Format(time.RFC3339),
-		})
-	} else {
-		ctx.JSON(http.StatusServiceUnavailable, gin.H{
-			"status":    "unhealthy",
-			"timestamp": time.Now().Format(time.RFC3339),
-			"details": gin.H{
-				"device": c.device.HealthCheck(),
-			},
-		})
+	payload := gin.H{
+		"status":    map[bool]string{true: "healthy", false: "unhealthy"}[healthy],
+		"timestamp": time.Now().Format(time.RFC3339),
+		"mode":      c.device.Mode(),
+		"device_id": c.device.DeviceID(),
 	}
+	if healthy {
+		ctx.JSON(http.StatusOK, payload)
+		return
+	}
+	ctx.JSON(http.StatusServiceUnavailable, payload)
 }
 
 func (c *Controller) infoHandler(ctx *gin.Context) {
 	ctx.JSON(http.StatusOK, gin.H{
-		"status": "running",
+		"status":    "running",
+		"mode":      c.device.Mode(),
+		"device_id": c.device.DeviceID(),
 	})
 }
 
 func (c *Controller) generateHandler(ctx *gin.Context) {
-	// Get count parameter (optional, default 1)
 	countStr := ctx.DefaultQuery("count", "1")
 	count, err := strconv.Atoi(countStr)
 	if err != nil || count < 1 || count > 100 {
@@ -179,11 +170,8 @@ func (c *Controller) generateHandler(ctx *gin.Context) {
 		return
 	}
 
-	// Generate multiple raw random data if requested
 	data := make([]string, 0, count)
-
 	for i := 0; i < count; i++ {
-		// Call GenerateRandom() to get raw random data
 		randomData, err := c.device.GenerateRandom()
 		if err != nil {
 			log.Printf("[ERROR] Failed to generate random data: %v", err)
@@ -193,26 +181,17 @@ func (c *Controller) generateHandler(ctx *gin.Context) {
 		data = append(data, hex.EncodeToString(randomData))
 	}
 
-	// Return single data or array based on count
 	if count == 1 {
-		ctx.JSON(http.StatusOK, gin.H{
-			"data": data[0],
-		})
-	} else {
-		ctx.JSON(http.StatusOK, gin.H{
-			"data": data,
-		})
+		ctx.JSON(http.StatusOK, gin.H{"data": data[0], "mode": c.device.Mode(), "device_id": c.device.DeviceID()})
+		return
 	}
+	ctx.JSON(http.StatusOK, gin.H{"data": data, "mode": c.device.Mode(), "device_id": c.device.DeviceID()})
 }
 
 func main() {
-	// Read configuration from environment variables
-	i2cBusNumber := DefaultI2CBusNumber
-	if val, ok := os.LookupEnv("I2C_BUS_NUMBER"); ok {
-		if n, err := fmt.Sscanf(val, "%d", &i2cBusNumber); n != 1 || err != nil {
-			log.Printf("[WARN] Invalid I2C_BUS_NUMBER, using default: %d", DefaultI2CBusNumber)
-			i2cBusNumber = DefaultI2CBusNumber
-		}
+	mode := strings.ToLower(strings.TrimSpace(os.Getenv("CONTROLLER_MODE")))
+	if mode == "" {
+		mode = "hardware"
 	}
 
 	port := DefaultPort
@@ -223,22 +202,33 @@ func main() {
 		}
 	}
 
-	// Create and start controller
-	controller, err := NewController(i2cBusNumber, port)
-	if err != nil {
-		log.Fatalf("[ERROR] Failed to create controller: %v", err)
+	var controller *Controller
+	switch mode {
+	case "emulated", "emulator", "soft":
+		controller = NewControllerFromSource(atecc608a.NewEmulatedController(), port)
+	case "hardware", "hw":
+		i2cBusNumber := DefaultI2CBusNumber
+		if val, ok := os.LookupEnv("I2C_BUS_NUMBER"); ok {
+			if n, err := fmt.Sscanf(val, "%d", &i2cBusNumber); n != 1 || err != nil {
+				log.Printf("[WARN] Invalid I2C_BUS_NUMBER, using default: %d", DefaultI2CBusNumber)
+				i2cBusNumber = DefaultI2CBusNumber
+			}
+		}
+		var err error
+		controller, err = NewController(i2cBusNumber, port)
+		if err != nil {
+			log.Fatalf("[ERROR] Failed to create controller: %v", err)
+		}
+	default:
+		log.Fatalf("[ERROR] Unknown CONTROLLER_MODE=%q (use emulated or hardware)", mode)
 	}
 
 	logLevel := os.Getenv("LOG_LEVEL")
 	if logLevel == "DEBUG" || logLevel == "INFO" || logLevel == "" {
-		log.Printf("[INFO] Starting TRNG controller with configuration:")
-		log.Printf("[INFO]   I2C Bus Number: %d", i2cBusNumber)
-		log.Printf("[INFO]   Port: %d", port)
-		log.Printf("[INFO]   Log Level: %s", logLevel)
+		log.Printf("[INFO] Starting TRNG controller mode=%s port=%d", mode, port)
 	}
 
-	err = controller.Start()
-	if err != nil {
+	if err := controller.Start(); err != nil {
 		log.Fatalf("[ERROR] Controller error: %v", err)
 	}
 

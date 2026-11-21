@@ -1,48 +1,32 @@
-FROM golang:1.25-alpine AS builder
+FROM golang:1.27-alpine AS builder
 
 WORKDIR /app
 
-# Install build dependencies for CGO and I2C
 RUN apk add --no-cache gcc musl-dev linux-headers
 
-# Copy the module files first to leverage Docker cache
 COPY go.mod go.sum ./
 COPY cmd/controller/go.mod cmd/controller/go.sum ./cmd/controller/
 
-# Download dependencies
 RUN go mod download && cd cmd/controller && go mod download
 
-# Copy the rest of the source code
 COPY . .
 
-# Build the application with CGO enabled
-# Using -trimpath for smaller binaries and more reproducible builds
-RUN cd cmd/controller && CGO_ENABLED=1 GOOS=linux go build -x -trimpath -o /app/controller
+RUN cd cmd/controller && CGO_ENABLED=1 GOOS=linux go build -trimpath -o /out/controller
 
-# Create a smaller runtime image
 FROM alpine:latest
 
-# Add only the necessary runtime dependencies
-# ca-certificates for HTTPS, libc6-compat for dynamic linking, i2c-tools for I2C support
 RUN apk --no-cache add ca-certificates libc6-compat i2c-tools
 
-WORKDIR /app
+COPY --from=builder /out/controller /usr/local/bin/controller
 
-# Copy the binary from the builder stage
-COPY --from=builder /app/controller /app/controller
-
-# Set environment variables
 ENV PORT=8081 \
     I2C_BUS_NUMBER=1 \
     FORCE_CONFIG=false \
     LOG_LEVEL=INFO
 
-# Expose the port
 EXPOSE 8081
 
-# Health check
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-  CMD wget --no-verbose --tries=1 -O /dev/null http://localhost:8081/health || exit 1
+  CMD ["wget", "--no-verbose", "--tries=1", "-O", "/dev/null", "http://localhost:8081/health"]
 
-# Run the application
-CMD ["/app/controller"]
+ENTRYPOINT ["/usr/local/bin/controller"]

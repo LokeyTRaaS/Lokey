@@ -1,4 +1,4 @@
-name: Lint
+name: Lint and Test
 
 on:
   push:
@@ -10,6 +10,9 @@ on:
       - refactor/**
     tags:
       - 'v*'
+  pull_request:
+    branches:
+      - main
 
 jobs:
   golangci:
@@ -22,10 +25,9 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version: '1.24'
+          go-version: '1.27'
           cache: true
 
-      # Add this step to download dependencies
       - name: Download dependencies
         run: |
           go mod download
@@ -33,15 +35,20 @@ jobs:
           cd cmd/api && go mod download && go mod tidy && cd ../..
           cd cmd/controller && go mod download && go mod tidy && cd ../..
           cd cmd/fortuna && go mod download && go mod tidy && cd ../..
+          cd cmd/virtio && go mod download && go mod tidy && cd ../..
 
-      - name: golangci-lint
+      - name: Run golangci-lint on source code
         uses: golangci/golangci-lint-action@v8
         with:
-          version: latest
-          args: --timeout=5m
-          # Remove --out-format to use config file settings
+          version: v2.15.0
+          args: --config .golangci.yml ./pkg/... ./cmd/...
 
-  # Optional: separate job for running tests
+      - name: Run golangci-lint on tests
+        uses: golangci/golangci-lint-action@v8
+        with:
+          version: v2.15.0
+          args: --config .golangci-tests.yml ./tests/...
+
   test:
     name: Run Tests
     runs-on: ubuntu-latest
@@ -52,22 +59,27 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version: '1.24'
+          go-version: '1.27'
           cache: true
 
       - name: Download dependencies
         run: |
           go mod download
           go mod tidy
+          cd cmd/api && go mod download && go mod tidy && cd ../..
+          cd cmd/controller && go mod download && go mod tidy && cd ../..
+          cd cmd/fortuna && go mod download && go mod tidy && cd ../..
+          cd cmd/virtio && go mod download && go mod tidy && cd ../..
 
       - name: Run tests
-        run: go test -v -race -coverprofile=coverage.out ./...
-        continue-on-error: true  # Don't fail if no tests exist yet
+        run: go test -race -coverprofile=coverage.out ./...
 
       - name: Upload coverage
-        uses: codecov/codecov-action@v3
+        uses: codecov/codecov-action@v5
         with:
+          token: ${{ secrets.CODECOV_TOKEN }}
           files: ./coverage.out
           flags: unittests
           name: codecov-umbrella
+          fail_ci_if_error: false
         if: always()

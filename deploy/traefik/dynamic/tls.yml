@@ -1,0 +1,9 @@
+# Optional file-based certificates (place tls.crt / tls.key in /certs)
+# tls:
+#   certificates:
+#     - certFile: /certs/tls.crt
+#       keyFile: /certs/tls.key
+tls:
+  options:
+    default:
+      minVersion: VersionTLS12

@@ -78,26 +78,20 @@ ports:
 - "8080:8080"
 environment:
 - PORT=8080
-- DB_PATH=/data/api.db
 - CONTROLLER_ADDR=http://controller:8081
 - FORTUNA_ADDR=http://fortuna:8082
 - TRNG_QUEUE_SIZE=100
 - FORTUNA_QUEUE_SIZE=100
 - TRNG_POLL_INTERVAL_MS=1000
 - FORTUNA_POLL_INTERVAL_MS=5000
-volumes:
-- api-data:/data
-
-volumes:
-api-data:
 ```
 ## Raspberry Pi Deployment
 
 ### Prerequisites
 
-- Raspberry Pi Zero 2W (or newer)
+- Raspberry Pi 5 (ARM64) or x86_64 host
 - ATECC608A chip properly connected (see [Hardware Setup](hardware-setup.md))
-- Raspberry Pi OS (64-bit recommended for Pi 4/5, 32-bit for older models)
+- Raspberry Pi OS 64-bit (or NixOS) on Pi 5
 - Docker installed on the Pi
 
 ### Step 1: Set Up Development Machine
@@ -174,6 +168,19 @@ i2cdetect -y 1
 ```
 ### Step 3: Create Docker Compose File on Pi
 
+**Option A: Use the provided docker-compose.yaml (Recommended)**
+
+Copy the `docker-compose.yaml` from the repository to your Raspberry Pi and start the stack:
+
+```bash
+# On Raspberry Pi
+docker compose up -d
+```
+
+Entropy queues are held in memory (no on-disk database). Prefer SSD/NVMe on Pi 5 when possible; the old `local-tmpfs` binary-copy profile has been removed.
+
+**Option B: Create custom docker-compose.yaml**
+
 **Create `docker-compose.yaml` on the Raspberry Pi:**
 ```
 yaml
@@ -222,15 +229,12 @@ ports:
 - "8080:8080"
 environment:
 - PORT=8080
-- DB_PATH=/data/api.db
 - CONTROLLER_ADDR=http://controller:8081
 - FORTUNA_ADDR=http://fortuna:8082
 - TRNG_QUEUE_SIZE=1000
 - FORTUNA_QUEUE_SIZE=5000
 - TRNG_POLL_INTERVAL_MS=1000
 - FORTUNA_POLL_INTERVAL_MS=1000
-volumes:
-- ./data:/data  # Persist on host filesystem
 depends_on:
 - controller
 - fortuna
@@ -242,8 +246,9 @@ max-size: "10m"
 max-file: "3"
 ```
 ### Step 4: Deploy on Raspberry Pi
-```
-bash
+
+**Using the provided docker-compose.yaml (Recommended):**
+```bash
 # Pull images from your local registry
 docker compose pull
 
@@ -259,6 +264,26 @@ docker compose logs -f
 # Test API
 curl http://localhost:8080/api/v1/health
 ```
+
+**Using custom docker-compose.yaml:**
+```bash
+# Pull images from your local registry
+docker compose pull
+
+# Start services
+docker compose up -d
+
+# Verify all services are running
+docker compose ps
+
+# Check logs
+docker compose logs -f
+
+# Test API
+curl http://localhost:8080/api/v1/health
+```
+
+> **Note**: Queue data lives in RAM only. After a restart, polling refills the buffers. Size queues for available memory on the Pi.
 ### Step 5: Set Up as System Service (Optional)
 
 To start LoKey automatically on boot:
@@ -300,11 +325,10 @@ LoKey supports multiple architectures:
 
 - **AMD64** (x86_64) - Desktop, laptop, cloud servers
 - **ARM64** (aarch64) - Raspberry Pi 4/5, Apple Silicon, cloud ARM instances
-- **ARMv7** (armhf) - Raspberry Pi 2/3, older ARM devices
 
 ### GitHub Actions Build
 
-The CI/CD pipeline automatically builds multi-architecture images. See `.github/workflows/build-arm64.yml`.
+The CI/CD pipeline automatically builds multi-architecture images. See `.github/workflows/build.yml`.
 
 **Pull pre-built images:**
 ```
@@ -319,10 +343,6 @@ docker pull ghcr.io/lokeytraas/lokey/controller:latest-arm64
 docker pull ghcr.io/lokeytraas/lokey/api:latest-arm64
 docker pull ghcr.io/lokeytraas/lokey/fortuna:latest-arm64
 
-# ARMv7 (Raspberry Pi 2/3)
-docker pull ghcr.io/lokeytraas/lokey/controller:latest-armv7
-docker pull ghcr.io/lokeytraas/lokey/api:latest-armv7
-docker pull ghcr.io/lokeytraas/lokey/fortuna:latest-armv7
 ```
 ### Local Cross-Compilation
 
@@ -340,13 +360,6 @@ docker buildx build \
 --load \
 .
 
-# Build for ARMv7
-docker buildx build \
---platform linux/arm/v7 \
--t lokey-controller:armv7 \
--f cmd/controller/Dockerfile.action \
---load \
-.
 ```
 ## Production Considerations
 
@@ -460,42 +473,16 @@ api:
 environment:
 - FORTUNA_ADDR=http://fortuna-1:8082,http://fortuna-2:8082
 ```
-**Database Backups:**
-```
-bash
-# Backup script
-#!/bin/bash
-DATE=$(date +%Y%m%d_%H%M%S)
-docker compose exec api cp /data/api.db /data/backup_${DATE}.db
+**Queue / storage notes:**
 
-# Rotate old backups
-find /path/to/data -name "backup_*.db" -mtime +7 -delete
-```
-### Storage Management
+There is no on-disk entropy database to back up. Status reports in-memory usage:
 
-**Monitor Database Size:**
+```bash
+curl -sk https://localhost/api/v1/status | jq '.database'
+# {"size_bytes":0,"size_human":"0 B (in-memory)","path":"memory://channels"}
 ```
-bash
-# Check size
-docker compose exec api ls -lh /data/api.db
 
-# Set up alerts when size exceeds threshold
-curl http://localhost:8080/api/v1/status | jq '.database.size_bytes'
-```
-**Database Maintenance:**
-
-The BoltDB database is self-managing, but you can:
-```
-bash
-# Stop services
-docker compose down
-
-# Compact database (optional)
-# BoltDB automatically handles compaction
-
-# Start services
-docker compose up -d
-```
+After `docker compose down` / restart, queues are empty until polling refills them.
 ## Environment Variables
 
 ### API Service
@@ -503,29 +490,108 @@ docker compose up -d
 | Variable                  | Description                          | Default                  | Valid Range         |
 |---------------------------|--------------------------------------|--------------------------|---------------------|
 | `PORT`                    | API server port                      | `8080`                   | 1-65535             |
-| `DB_PATH`                 | Path to BoltDB file                  | `/data/api.db`           | Any valid path      |
 | `CONTROLLER_ADDR`         | Controller service URL               | `http://controller:8081` | Valid HTTP URL      |
 | `FORTUNA_ADDR`            | Fortuna service URL                  | `http://fortuna:8082`    | Valid HTTP URL      |
 | `TRNG_QUEUE_SIZE`         | TRNG data queue capacity             | `100`                    | 10-10000            |
 | `FORTUNA_QUEUE_SIZE`      | Fortuna data queue capacity          | `100`                    | 10-10000            |
+| `VIRTIO_QUEUE_SIZE`       | VirtIO data queue capacity           | `15000` (~480 KB)       | 10-1000000          |
 | `TRNG_POLL_INTERVAL_MS`   | TRNG polling interval (milliseconds) | `1000`                   | 100-60000           |
+| `VIRTIO_POLL_INTERVAL_MS` | (Deprecated - VirtIO is not polled) | N/A                    | N/A                 |
+| `VIRTIO_SEED_INTERVAL_SECONDS` | VirtIO seeding interval (seconds) | `30`              | 10-3600             |
+| `VIRTIO_SEEDING_SOURCE`   | VirtIO seeding source                | `trng`                   | trng, fortuna, both |
+| `VIRTIO_ADDR`             | VirtIO service address               | `http://virtio:8083`     | Valid HTTP URL      |
 | `FORTUNA_POLL_INTERVAL_MS`| Fortuna polling interval (ms)        | `5000`                   | 100-60000           |
 
 ### Controller Service
 
-| Variable          | Description                        | Default | Valid Range |
-|-------------------|------------------------------------|---------|-------------|
-| `PORT`            | Controller server port             | `8081`  | 1-65535     |
-| `I2C_BUS_NUMBER`  | I2C bus for ATECC608A              | `1`     | 0-10        |
-| `FORCE_CONFIG`    | Force ATECC608A configuration      | `false` | true/false  |
-| `DISABLE_AUTO_CONFIG` | Disable automatic configuration | `false` | true/false  |
+| Variable                              | Description                                    | Default      | Valid Range |
+|---------------------------------------|------------------------------------------------|--------------|-------------|
+| `PORT`                                | Controller server port                         | `8081`       | 1-65535     |
+| `I2C_BUS_NUMBER`                      | I2C bus for ATECC608A                          | `1`           | 0-10        |
+| `FORCE_CONFIG`                         | Force ATECC608A configuration                  | `false`       | true/false  |
+| `DISABLE_AUTO_CONFIG`                 | Disable automatic configuration                 | `false`       | true/false  |
+| `CONTROLLER_RECOVERY_COOLDOWN_SECONDS`| Cooldown period after recovery (seconds)        | `30`          | 10-300      |
+| `CONTROLLER_RECOVERY_VALIDATION_ATTEMPTS` | Number of validation samples after recovery | `3`           | 1-10        |
+| `CONTROLLER_CIRCUIT_BREAKER_COOLDOWN_MINUTES` | Circuit breaker cooldown (minutes)      | `5`           | 1-60        |
+
+### API Service - Quality Metrics
+
+| Variable                  | Description                                    | Default | Valid Range |
+|---------------------------|------------------------------------------------|---------|-------------|
+| `TRNG_APT_WINDOW_SIZE`    | APT test window size in bytes                  | `512`   | 256-2048    |
+
+**APT Window Size Trade-offs**:
+- **Larger values (1024-2048)**: Better bias detection, more memory (~1-2KB), slower updates
+- **Default (512)**: Balanced detection and performance (~536 bytes)
+- **Smaller values (256-512)**: Less memory, faster updates, may miss subtle biases
 
 ### Fortuna Service
 
-| Variable               | Description                    | Default | Valid Range |
-|------------------------|--------------------------------|---------|-------------|
-| `PORT`                 | Fortuna server port            | `8082`  | 1-65535     |
-| `AMPLIFICATION_FACTOR` | Data amplification multiplier  | `4`     | 1-100       |
+| Variable                        | Description                              | Default | Valid Range |
+|---------------------------------|------------------------------------------|---------|-------------|
+| `PORT`                          | Fortuna server port                      | `8082`  | 1-65535     |
+| `AMPLIFICATION_FACTOR`          | Data amplification multiplier            | `4`     | 1-100       |
+| `FORTUNA_MAX_RESEED_INTERVAL_HOURS` | Maximum time between reseeds (hours) | `1`     | 1-24        |
+
+### VirtIO Service
+
+| Variable                  | Description                          | Default              | Valid Range |
+|---------------------------|--------------------------------------|----------------------|-------------|
+| `PORT`                    | VirtIO HTTP API port                 | `8083`               | 1-65535     |
+| `RNG_DEVICE`              | (Ignored - VirtIO doesn't use device) | N/A                   | N/A         |
+| `VIRTIO_QUEUE_SIZE`       | Internal queue capacity (items)     | `15000` (~480 KB)    | 10-1000000  |
+| `VIRTIO_PIPE_PATH`        | Named pipe (FIFO) filesystem path   | `/var/run/lokey/virtio-rng` | Valid path |
+| `LOG_LEVEL`               | Logging level                        | `INFO`               | DEBUG, INFO, WARN, ERROR |
+
+**Queue Size Calculation:**
+- Default: 15,000 items × 32 bytes/item = 480,000 bytes (480 KB)
+- Target capacity: 100-500 KB for optimal performance
+- Can be adjusted based on expected consumption rate and boot spike tolerance
+
+**Named Pipe Setup:**
+- The named pipe directory must exist on the host before starting the service
+- Create the directory with appropriate permissions:
+  ```bash
+  sudo mkdir -p /var/run/lokey
+  sudo chmod 755 /var/run/lokey
+  ```
+- The pipe file is automatically created by the VirtIO service
+- Ensure the Docker volume mount includes the pipe directory:
+  ```yaml
+  volumes:
+    - /var/run/lokey:/var/run/lokey
+  ```
+
+**Hypervisor Configuration:**
+
+**QEMU:**
+```bash
+qemu-system-x86_64 \
+  -object rng-random,id=rng0,filename=/var/run/lokey/virtio-rng \
+  -device virtio-rng-pci,rng=rng0 \
+  ...
+```
+
+**Proxmox:**
+- Edit VM configuration and add:
+  ```
+  rng0: /var/run/lokey/virtio-rng
+  ```
+- Or via command line:
+  ```bash
+  qm set <vmid> -rng0 /var/run/lokey/virtio-rng
+  ```
+
+**VirtualBox:**
+- Configure VM to use host device `/var/run/lokey/virtio-rng` as RNG source
+
+**VMware:**
+- Configure VM to use host device `/var/run/lokey/virtio-rng` as RNG source
+
+**Kubernetes/OpenShift:**
+- Use a sidecar container that reads from HTTP streaming endpoint (`GET /stream`)
+- Sidecar creates a named pipe in the pod for application consumption
+- See Kubernetes deployment examples in architecture documentation
 
 ### Example Configuration
 
@@ -560,6 +626,17 @@ environment:
 ```
 ## Docker Images
 
+### Dockerfile pattern
+
+All LoKey services use multi-stage Alpine images:
+
+1. Build the Go binary in a `golang:1.27-alpine` builder stage
+2. Copy the binary to `/usr/local/bin/<service>` in a minimal Alpine runtime
+3. `ENTRYPOINT` the binary directly (no `/app-bin` copy script)
+4. Exec-form `HEALTHCHECK` with busybox `wget` (keeps Docker healthchecks without a shell)
+
+Entropy queues are in-memory only — no `api-data` volume is required for the API.
+
 ### Official Images
 
 Pre-built images are available on GitHub Container Registry:
@@ -574,6 +651,8 @@ docker pull ghcr.io/lokeytraas/lokey/fortuna:latest-arm64
 docker pull ghcr.io/lokeytraas/lokey/api:v1.0.0-arm64
 ```
 ### Building Custom Images
+
+**Development builds (from source):**
 ```
 bash
 # Build all services
@@ -581,10 +660,20 @@ docker compose build
 
 # Build specific service
 docker compose build api
+```
 
-# Build with specific Dockerfile
+**Production builds (pre-built binaries):**
+```
+bash
+# Build with Dockerfile.action (uses pre-built binaries)
 docker build -t lokey-api:custom -f cmd/api/Dockerfile.action .
 ```
+
+**Dockerfile Types:**
+- `Dockerfile` - Builds from Go source code (development)
+- `Dockerfile.action` - Uses pre-built binaries (CI/CD, production)
+
+Both ship the binary at `/usr/local/bin/<service>` with exec-form healthchecks.
 ## Monitoring
 
 ### Health Checks
@@ -600,6 +689,9 @@ curl http://localhost:8081/health
 
 # Fortuna health
 curl http://localhost:8082/health
+
+# VirtIO health
+curl http://localhost:8083/health
 ```
 ### Prometheus Metrics
 
@@ -660,6 +752,131 @@ groups:
 ```
 ## Troubleshooting
 
+### Controller Recovery Loop
+
+If the controller is stuck in a recovery loop:
+
+**Symptoms:**
+- Logs show repeated "recovery successful" but device still returns 0xFF patterns
+- Health checks fail immediately after recovery
+- High CPU usage from recovery attempts
+
+**Solutions:**
+1. **Check I2C Hardware:**
+   ```bash
+   # Verify device is connected
+   i2cdetect -y 1
+   # Should show 0x60 for ATECC608A
+   
+   # Check I2C permissions
+   ls -l /dev/i2c-1
+   # Should be readable/writable by container user
+   ```
+
+2. **Adjust Recovery Settings:**
+   ```yaml
+   environment:
+     - CONTROLLER_RECOVERY_VALIDATION_ATTEMPTS=5  # More validation
+     - CONTROLLER_RECOVERY_COOLDOWN_SECONDS=60    # Longer cooldown
+   ```
+
+3. **Check Circuit Breaker:**
+   - Circuit breaker opens after 5 consecutive failures
+   - Wait for cooldown period (default 5 minutes)
+   - Check logs for "Circuit breaker opened" messages
+
+4. **Hardware Diagnostics:**
+   ```bash
+   # Test I2C communication
+   docker compose exec controller i2cdetect -y 1
+   
+   # Check for I2C errors in kernel logs
+   dmesg | grep i2c
+   ```
+
+### Fortuna Health Check Failures
+
+If Fortuna shows as unhealthy:
+
+**Symptoms:**
+- Health endpoint returns 503
+- "Haven't been reseeded" errors
+- System shows degraded status
+
+**Solutions:**
+1. **Check Reseed Interval:**
+   ```yaml
+   environment:
+     - FORTUNA_MAX_RESEED_INTERVAL_HOURS=2  # Increase tolerance
+   ```
+
+2. **Verify Seeding:**
+   ```bash
+   # Check if API is successfully seeding Fortuna
+   docker compose logs api | grep "seeded Fortuna"
+   
+   # Test seeding manually
+   curl -X POST http://localhost:8082/seed \
+     -H "Content-Type: application/json" \
+     -d '{"seeds": ["a1b2c3..."]}'
+   ```
+
+3. **Check Controller Status:**
+   - Fortuna depends on controller for seeds
+   - If controller is failing, Fortuna won't get reseeded
+   - Check controller health: `curl http://localhost:8081/health`
+
+### I2C Communication Errors
+
+**Symptoms:**
+- "write /dev/i2c-1: input/output error"
+- "I2C sleep command failed"
+- Device not responding
+
+**Solutions:**
+1. **Hardware Connection:**
+   - Verify ATECC608A is properly connected
+   - Check SDA/SCL connections
+   - Verify power supply (3.3V)
+
+2. **I2C Bus Issues:**
+   ```bash
+   # Enable I2C in Raspberry Pi config
+   sudo raspi-config
+   # Interface Options -> I2C -> Enable
+   
+   # Reload I2C module
+   sudo modprobe -r i2c-dev
+   sudo modprobe i2c-dev
+   ```
+
+3. **Container Permissions:**
+   ```yaml
+   # Ensure device is accessible
+   devices:
+     - /dev/i2c-1:/dev/i2c-1
+   ```
+
+### Seed Validation Failures
+
+If seeding fails with "low quality detected":
+
+**Symptoms:**
+- "TRNG data validation failed" errors
+- "seed quality detected" messages
+- Fortuna not accepting seeds
+
+**Solutions:**
+1. **Controller Hardware Issue:**
+   - Controller returning 0xFF patterns indicates hardware failure
+   - Check I2C connection and device health
+   - May require hardware replacement
+
+2. **Temporary Workaround:**
+   - System will automatically retry
+   - Circuit breaker prevents wasted attempts
+   - Check controller recovery status
+
 ### Services Won't Start
 ```
 bash
@@ -684,18 +901,19 @@ i2cdetect -y 1
 # Check container has device access
 docker compose exec controller ls -l /dev/i2c-1
 ```
-### Database Errors
+### Queue / memory issues
 ```
 bash
-# Check database permissions
-docker compose exec api ls -la /data
+# Confirm in-memory storage
+curl -sk https://localhost/api/v1/status | jq '.database'
+# expect path: memory://channels
 
-# Check disk space
-df -h
+# Restart clears in-memory queues (polling refills them)
+docker compose restart api
 
-# Reset database (WARNING: deletes all data)
-docker compose down -v
-docker compose up -d
+# Check host memory pressure if queues are large
+free -h
+docker stats
 ```
 ### Performance Issues
 ```

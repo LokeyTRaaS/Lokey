@@ -8,6 +8,7 @@ Guide for developers contributing to LoKey.
 - [Project Structure](#project-structure)
 - [Building from Source](#building-from-source)
 - [Code Quality](#code-quality)
+- [Testing](#testing)
 - [Using Task](#using-task)
 - [Contributing](#contributing)
 
@@ -16,7 +17,7 @@ Guide for developers contributing to LoKey.
 ### Prerequisites
 
 **Required:**
-- Go 1.24 or later
+- Go 1.27 or later
 - Docker and Docker Compose
 - Git
 
@@ -62,9 +63,10 @@ task build
 ### Development Workflow
 
 **Using Docker Compose (Recommended):**
-```
-bash
-# Start all services
+
+**Docker Compose (default development):**
+```bash
+# Start all services (emulated controllers by default)
 docker compose up -d
 
 # View logs
@@ -108,9 +110,9 @@ curl http://localhost:8080/api/v1/health
 │   │   └── docs/                # Generated Swagger docs
 │   ├── atecc608a/               # Hardware interface
 │   │   └── controller.go
-│   ├── database/                # Data persistence
+│   ├── database/                # In-memory entropy queues
 │   │   ├── interface.go
-│   │   ├── bolt.go
+│   │   ├── channel.go
 │   │   └── factory.go
 │   └── fortuna/                 # Cryptographic PRNG
 │       └── fortuna.go
@@ -127,7 +129,7 @@ curl http://localhost:8080/api/v1/health
 
 - **`pkg/api`** - REST API, request handling, background polling
 - **`pkg/atecc608a`** - I2C communication with ATECC608A chip
-- **`pkg/database`** - BoltDB implementation, queue management
+- **`pkg/database`** - In-memory circular queues (`memory://channels`)
 - **`pkg/fortuna`** - Fortuna algorithm, AES-256 generation
 
 ## Building from Source
@@ -161,8 +163,6 @@ task build_fortuna
 # Raspberry Pi 4/5 (ARM64)
 GOOS=linux GOARCH=arm64 go build -o bin/controller-arm64 ./cmd/controller
 
-# Raspberry Pi 2/3 (ARMv7)
-GOOS=linux GOARCH=arm GOARM=7 go build -o bin/controller-armv7 ./cmd/controller
 
 # AMD64
 GOOS=linux GOARCH=amd64 go build -o bin/controller-amd64 ./cmd/controller
@@ -171,16 +171,23 @@ GOOS=linux GOARCH=amd64 go build -o bin/controller-amd64 ./cmd/controller
 
 ### Docker Build
 
+Alpine multi-stage images: build in Go, copy binary to `/usr/local/bin/<service>`,
+direct `ENTRYPOINT`, exec-form `wget` healthchecks. No `/app-bin` copy script.
+
 ```shell script
-# Development images
+# Development images (builds from source)
 docker compose build
 
-# Production images (optimized)
+# Production images (uses pre-built binaries)
 docker build -t lokey-api:latest -f cmd/api/Dockerfile.action .
 
 # Multi-architecture (for Raspberry Pi)
 task build_images_and_registry
 ```
+
+**Dockerfile Types:**
+- `Dockerfile` - Builds from source (for local development)
+- `Dockerfile.action` - Uses pre-built binaries (for CI/CD and production)
 
 
 ## Code Quality
@@ -226,6 +233,31 @@ swag init --parseDependency --parseInternal \
 ```
 
 
+## Testing
+
+### Running Tests
+
+```shell script
+# Run all tests with summary
+task test
+
+# Run tests for specific package
+go test ./pkg/api
+
+# Run specific test
+go test ./pkg/api -run TestServer_GetRandomData
+
+# Run with coverage
+go test ./pkg/api -cover
+
+# Run with race detection
+go test ./pkg/api -race
+```
+
+The `task test` command provides clean output showing only failures, errors, and a summary with test statistics.
+
+For comprehensive testing documentation, see **[Testing Guide](tests.md)**.
+
 ## Using Task
 
 Task is the recommended build tool. View available tasks:
@@ -241,12 +273,13 @@ task --list
 task build                      # Build all services
 task fmt                        # Format code
 task lint                       # Run linter
+task test                       # Run tests with summary
 task generate_swagger           # Generate API docs
 task dev_up                     # Start development environment
 task dev_down                   # Stop development environment
 task dev_logs                   # View logs
 task build_images_and_registry  # Build for Raspberry Pi
-task all                        # Format, lint, and build
+task all                        # Format, lint, test, and build
 ```
 
 
@@ -309,6 +342,8 @@ git push origin feature/my-feature
 
 - [ ] Code follows Go best practices
 - [ ] No linter warnings
+- [ ] Tests added/updated for new features
+- [ ] All tests pass (`task test`)
 - [ ] Documentation updated
 - [ ] Swagger annotations added (for API changes)
 - [ ] Backwards compatible
@@ -366,6 +401,7 @@ LoKey uses [Semantic Versioning](https://semver.org/):
 - [API Reference](https://lokeytraas.github.io/Lokey/api-reference.html)
 - [Architecture Guide](architecture.md)
 - [Deployment Guide](deployment.md)
+- [Testing Guide](tests.md)
 
 ### Go Resources
 - [Effective Go](https://go.dev/doc/effective_go)
@@ -385,6 +421,7 @@ LoKey uses [Semantic Versioning](https://semver.org/):
 - **[Quickstart](quickstart.md)** - Run LoKey locally
 - **[Architecture](architecture.md)** - Understand the system
 - **[API Examples](api-examples.md)** - Learn the API
+- **[Testing Guide](tests.md)** - Run and write tests
 - **[Deployment](deployment.md)** - Deploy to production
 
 Thank you for contributing to LoKey! 🎲

@@ -1,6 +1,8 @@
 # Hardware Setup Guide
 
-Complete guide for setting up Raspberry Pi Zero 2 W with ATECC608A cryptographic chip for LoKey.
+Complete guide for setting up **Raspberry Pi 5** (ARM64) with an ATECC608A cryptographic chip for LoKey.
+
+> **Unsupported:** Raspberry Pi Zero 2 W cannot sustain this stack with cgroups/namespaces and Docker Compose. See the [historical write-up](../medium-article-docker-to-nerdctl.md). For laptop testing without a chip, use `CONTROLLER_MODE=emulated` ([Quickstart](quickstart.md)).
 
 ## Table of Contents
 
@@ -383,25 +385,20 @@ Any writing to disk behaviour is detrenmental for performance therefore. There a
 * Database/State
   * The API maintains a buffer of data, for both TRNG (Raw ATECC608a data) and Fortuna (Seeded with ATECC608a, but amplified to 256 Bits) data.
   * We can choose the queue in the docker-compose.yaml to our preferred size. 
-  * We choose the method by which we manage this queue of data. The fastest option in a Go-Native option, in which we use a GO - channel. We also have the option of using BoltDB (Key-Value) Database. In future we are considering porting the BoltDB implementation to a Redis(like) database. The Go-Native option is in-memory and the fastest option. Note that this also considerably raises memory consumption.
+  * Queues are **in-memory only** (Go circular buffers / `memory://channels`). There is no BoltDB or other on-disk entropy store. Size queues for available RAM; restart clears buffers and polling refills them.
 
 ### Advised Configuration
 ```bash
   PORT: 8080
-  DB_PATH: /data/api.db
-  DB_IMPLEMENTATION: channel
   CONTROLLER_ADDR: http://controller:8081
   FORTUNA_ADDR: http://fortuna:8082
-  TRNG_QUEUE_SIZE: 500000 #For raspberry pi zero 2 max 100.000 of 31 bit items
-  FORTUNA_QUEUE_SIZE: 10000 #For raspberry pi zero 2 max 1000 of 256 bit items
+  TRNG_QUEUE_SIZE: 100000
+  FORTUNA_QUEUE_SIZE: 50000
   TRNG_POLL_INTERVAL_MS: 100
   FORTUNA_POLL_INTERVAL_MS: 100
 ```
 
-In which we set:
-* Polling rate to 100 ms for both TRNG and Fortuna.
-* Queue sizes to 100000 and 1000 respectively.
-* DB_IMPLEMENTATION to channel, for in-memory storage and fastest processing.
+Prefer Raspberry Pi 5 (or similar) with enough RAM for your queue sizes. Pi Zero 2 W is unsupported for the full stack.
 
 In a steady state, the API Service will consume approximately 82 MB of RAM. The Controller and Fortuna Services will consume approximately 10 MB of RAM.
 
