@@ -7,23 +7,24 @@ on:
       - prerelease/**
       - refactor/**
     paths:
-      - 'pkg/api/**'
-      - 'cmd/api/**'
-      - 'docs/**'
-      - '.github/workflows/docs.yml'
-  workflow_dispatch:  # Allow manual trigger
+      - "pkg/api/**"
+      - "cmd/api/**"
+      - "docs/**"
+      - ".github/workflows/docs.yml"
+  workflow_dispatch:
 
 permissions:
   contents: read
   pages: write
   id-token: write
 
-# Allow only one concurrent deployment
 concurrency:
-  group: "pages"
+  group: pages
   cancel-in-progress: true
 
 jobs:
+  # Build + upload must be a separate job from deploy-pages. Same-job deploy can
+  # race the Artifacts API and fail with "No artifacts named github-pages".
   generate-docs:
     runs-on: ubuntu-latest
     steps:
@@ -33,7 +34,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version: '1.27'
+          go-version: "1.27"
           cache: true
 
       - name: Install Swag
@@ -45,14 +46,13 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: '22'
+          node-version: "22"
 
       - name: Generate ReDoc HTML
         run: |
           npx @redocly/cli@1.34.3 build-docs \
             pkg/api/docs/swagger.json \
             -o docs/api-reference.html
-
           echo "Generated API reference at docs/api-reference.html"
 
       - name: Copy swagger.json for direct access
@@ -83,14 +83,21 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v5
         with:
-          path: './docs'
+          path: "./docs"
 
+  deploy:
+    needs: generate-docs
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
 
       - name: Output deployment URL
         run: |
-          echo "📚 Documentation deployed to: ${{ steps.deployment.outputs.page_url }}"
+          echo "Documentation deployed to: ${{ steps.deployment.outputs.page_url }}"
           echo "API Reference: ${{ steps.deployment.outputs.page_url }}api-reference.html"
           echo "Swagger JSON: ${{ steps.deployment.outputs.page_url }}swagger.json"
