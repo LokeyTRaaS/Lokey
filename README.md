@@ -90,13 +90,17 @@ Wire services with the env vars documented in [docs/deployment.md](docs/deployme
 
 ## Architecture
 
+```mermaid
+flowchart LR
+  Client -->|HTTPS| Traefik
+  Traefik --> App["API / Fortuna / VirtIO"]
+  Traefik --> Grafana
+  App --> Controllers
+  Prometheus --> App
+  Prometheus --> Controllers
 ```
-Client --HTTPS--> Traefik
-                    |-- API / Fortuna / VirtIO  (lokey-app + edge)
-                    |-- Grafana                 (lokey-metrics)
-API -------------- Controllers                 (lokey-devices only)
-Prometheus scrapes app + devices
-```
+
+Networks: `lokey-edge` (Traefik), `lokey-app` (API/Fortuna/VirtIO), `lokey-devices` (controllers), `lokey-metrics`. Entropy path detail: [Architecture](docs/architecture.md#fortuna-end-to-end).
 
 ## Local checks (pre-commit)
 

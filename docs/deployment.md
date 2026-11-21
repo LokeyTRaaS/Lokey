@@ -780,6 +780,12 @@ If the controller is stuck in a recovery loop:
 
 ### Fortuna Health Check Failures
 
+If Fortuna shows as unhealthy (container up but `/health` 503 / API `fortuna: false`):
+
+- Confirm API logs show `Successfully seeded Fortuna` every ~30s (not circuit breaker OPEN)
+- `/seed` failures used to leave the generator stuck unhealthy when pool selection followed the AES block counter; current builds use a dedicated `reseedCount` (see [Architecture](architecture.md#fortuna-end-to-end))
+- Restarting Fortuna clears in-RAM key/pools; the next successful TRNG reseed restores the long-term entropy path
+
 If Fortuna shows as unhealthy:
 
 **Symptoms:**

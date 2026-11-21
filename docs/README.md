@@ -16,7 +16,7 @@ Hardware-based true random number generation for **Raspberry Pi 5 (ARM64)** and 
 
 ## Developers
 
-- **[Architecture](architecture.md)**
+- **[Architecture](architecture.md)** — service map + [Fortuna seed/generate flow](architecture.md#fortuna-end-to-end)
 - **[Development](development.md)** — Go 1.27, amd64/arm64 builds
 - **[Releasing](releasing.md)** — semantic-release, `RELEASE_TOKEN`, GHCR tags
 - **[Testing](tests.md)**

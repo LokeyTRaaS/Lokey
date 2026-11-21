@@ -406,11 +406,13 @@ Cryptographically secure pseudo-random numbers amplified from TRNG seeds.
 }
 ```
 **Characteristics:**
-- **Source**: Fortuna algorithm seeded by hardware TRNG
+- **Source**: AES-CTR Fortuna CSPRNG; boot key from `crypto/rand`, then reseeded from ATECC TRNG
+- **Reseed**: API posts 5 TRNG samples (~155 B) every 30s → pools → `SHA-256(key ‖ pools)` → new key
 - **Rate**: High throughput (1000s of samples/second)
-- **Quality**: Cryptographically secure, periodically reseeded with TRNG
+- **Quality**: Cryptographically secure; key rekeyed after every generate
 - **Latency**: Low, usually immediate
 - **Use case**: High-volume applications, simulations, gaming, testing
+- **Detail**: [Architecture — Fortuna end-to-end](architecture.md#fortuna-end-to-end)
 
 **Example:**
 ```bash

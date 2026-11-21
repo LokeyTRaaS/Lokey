@@ -21,63 +21,30 @@ LoKey is a microservices-based true random number generation system designed for
 
 ### Design Principles
 
-1. **Separation of Concerns** - Each service has a single, well-defined responsibility
-2. **Stateless Services** - Controller and Fortuna services maintain no persistent state
-3. **In-memory queues** - API holds TRNG/Fortuna entropy in RAM (`memory://channels`); restart clears queues
-4. **Fault Tolerance** - Services can restart independently (entropy buffers are rebuilt by polling)
-5. **Horizontal Scalability** - Fortuna services can be replicated for higher throughput
+1. **Separation of Concerns** — each service has a single responsibility
+2. **Ephemeral process state** — Controller is request-scoped; Fortuna keeps key/pools/counter in RAM only (lost on restart); API/VirtIO queues are in-memory
+3. **In-memory queues** — API holds TRNG/Fortuna entropy in RAM (`memory://channels`); restart clears queues
+4. **Fault Tolerance** — services restart independently; entropy buffers refill via polling/seeding
+5. **Scale controllers, not Fortuna** — `CONTROLLER_ADDRS` supports multiple devices; `FORTUNA_ADDR` is a **single** URL (no multi-Fortuna round-robin)
 
 ### High-Level Architecture
+
+```mermaid
+flowchart TB
+  Client["Client apps"] -->|HTTPS| Traefik
+  Traefik --> API["API service"]
+  Traefik --> Grafana
+  API --> TRNGQ["In-mem TRNG queue"]
+  API --> FQ["In-mem Fortuna queue"]
+  API -->|poll + seed| CTRL["Controller"]
+  API -->|seed + poll /generate| FORT["Fortuna CSPRNG"]
+  API -->|seed| VIRT["VirtIO"]
+  CTRL --> ATECC["ATECC608A/B TRNG"]
+  VIRT -->|pipe / HTTP stream| VMs["VMs / containers"]
 ```
 
-┌─────────────────────────────────────────────────────────────────┐
-│                         Client Applications                      │
-└────────────────────────────┬────────────────────────────────────┘
-│
-│ HTTP REST API
-│
-▼
-┌─────────────────────────────────────────────────────────────────┐
-│                          API Service                             │
-│  ┌──────────────────────────────────────────────────────────┐   │
-│  │  • REST API Endpoints                                     │   │
-│  │  • Request Validation                                     │   │
-│  │  • Data Format Conversion                                 │   │
-│  │  • Queue Management                                       │   │
-│  │  • Statistics & Metrics                                   │   │
-│  └──────────────────────────────────────────────────────────┘   │
-│                             │                                    │
-│  ┌──────────────────────────┼───────────────────────────────┐   │
-│  │     In-memory queues     │                               │   │
-│  │  • TRNG Data Queue      │                               │   │
-│  │  • Fortuna Data Queue   │                               │   │
-│  │  • (VirtIO has own queue)│                               │   │
-│  │  • Counters & Stats     │                               │   │
-│  └──────────────────────────┼───────────────────────────────┘   │
-└─────────────────────────────┼────────────────────────────────────┘
-│
-┌───────────┴───────────┬───────────┴───────────┐
-│                      │                       │
-▼                      ▼                       ▼
-┌─────────────────────┐ ┌─────────────────────┐ ┌─────────────────────┐
-│ Controller Service  │ │  Fortuna Service    │ │  VirtIO Service     │
-│                     │ │                     │ │                     │
-│ ┌─────────────────┐ │ │ ┌─────────────────┐ │ │ ┌─────────────────┐ │
-│ │  I2C Interface  │ │ │ │ Fortuna CSPRNG  │ │ │ │ Named Pipe      │ │
-│ │  ATECC608A Ops  │ │ │ │ Entropy Pools   │ │ │ │ HTTP Streaming  │ │
-│ │  Random Gen     │ │ │ │ Amplification   │ │ │ │ Circular Queue  │ │
-│ │  Health Check   │ │ │ │ Reseeding       │ │ │ │ Health Check    │ │
-│ └─────────────────┘ │ │ └─────────────────┘ │ │ └─────────────────┘ │
-│         │           │ │                     │ │         │           │
-│         ▼           │ │                     │ │         ▼           │
-│ ┌─────────────────┐ │ │                     │ │ ┌─────────────────┐ │
-│ │   ATECC608A     │ │ │                     │ │ │  VMs/Containers │ │
-│ │  Hardware Chip  │ │ │                     │ │ │  (via Pipe/HTTP)│ │
-│ └─────────────────┘ │ │                     │ │ └─────────────────┘ │
-└─────────────────────┘ └─────────────────────┘ └─────────────────────┘
-Hardware TRNG           Cryptographic PRNG      VirtIO Consumer
-(~10 samples/sec)       (High throughput)       (Seeded by API)
-```
+Compose networks: clients hit Traefik on `lokey-edge`; API/Fortuna/VirtIO share `lokey-app`; controllers sit on `lokey-devices`; Prometheus/Grafana on `lokey-metrics`.
+
 ## Component Architecture
 
 ### Controller Service (Port 8081)
@@ -107,29 +74,24 @@ Hardware TRNG           Cryptographic PRNG      VirtIO Consumer
 **Purpose:** Cryptographic amplification of random data using the Fortuna algorithm.
 
 **Responsibilities:**
-- Accept seed data from TRNG
-- Generate high-throughput random data
-- Maintain entropy pools
-- Periodic reseeding
+- Accept TRNG seed batches from the API (`POST /seed`)
+- Mix seeds into 32 entropy pools and reseed the AES key
+- Serve high-throughput CSPRNG output (`GET /generate`)
 
 **Technology:**
 - Go 1.27
-- AES-256 cipher for generation
-- SHA-256 for pool hashing
+- AES-256-CTR for generation
+- SHA-256 for reseed key derivation
 - Gin web framework
-- Stateless design
+- In-process state only (key, pools, counters)
 
 **Key Features:**
-- 32 entropy pools for catastrophic reseeding resistance
-- Cryptographically secure output
-- High throughput generation (1000s/sec)
-- Automatic pool rotation
-- Seed quality validation (entropy and pattern checks)
+- Two distinct seeds: boot `crypto/rand` (starter key) + ongoing ATECC TRNG reseeds
+- 32 entropy pools with classic Fortuna schedule (`reseedCount`, not the AES block counter)
+- Seed quality validation (flat/0xFF/low-Shannon rejection)
 - AES key rekey after every `GenerateRandomData`
-- Initial seed from `crypto/rand` at process start
 - `/generate` and `/amplify` return 503 when unhealthy
-- Configurable health check intervals
-- Explicit health state management
+- Default reseed intake: **5 TRNG samples ≈ 155 bytes every 30s** (from each healthy controller)
 
 ### VirtIO Service (Port 8083 HTTP)
 
@@ -247,143 +209,86 @@ The HTTP streaming endpoint enables network-based access:
 ## Data Flow
 
 ### TRNG Data Flow
+
+```mermaid
+flowchart TB
+  ATECC["ATECC608A/B"] -->|"Random: status + 31 entropy bytes"| CTRL["Controller /generate"]
+  CTRL -->|"poll TRNG_POLL_INTERVAL_MS"| API["API"]
+  API --> Q["In-mem TRNG queue"]
+  Q -->|"client request"| Client["Client formats int8…uint64 / binary"]
 ```
 
-┌──────────────┐
-│ ATECC608A    │
-│ Hardware     │
-└──────┬───────┘
-│ 1. Generate 32 bytes
-│    true random data
-▼
-┌──────────────┐
-│ Controller   │
-│ Service      │ 2. Expose via /generate endpoint
-└──────┬───────┘
-│
-│ 3. API polls periodically
-│    (TRNG_POLL_INTERVAL_MS)
-▼
-┌──────────────┐
-│ API Service  │
-│              │ 4. Store in TRNG queue
-│ ┌──────────┐ │    (max: TRNG_QUEUE_SIZE)
-│ │ In-mem   │ │
-│ │ TRNG     │ │ 5. Mark as unconsumed
-│ │ Queue    │ │
-│ └──────────┘ │
-└──────┬───────┘
-│
-│ 6. Client requests data
-▼
-┌──────────────┐
-│ Client       │ 7. Returns data in requested format
-│ Application  │    (int8, uint64, binary, etc.)
-└──────────────┘    Marks as consumed (deleted)
-```
-### Fortuna Data Flow
+Hardware path strips the ATECC status byte, so each sample is **31 bytes** of entropy (emulator returns 32).
+
+### Fortuna end-to-end
+
+There are **two** seeds:
+
+| Seed | When | Role |
+|------|------|------|
+| Boot seed | Fortuna process start | 32 bytes from `crypto/rand` → first AES key (safe `/generate` before first TRNG reseed) |
+| TRNG reseed | Every 30s from API | 5 ATECC samples (~155 B) mixed into pools → new AES key |
+
+```mermaid
+flowchart TB
+  subgraph boot ["1. Boot"]
+    OS["crypto/rand 32 B"] --> IK["initial AES key"]
+  end
+
+  subgraph intake ["2. Every 30s — TRNG intake"]
+    ATECC["ATECC608"] --> CTRL["controller /generate?count=5"]
+    CTRL --> API["API quality-check"]
+    API --> POST["POST fortuna /seed"]
+    POST --> P0["pool 0"]
+    POST --> P1["pool 1"]
+    POST --> Pn["pools 2…"]
+  end
+
+  subgraph reseed ["3. Reseed"]
+    P0 --> HASH["SHA-256(current key ‖ selected pools)"]
+    P1 --> HASH
+    Pn --> HASH
+    IK -.-> HASH
+    HASH --> NK["new AES key"]
+    NK --> CLR["used pools cleared"]
+  end
+
+  subgraph gen ["4. /generate — CSPRNG"]
+    NK --> CTR["AES-CTR(key, block counter)"]
+    CTR --> OUT["bytes to API queue / client"]
+    CTR --> REKEY["rekey from next CTR blocks"]
+    REKEY --> NK
+  end
 ```
 
-┌──────────────┐
-│ Controller   │
-│ Service      │ 1. API fetches TRNG data
-└──────┬───────┘
-│
-│ 2. API sends seeds to Fortuna
-▼
-┌──────────────┐
-│ Fortuna      │
-│ Service      │ 3. Add to entropy pools
-│              │
-│ ┌──────────┐ │ 4. Reseed generator
-│ │ 32 Pools │ │
-│ │ AES-256  │ │ 5. Generate amplified data
-│ └──────────┘ │
-└──────┬───────┘
-│
-│ 6. API polls /generate
-│    (FORTUNA_POLL_INTERVAL_MS)
-▼
-┌──────────────┐
-│ API Service  │
-│              │ 7. Store in Fortuna queue
-│ ┌──────────┐ │    (max: FORTUNA_QUEUE_SIZE)
-│ │ In-mem   │ │
-│ │ Fortuna  │ │ 8. Mark as unconsumed
-│ │ Queue    │ │
-│ └──────────┘ │
-└──────┬───────┘
-│
-│ 9. Client requests data
-▼
-┌──────────────┐
-│ Client       │ 10. Returns high-throughput data
-│ Application  │     Marks as consumed (deleted)
-└──────────────┘
-```
-### Fortuna Seeding Flow
-```
+API also **polls** Fortuna `/generate` on `FORTUNA_POLL_INTERVAL_MS` to fill the Fortuna queue for `source=fortuna` clients. Seeding and polling are separate loops.
 
-Every 30 seconds:
+### Fortuna pool schedule
 
-┌──────────────┐
-│ API Service  │
-│              │ 1. Fetch 5 TRNG samples
-│              │    from Controller
-└──────┬───────┘
-│
-│ 2. POST to /seed endpoint
-▼
-┌──────────────┐
-│ Fortuna      │
-│ Service      │ 3. Distribute seeds across pools
-│              │
-│ ┌──────────┐ │ 4. Hash pools with SHA-256
-│ │ Pools    │ │
-│ │ 0-31     │ │ 5. Reseed AES generator
-│ └──────────┘ │
-│              │ 6. Increment counter
-└──────────────┘    (determines next pools to use)
+Pool *i* is eligible on reseed *N* when `N % 2^i == 0` (classic Fortuna). Driven by a dedicated **`reseedCount`**, not the AES-CTR block counter (using the block counter caused intermittent empty-pool reseeds).
+
+```mermaid
+flowchart LR
+  R1["reseed 1"] --> Pool0a["pool 0"]
+  R2["reseed 2"] --> Pool0b["pool 0"]
+  R2 --> Pool1["pool 1"]
+  R4["reseed 4"] --> Pool0c["pool 0"]
+  R4 --> Pool1b["pool 1"]
+  R4 --> Pool2["pool 2"]
 ```
 
 ### VirtIO Seeding Flow
+
+```mermaid
+flowchart TB
+  API["API every ~30s"] -->|"VIRTIO_SEEDING_SOURCE: trng / fortuna / both"| SEED["POST virtio /seed"]
+  SEED --> Q["VirtIO circular queue"]
+  Q -->|named pipe| Local["Local VMs"]
+  Q -->|HTTP /stream| Remote["Remote / K8s"]
 ```
 
-Every 30 seconds (configurable):
+Data flows **one way**: API seeds VirtIO; VirtIO serves VMs. The API does **not** poll VirtIO.
 
-┌──────────────┐
-│ API Service  │
-│              │ 1. Fetch data from TRNG or Fortuna
-│              │    (based on VIRTIO_SEEDING_SOURCE)
-└──────┬───────┘
-│
-│ 2. POST to /seed endpoint
-│    (validates data quality)
-▼
-┌──────────────┐
-│ VirtIO       │
-│ Service      │ 3. Store seeds in circular queue
-│              │
-│ ┌──────────┐ │ 4. Queue serves data via:
-│ │ Circular │ │    - Named pipe (FIFO) for local VMs
-│ │ Queue    │ │    - HTTP streaming for remote/K8s
-│ └──────────┘ │
-└──────┬───────┘
-│
-│ 5a. Local VMs read from pipe
-│     (QEMU, Proxmox, VirtualBox, VMware)
-│ 5b. Remote/K8s read from HTTP stream
-▼
-┌──────────────┐
-│ QEMU/VM      │ 6. Consumes entropy for
-│ Container    │    virtualization needs
-│ Kubernetes   │
-└──────────────┘
-
-Note: Data flows ONE WAY - API seeds VirtIO, VirtIO serves VMs.
-      API does NOT poll VirtIO (it's a consumer endpoint).
-      Named pipe provides ~500x better performance than legacy EGD.
-```
 ## Controller Service
 
 ### ATECC608A Implementation
@@ -424,7 +329,7 @@ The controller implements precise I2C communication with the ATECC608A cryptogra
         ▼
 ┌───────────────┐
 │ Process Data  │ • Skip status byte
-│               │ • Extract random data (32 bytes)
+│               │ • Extract entropy (31 bytes after status)
 └───────┬───────┘ • Apply SHA-256 hash
         │
         ▼
@@ -477,108 +382,62 @@ Configuration process (**one-time only**)
 
 LoKey implements the Fortuna cryptographically secure pseudo-random number generator designed by Bruce Schneier and Niels Ferguson.
 
-**Core Components:**
+**Core state:**
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    Fortuna Generator                        │
-└─────────────────────────────────────────────────────────────┘
-│
-├──► AES-256 Cipher (key: 256 bits)
-│
-├──► Counter (64-bit, increments per block)
-│
-└──► 32 Entropy Pools
-│
-├──► Pool 0  (used every reseed)
-├──► Pool 1  (used every 2nd reseed)
-├──► Pool 2  (used every 4th reseed)
-├──► Pool 3  (used every 8th reseed)
-│    ...
-└──► Pool 31 (used every 2^31 reseeds)
+```mermaid
+flowchart TB
+  Key["AES-256 key 32 B"] --> Cipher["AES-CTR generator"]
+  Ctr["AES block counter"] --> Cipher
+  RC["reseedCount"] --> Sched["pool schedule N % 2^i == 0"]
+  Sched --> Pools["32 entropy pools"]
+  Pools -->|"SHA-256(key ‖ pools)"| Key
 ```
 
+| Field | Purpose |
+|-------|---------|
+| `key` | Current AES-256 key (drives all output) |
+| `Counter` | AES-CTR block counter (advances on generate/rekey) |
+| `reseedCount` | Fortuna schedule counter (advances once per `ReseedFromPools`) |
+| `pools[0…31]` | Staging for TRNG events; cleared when used in a reseed |
 
-**Generation Process:**
+**Generation (simplified):**
 
-```textmate
-// Pseudo-code
-func GenerateRandomData(length int) []byte {
-    result := make([]byte, length)
-    blocks := (length + blockSize - 1) / blockSize
-
-    for i := 0; i < blocks; i++ {
-        // Encrypt counter value
-        counterBytes := encodeCounter(counter)
-        block := aesEncrypt(key, counterBytes)
-
-        // Copy to result
-        copy(result[i*blockSize:], block)
-
-        // Increment counter
-        counter++
-    }
-
-    return result
-}
+```text
+func GenerateRandomData(length):
+    for each AES block needed:
+        out ‖= AES_Encrypt(key, encode(Counter))
+        Counter++
+    rekeyUnlocked()   // replace key with next CTR blocks (forward secrecy)
+    return out
 ```
 
+**Reseed (simplified):**
 
-**Reseeding Logic:**
-
-```textmate
-// Pseudo-code
-func ReseedFromPools() {
-    reseedCount := counter
-    poolsToUse := [][]byte{}
-
-    for i := 0; i < 32; i++ {
-        // Use pool if bit i is set in reseedCount
-        if (reseedCount & (1 << i)) != 0 {
-            if len(pools[i]) > 0 {
-                poolsToUse = append(poolsToUse, pools[i])
-                pools[i] = pools[i][:0]  // Clear pool
-            }
-        }
-    }
-
-    // Hash all pool data with current key
-    newKey := sha256(key || poolsToUse...)
-
-    // Update cipher with new key
-    cipher = aes.NewCipher(newKey)
-    counter++
-}
+```text
+func ReseedFromPools():
+    reseedCount++
+    for i in 0..31:
+        if reseedCount % (1<<i) != 0: break   // classic schedule
+        if pools[i] empty: continue
+        take pools[i]; clear pools[i]
+    newKey = SHA-256(key ‖ taken_pools...)
+    key, cipher = newKey
+    // AES Counter is NOT used for pool selection
 ```
 
+**Catastrophic reseeding:** pool 0 every reseed (fast recovery); pool *i* every `2^i` reseeds. Fresh TRNG in unused higher pools survives even if the running key was exposed, until those pools are mixed in.
 
-**Catastrophic Reseeding:**
-
-The pool selection algorithm ensures that even if an attacker compromises the state:
-- Pool 0 is used every reseed (fast recovery)
-- Pool 31 is used every 2^31 reseeds (long-term security)
-- After 32 reseeds with fresh entropy, attacker's knowledge is worthless
+Predicting future `/generate` output requires the **live key + block counter**, not historical pool contents (pools are cleared after use).
 
 ### Endpoints
 
-**GET /health**
-- Returns generator health
-- Checks last reseed time
-- Validates entropy state
+**GET /health** — generator health (explicit flag + max reseed interval)
 
-**GET /info**
-- Returns service information
-- Last reseed timestamp
-- Generation counter
+**GET /info** — status, amplification factor, last reseed time
 
-**GET /generate?size=N**
-- Generates N bytes (1-1048576)
-- Returns hex-encoded data
-- High throughput
+**GET /generate?size=N** — N bytes (1–1048576), hex-encoded; 503 if unhealthy
 
-**POST /seed**
-- Accepts array of hex-encoded seeds
-- Distributes to entropy pools
+**POST /seed** — `{ "seeds": ["<hex>", ...] }`; spreads across pools `i % 32`, then `ReseedFromPools`
 
 ## VirtIO Service
 
@@ -740,9 +599,9 @@ func pollTRNGService(ctx context.Context, interval time.Duration) {
 
 
 **Polling Configuration:**
-- `TRNG_POLL_INTERVAL_MS`: How often to fetch TRNG data (default: 1000ms)
-- `FORTUNA_POLL_INTERVAL_MS`: How often to fetch Fortuna data (default: 5000ms)
-- Fortuna seeding: Every 30 seconds with 5 TRNG samples
+- `TRNG_POLL_INTERVAL_MS`: How often to fetch TRNG data (Compose default: `1000`)
+- `FORTUNA_POLL_INTERVAL_MS`: How often to fetch Fortuna `/generate` into the API queue (Compose default: `100`)
+- Fortuna **seeding**: every 30s with 5 TRNG samples (~155 B) — separate from polling
 
 ### Queue Management
 
