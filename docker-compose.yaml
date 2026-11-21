@@ -104,6 +104,8 @@ services:
 
   api:
     image: ${LOKEY_IMAGE_API:-ghcr.io/lokeytraas/lokey/api:latest}
+    # Always re-resolve :latest (or other floating tags) on up/pull.
+    pull_policy: always
     build:
       context: .
       dockerfile: cmd/api/Dockerfile
@@ -147,6 +149,7 @@ services:
 
   fortuna:
     image: ${LOKEY_IMAGE_FORTUNA:-ghcr.io/lokeytraas/lokey/fortuna:latest}
+    pull_policy: always
     build:
       context: .
       dockerfile: cmd/fortuna/Dockerfile
@@ -169,6 +172,7 @@ services:
 
   virtio:
     image: ${LOKEY_IMAGE_VIRTIO:-ghcr.io/lokeytraas/lokey/virtio:latest}
+    pull_policy: always
     build:
       context: .
       dockerfile: cmd/virtio/Dockerfile
@@ -204,6 +208,7 @@ services:
   # Emulated controllers — COMPOSE_PROFILES=emulated (laptop/CI)
   controller-a:
     image: ${LOKEY_IMAGE_CONTROLLER:-ghcr.io/lokeytraas/lokey/controller:latest}
+    pull_policy: always
     profiles: ["emulated"]
     build:
       context: .
@@ -226,6 +231,7 @@ services:
 
   controller-b:
     image: ${LOKEY_IMAGE_CONTROLLER:-ghcr.io/lokeytraas/lokey/controller:latest}
+    pull_policy: always
     profiles: ["emulated"]
     build:
       context: .
@@ -249,6 +255,7 @@ services:
   # Single ATECC608A/B on I2C bus 1 (SDA1/SCL1 @ 0x60) — COMPOSE_PROFILES=hardware
   controller-hw-a:
     image: ${LOKEY_IMAGE_CONTROLLER:-ghcr.io/lokeytraas/lokey/controller:latest}
+    pull_policy: always
     profiles: ["hardware"]
     restart: unless-stopped
     logging: *logging-common
