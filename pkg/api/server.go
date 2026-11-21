@@ -71,6 +71,10 @@ type Server struct {
 	controllerRoundRobin  uint64
 	fortunaSeedBytesAcc   atomic.Uint64
 	fortunaOutputBytesAcc atomic.Uint64
+
+	// Last successful controller /health metadata (emulator/mode), keyed by configured device_id.
+	controllerMetaMu    sync.RWMutex
+	controllerLastKnown map[string]controllerLastKnown
 }
 
 // QueueConfig represents the queue configuration
@@ -104,11 +108,12 @@ type HealthCheckResponse struct {
 	Status    string `json:"status"`
 	Timestamp string `json:"timestamp"`
 	Details   struct {
-		API        bool `json:"api"`
-		Controller bool `json:"controller"`
-		Fortuna    bool `json:"fortuna"`
-		VirtIO     bool `json:"virtio"`
-		Database   bool `json:"database"`
+		API         bool                        `json:"api"`
+		Controller  bool                        `json:"controller"`
+		Controllers map[string]ControllerStatus `json:"controllers,omitempty"`
+		Fortuna     bool                        `json:"fortuna"`
+		VirtIO      bool                        `json:"virtio"`
+		Database    bool                        `json:"database"`
 	} `json:"details"`
 }
 
@@ -157,6 +162,7 @@ type Metrics struct {
 	FortunaLastReseed    prometheus.Gauge
 	ServiceUp            *prometheus.GaugeVec // lokey_service_up{service=...}
 	ControllerUp         *prometheus.GaugeVec // lokey_controller_up{device_id=...}
+	ControllerEmulated   *prometheus.GaugeVec // lokey_controller_emulated{device_id=...}
 }
 
 // NewServer creates a new API server
@@ -332,6 +338,10 @@ func NewServer(db database.DBHandler, controllerAddr, fortunaAddr, virtioAddr st
 			Name: "lokey_controller_up",
 			Help: "1 if a controller device is healthy, 0 otherwise",
 		}, []string{"device_id"}),
+		ControllerEmulated: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "lokey_controller_emulated",
+			Help: "1 if a controller device is an emulator, 0 if hardware (set after first successful health probe)",
+		}, []string{"device_id"}),
 	}
 
 	// Register metrics to the provided registry
@@ -374,6 +384,7 @@ func NewServer(db database.DBHandler, controllerAddr, fortunaAddr, virtioAddr st
 		metrics.FortunaLastReseed,
 		metrics.ServiceUp,
 		metrics.ControllerUp,
+		metrics.ControllerEmulated,
 	)
 
 	// Read APT window size from environment (default: 512)
@@ -414,6 +425,7 @@ func NewServer(db database.DBHandler, controllerAddr, fortunaAddr, virtioAddr st
 		fortunaQualityTracker: NewTRNGQualityTracker(aptWindowSize),
 		virtioQualityTracker:  NewTRNGQualityTracker(aptWindowSize),
 		virtioSeedingSource:   "trng", // Default seeding source
+		controllerLastKnown:   make(map[string]controllerLastKnown),
 	}
 
 	server.setupRoutes()
@@ -860,17 +872,17 @@ type VirtIOStats struct {
 
 // StatusResponse represents the status response with custom VirtIO stats
 type StatusResponse struct {
-	TRNG        database.DataSourceStats `json:"trng"`
-	Fortuna     database.DataSourceStats `json:"fortuna"`
-	VirtIO      VirtIOStats              `json:"virtio"`
-	Database    database.Stats           `json:"database"`
-	TRNGQuality database.QualityMetrics  `json:"trng_quality"`
-	Controllers map[string]bool          `json:"controllers,omitempty"`
+	TRNG        database.DataSourceStats    `json:"trng"`
+	Fortuna     database.DataSourceStats    `json:"fortuna"`
+	VirtIO      VirtIOStats                 `json:"virtio"`
+	Database    database.Stats              `json:"database"`
+	TRNGQuality database.QualityMetrics     `json:"trng_quality"`
+	Controllers map[string]ControllerStatus `json:"controllers,omitempty"`
 }
 
 // GetStatus returns the system status.
 // @Summary Get system status
-// @Description Get detailed status of TRNG, Fortuna, and VirtIO systems with comprehensive metrics. VirtIO metrics are queried directly from the VirtIO service. Note: VirtIO does not have polling_count as it is not polled by the API (only seeded).
+// @Description Get detailed status of TRNG, Fortuna, and VirtIO systems with comprehensive metrics. Controllers map each device_id to healthy/emulator from that controller's /health payload. VirtIO metrics are queried directly from the VirtIO service. Note: VirtIO does not have polling_count as it is not polled by the API (only seeded).
 // @Tags            status
 // @Accept          json
 // @Produce         json
@@ -895,10 +907,7 @@ func (s *Server) GetStatus(c *gin.Context) {
 	s.publishQuality("fortuna", "fortuna", s.fortunaQualityTracker)
 	s.publishQuality("virtio", "virtio", s.virtioQualityTracker)
 
-	deviceHealth := map[string]bool{}
-	for _, ep := range s.controllersOrDefault() {
-		deviceHealth[ep.DeviceID] = s.checkServiceHealth(ep.Addr)
-	}
+	deviceStatuses := s.collectControllerStatuses()
 
 	// Build response with custom VirtIO stats (without polling_count)
 	response := StatusResponse{
@@ -915,7 +924,7 @@ func (s *Server) GetStatus(c *gin.Context) {
 			UnconsumedCount: virtioStats.UnconsumedCount,
 			TotalGenerated:  virtioStats.TotalGenerated,
 		},
-		Controllers: deviceHealth,
+		Controllers: deviceStatuses,
 	}
 
 	c.JSON(http.StatusOK, response)
@@ -923,7 +932,7 @@ func (s *Server) GetStatus(c *gin.Context) {
 
 // HealthCheck performs a health check on the API server and its dependencies.
 // @Summary Health check endpoint
-// @Description Checks health of the API server and its dependencies (Controller, Fortuna, VirtIO, and Database services)
+// @Description Checks health of the API server and its dependencies (Controller, Fortuna, VirtIO, and Database services). details.controllers maps each configured device_id to healthy/emulator from that controller's /health payload.
 // @Tags status
 // @Accept json
 // @Produce json
@@ -942,11 +951,12 @@ func (s *Server) HealthCheck(c *gin.Context) {
 	response.Details.API = true
 
 	// Check controllers (healthy if any device is up; degraded if some are down)
+	deviceStatuses := s.collectControllerStatuses()
+	response.Details.Controllers = deviceStatuses
 	controllerOK := false
 	anyControllerDown := false
-	for _, ep := range s.controllersOrDefault() {
-		ok := s.checkServiceHealth(ep.Addr)
-		if ok {
+	for _, st := range deviceStatuses {
+		if st.Healthy {
 			controllerOK = true
 		} else {
 			anyControllerDown = true
@@ -1047,13 +1057,15 @@ func (s *Server) publishHealthMetrics() {
 	s.metrics.ServiceUp.WithLabelValues("database").Set(boolTo(s.DB.HealthCheck()))
 
 	controllerOK := false
-	for _, ep := range s.controllersOrDefault() {
-		ok := s.checkServiceHealth(ep.Addr)
-		if ok {
+	for deviceID, st := range s.collectControllerStatuses() {
+		if st.Healthy {
 			controllerOK = true
 		}
 		if s.metrics.ControllerUp != nil {
-			s.metrics.ControllerUp.WithLabelValues(ep.DeviceID).Set(boolTo(ok))
+			s.metrics.ControllerUp.WithLabelValues(deviceID).Set(boolTo(st.Healthy))
+		}
+		if s.metrics.ControllerEmulated != nil && st.Emulator != nil {
+			s.metrics.ControllerEmulated.WithLabelValues(deviceID).Set(boolTo(*st.Emulator))
 		}
 	}
 	s.metrics.ServiceUp.WithLabelValues("controller").Set(boolTo(controllerOK))

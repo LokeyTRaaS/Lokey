@@ -141,11 +141,13 @@ func (c *Controller) Start() error {
 
 func (c *Controller) healthCheckHandler(ctx *gin.Context) {
 	healthy := c.device.HealthCheck()
+	mode := c.device.Mode()
 	payload := gin.H{
 		"status":    map[bool]string{true: "healthy", false: "unhealthy"}[healthy],
 		"timestamp": time.Now().Format(time.RFC3339),
-		"mode":      c.device.Mode(),
+		"mode":      mode,
 		"device_id": c.device.DeviceID(),
+		"emulator":  mode == "emulated",
 	}
 	if healthy {
 		ctx.JSON(http.StatusOK, payload)
@@ -155,10 +157,12 @@ func (c *Controller) healthCheckHandler(ctx *gin.Context) {
 }
 
 func (c *Controller) infoHandler(ctx *gin.Context) {
+	mode := c.device.Mode()
 	ctx.JSON(http.StatusOK, gin.H{
 		"status":    "running",
-		"mode":      c.device.Mode(),
+		"mode":      mode,
 		"device_id": c.device.DeviceID(),
+		"emulator":  mode == "emulated",
 	})
 }
 

@@ -27,6 +27,19 @@ func setupIntegrationServer(handler database.DBHandler, controllerURL, fortunaUR
 }
 
 // setupMockController creates a mock HTTP server for the controller service
+func mockControllerHealth(deviceID string, emulator bool) map[string]interface{} {
+	mode := "hardware"
+	if emulator {
+		mode = "emulated"
+	}
+	return map[string]interface{}{
+		"status":    "healthy",
+		"mode":      mode,
+		"device_id": deviceID,
+		"emulator":  emulator,
+	}
+}
+
 func setupMockController(t *testing.T) (*httptest.Server, func()) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -37,7 +50,7 @@ func setupMockController(t *testing.T) (*httptest.Server, func()) {
 			json.NewEncoder(w).Encode(response)
 		case "/health":
 			w.WriteHeader(http.StatusOK)
-			json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+			json.NewEncoder(w).Encode(mockControllerHealth("default", true))
 		}
 	}))
 	return server, func() { server.Close() }
@@ -592,7 +605,7 @@ func testStartPolling(t *testing.T, setupDB func() (database.DBHandler, func()))
 			}
 		case "/health":
 			w.WriteHeader(http.StatusOK)
-			json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+			json.NewEncoder(w).Encode(mockControllerHealth("default", true))
 		}
 	}))
 	defer controllerServer.Close()
@@ -826,7 +839,7 @@ func TestAPI_HealthCheckFailures(t *testing.T) {
 		controllerServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path == "/health" {
 				w.WriteHeader(http.StatusOK)
-				json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+				json.NewEncoder(w).Encode(mockControllerHealth("default", true))
 			}
 		}))
 		defer controllerServer.Close()
@@ -866,6 +879,10 @@ func TestAPI_HealthCheckFailures(t *testing.T) {
 
 		if !response.Details.Controller {
 			t.Error("Expected controller to be healthy")
+		}
+		st, ok := response.Details.Controllers["default"]
+		if !ok || !st.Healthy || st.Emulator == nil || !*st.Emulator {
+			t.Errorf("Expected default controller healthy emulator=true, got %+v ok=%v", st, ok)
 		}
 		if !response.Details.Fortuna {
 			t.Error("Expected Fortuna to be healthy")

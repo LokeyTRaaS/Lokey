@@ -37,6 +37,13 @@ definitions:
     - limit
     - source
     type: object
+  api.ControllerStatus:
+    properties:
+      emulator:
+        type: boolean
+      healthy:
+        type: boolean
+    type: object
   api.HealthCheckResponse:
     properties:
       details:
@@ -45,6 +52,10 @@ definitions:
             type: boolean
           controller:
             type: boolean
+          controllers:
+            additionalProperties:
+              $ref: '#/definitions/api.ControllerStatus'
+            type: object
           database:
             type: boolean
           fortuna:
@@ -80,7 +91,7 @@ definitions:
     properties:
       controllers:
         additionalProperties:
-          type: boolean
+          $ref: '#/definitions/api.ControllerStatus'
         type: object
       database:
         $ref: '#/definitions/database.Stats'
@@ -457,7 +468,8 @@ paths:
       consumes:
       - application/json
       description: Checks health of the API server and its dependencies (Controller,
-        Fortuna, VirtIO, and Database services)
+        Fortuna, VirtIO, and Database services). details.controllers maps each configured
+        device_id to healthy/emulator from that controller's /health payload.
       produces:
       - application/json
       responses:
@@ -473,9 +485,10 @@ paths:
       consumes:
       - application/json
       description: 'Get detailed status of TRNG, Fortuna, and VirtIO systems with
-        comprehensive metrics. VirtIO metrics are queried directly from the VirtIO
-        service. Note: VirtIO does not have polling_count as it is not polled by the
-        API (only seeded).'
+        comprehensive metrics. Controllers map each device_id to healthy/emulator from
+        that controller''s /health payload. VirtIO metrics are queried directly from
+        the VirtIO service. Note: VirtIO does not have polling_count as it is not polled
+        by the API (only seeded).'
       produces:
       - application/json
       responses:

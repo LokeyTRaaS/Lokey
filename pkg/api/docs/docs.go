@@ -315,7 +315,7 @@ const docTemplate = `{
         },
         "/health": {
             "get": {
-                "description": "Checks health of the API server and its dependencies (Controller, Fortuna, VirtIO, and Database services)",
+                "description": "Checks health of the API server and its dependencies (Controller, Fortuna, VirtIO, and Database services). details.controllers maps each configured device_id to healthy/emulator from that controller's /health payload.",
                 "consumes": [
                     "application/json"
                 ],
@@ -338,7 +338,7 @@ const docTemplate = `{
         },
         "/status": {
             "get": {
-                "description": "Get detailed status of TRNG, Fortuna, and VirtIO systems with comprehensive metrics. VirtIO metrics are queried directly from the VirtIO service. Note: VirtIO does not have polling_count as it is not polled by the API (only seeded).",
+                "description": "Get detailed status of TRNG, Fortuna, and VirtIO systems with comprehensive metrics. Controllers map each device_id to healthy/emulator from that controller's /health payload. VirtIO metrics are queried directly from the VirtIO service. Note: VirtIO does not have polling_count as it is not polled by the API (only seeded).",
                 "consumes": [
                     "application/json"
                 ],
@@ -419,6 +419,17 @@ const docTemplate = `{
                 }
             }
         },
+        "api.ControllerStatus": {
+            "type": "object",
+            "properties": {
+                "emulator": {
+                    "type": "boolean"
+                },
+                "healthy": {
+                    "type": "boolean"
+                }
+            }
+        },
         "api.HealthCheckResponse": {
             "type": "object",
             "properties": {
@@ -430,6 +441,12 @@ const docTemplate = `{
                         },
                         "controller": {
                             "type": "boolean"
+                        },
+                        "controllers": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "$ref": "#/definitions/api.ControllerStatus"
+                            }
                         },
                         "database": {
                             "type": "boolean"
@@ -481,7 +498,7 @@ const docTemplate = `{
                 "controllers": {
                     "type": "object",
                     "additionalProperties": {
-                        "type": "boolean"
+                        "$ref": "#/definitions/api.ControllerStatus"
                     }
                 },
                 "database": {

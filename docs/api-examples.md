@@ -99,12 +99,18 @@ curl http://localhost:8080/api/v1/health
   "details": {
     "api": true,
     "controller": true,
+    "controllers": {
+      "device_a": { "healthy": true, "emulator": false },
+      "device_b": { "healthy": true, "emulator": true }
+    },
     "virtio": true,
     "fortuna": true,
     "database": true
   }
 }
 ```
+
+`details.controller` stays a roll-up boolean (any device up). Per-device `healthy` / `emulator` come from each controller’s own `/health` body (`emulator` is omitted until the first successful probe).
 
 ### Get System Status with Quality Metrics
 
@@ -159,9 +165,15 @@ curl http://localhost:8080/api/v1/status
       "bias_count": 0,
       "samples_processed": 123456
     }
+  },
+  "controllers": {
+    "device_a": { "healthy": true, "emulator": false },
+    "device_b": { "healthy": true, "emulator": true }
   }
 }
 ```
+
+**Breaking change:** `controllers` was previously `map[string]bool` (e.g. `"device_a": true`). It is now an object per device with `healthy` and `emulator`.
 
 ### Interpreting Quality Metrics
 

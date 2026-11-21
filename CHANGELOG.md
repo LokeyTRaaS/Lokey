@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+### Features
+
+* `/api/v1/status` and `/api/v1/health` report per-controller `healthy` and `emulator` from each controller’s `/health` body (with last-known `emulator` while unreachable)
+* Prometheus `lokey_controller_emulated{device_id=...}` after the first successful controller health probe
+
+### Breaking Changes
+
+* `controllers` on `/api/v1/status` is now `map[string]{healthy,emulator}` instead of `map[string]bool`
+
 ## 1.1.0 (2026-11-21)
 
 ### Features
