@@ -128,7 +128,7 @@ jobs:
       # Download swagger docs for ALL API builds
       - name: Download Swagger documentation for API builds
         if: matrix.service == 'api'
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v8
         with:
           name: swagger-docs
           path: ./pkg/api/docs
@@ -199,7 +199,7 @@ jobs:
         run: mkdir -p build
 
       - name: Download binary artifact for ${{ matrix.arch }}
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v8
         with:
           name: lokey-${{ matrix.service }}-${{ matrix.arch }}
           path: ./build
@@ -207,7 +207,7 @@ jobs:
       # Download Swagger docs for API service
       - name: Download Swagger documentation
         if: matrix.service == 'api'
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v8
         with:
           name: swagger-docs
           path: ./pkg/api/docs
@@ -408,14 +408,14 @@ jobs:
         uses: actions/checkout@v5
 
       - name: Download binary artifacts
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v8
         with:
           pattern: lokey-*
           path: ./artifacts
           merge-multiple: false
 
       - name: Download Swagger documentation
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v8
         with:
           name: swagger-docs
           path: ./artifacts/swagger-docs
@@ -526,7 +526,7 @@ jobs:
     if: always()
     steps:
       - name: Download all artifacts
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v8
         with:
           path: ./artifacts
 
