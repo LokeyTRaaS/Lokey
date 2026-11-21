@@ -28,7 +28,14 @@ docker compose up -d --build
 curl -k https://localhost/api/v1/health
 ```
 
-Override ports via `.env` (`TRAEFIK_HTTPS_PORT=9443`, etc.). Controllers default to `CONTROLLER_MODE=emulated`. For ATECC hardware, use the Compose `hardware` profile (see below) after [Hardware Setup](hardware-setup.md).
+Override ports via `.env` (`TRAEFIK_HTTPS_PORT=9443`, etc.). Controllers are selected with `COMPOSE_PROFILES`:
+
+| Profile | Services | Use when |
+|---------|----------|----------|
+| `emulated` (default in `.env.template`) | `controller-a` + `controller-b` | Laptop / CI (no chip) |
+| `hardware` | `controller-hw-a` only | Pi with ATECC608A/B on I2C bus 1 (`/dev/i2c-1`, address `0x60`) |
+
+For hardware, also set `CONTROLLER_ADDR` / `CONTROLLER_ADDRS` to `http://controller-hw-a:8081` (see `.env.template`). Wiring: [Hardware Setup](hardware-setup.md).
 
 ### Using Task
 
@@ -76,6 +83,10 @@ sudo systemctl restart docker
 ```
 
 Also ensure the `lokey` user is in the `docker` group (`sudo usermod -aG docker lokey`).
+
+**Cgroups / namespaces (required for Docker + cAdvisor):** on Pi OS, `/boot/firmware/cmdline.txt` must include `cgroup_enable=cpuset cgroup_enable=memory cgroup_memory=1`. Pi firmware may still inject `cgroup_disable=memory` early in `/proc/cmdline`; the enable flags override it — verify with `cat /sys/fs/cgroup/cgroup.controllers` (must list `memory`). Kernel namespaces (`CONFIG_NAMESPACES`, pid/net/user/mnt/uts/ipc) are on by default on Pi OS 64-bit.
+
+**cAdvisor + Docker 29:** Docker 29 defaults to the containerd snapshotter (`Storage Driver: overlayfs`). cAdvisor before v0.54 cannot resolve container layers and only exposes `id="/"`. This compose file pins `ghcr.io/google/cadvisor:v0.61.1` (or newer) for that layout.
 
 ### Quick bring-up (GHCR images)
 

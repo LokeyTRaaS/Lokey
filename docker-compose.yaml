@@ -1,7 +1,9 @@
 ---
 # LoKey stack — linux/amd64 + linux/arm64
 # Networks: edge (Traefik), app (api/fortuna/virtio), devices (controllers), metrics
-# Local default: CONTROLLER_MODE=emulated (no ATECC required)
+# Controllers via COMPOSE_PROFILES:
+#   emulated  — controller-a + controller-b (crypto/rand; laptop/CI default)
+#   hardware  — single controller-hw-a on /dev/i2c-1 @ 0x60 (ATECC608A/B)
 
 networks:
   lokey-edge:
@@ -26,8 +28,9 @@ x-logging: &logging-common
 
 x-api-env: &api-env
   PORT: "8080"
-  CONTROLLER_ADDR: http://controller-a:8081
-  CONTROLLER_ADDRS: "device_a=http://controller-a:8081,device_b=http://controller-b:8081"
+  # Override via .env for hardware profile (single controller-hw-a).
+  CONTROLLER_ADDR: ${CONTROLLER_ADDR:-http://controller-a:8081}
+  CONTROLLER_ADDRS: ${CONTROLLER_ADDRS:-device_a=http://controller-a:8081,device_b=http://controller-b:8081}
   FORTUNA_ADDR: http://fortuna:8082
   VIRTIO_ADDR: http://virtio:8083
   TRNG_QUEUE_SIZE: "100000"
@@ -107,10 +110,19 @@ services:
     restart: unless-stopped
     logging: *logging-common
     depends_on:
-      - controller-a
-      - controller-b
-      - fortuna
-      - virtio
+      fortuna:
+        condition: service_started
+      virtio:
+        condition: service_started
+      controller-a:
+        condition: service_started
+        required: false
+      controller-b:
+        condition: service_started
+        required: false
+      controller-hw-a:
+        condition: service_started
+        required: false
     environment:
       <<: *api-env
       GIN_MODE: release
@@ -189,8 +201,10 @@ services:
         limits:
           memory: 128M
 
+  # Emulated controllers — COMPOSE_PROFILES=emulated (laptop/CI)
   controller-a:
     image: ${LOKEY_IMAGE_CONTROLLER:-ghcr.io/lokeytraas/lokey/controller:latest}
+    profiles: ["emulated"]
     build:
       context: .
       dockerfile: cmd/controller/Dockerfile
@@ -212,6 +226,7 @@ services:
 
   controller-b:
     image: ${LOKEY_IMAGE_CONTROLLER:-ghcr.io/lokeytraas/lokey/controller:latest}
+    profiles: ["emulated"]
     build:
       context: .
       dockerfile: cmd/controller/Dockerfile
@@ -231,7 +246,7 @@ services:
         limits:
           memory: 64M
 
-  # Hardware controllers (Pi): use profile "hardware"
+  # Single ATECC608A/B on I2C bus 1 (SDA1/SCL1 @ 0x60) — COMPOSE_PROFILES=hardware
   controller-hw-a:
     image: ${LOKEY_IMAGE_CONTROLLER:-ghcr.io/lokeytraas/lokey/controller:latest}
     profiles: ["hardware"]
@@ -245,15 +260,23 @@ services:
       I2C_ADDRESS: "0x60"
       FORCE_CONFIG: "false"
       GIN_MODE: release
-      LOG_LEVEL: WARN
+      LOG_LEVEL: INFO
     devices:
       - /dev/i2c-1:/dev/i2c-1
+    # Host i2c group GID (Pi OS: getent group i2c). Container runs as root; GID keeps
+    # access if the image later drops privileges.
+    group_add:
+      - "988"
     cap_add:
       - SYS_RAWIO
     security_opt:
       - seccomp=./deploy/seccomp/controller.json
     networks:
       - lokey-devices
+    deploy:
+      resources:
+        limits:
+          memory: 64M
 
   node-exporter:
     image: prom/node-exporter:v1.9.0
@@ -275,7 +298,9 @@ services:
       - lokey-metrics
 
   cadvisor:
-    image: gcr.io/cadvisor/cadvisor:v0.49.2
+    # v0.54+ required for Docker 29 containerd-snapshotter (overlayfs); older
+    # releases fail on missing /var/lib/docker/image/overlayfs/layerdb/mounts.
+    image: ghcr.io/google/cadvisor:v0.61.1
     restart: unless-stopped
     logging: *logging-common
     # Host/cgroup visibility still needs privileged; seccomp still applies when set
@@ -286,12 +311,16 @@ services:
     command:
       - --housekeeping_interval=15s
       - --docker_only=true
+      - --store_container_labels=true
+      - --whitelisted_container_labels=com.docker.compose.service,com.docker.compose.project,com.docker.compose.container-number
     volumes:
       - /:/rootfs:ro
       - /var/run:/var/run:ro
       - /sys:/sys:ro
       # Snap Docker uses /var/snap/docker/common/var-lib-docker; override via DOCKER_ROOT_DIR.
       - ${DOCKER_ROOT_DIR:-/var/lib/docker}:/var/lib/docker:ro
+      - /var/lib/containerd:/var/lib/containerd:ro
+      - /run/containerd:/run/containerd:ro
       - /dev/disk/:/dev/disk:ro
     security_opt:
       - seccomp=./deploy/seccomp/cadvisor.json
