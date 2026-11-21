@@ -1,7 +1,9 @@
 version: '3'
 
 vars:
-  GO_VERSION: 1.24
+  GO_VERSION: 1.27
+  PLATFORMS: linux/amd64,linux/arm64
+  LOCAL_PLATFORM: linux/amd64
   BUILD_DIR: ./build
   MODULES:
     - "."
@@ -248,7 +250,7 @@ tasks:
     desc: Build controller image and push to registry
     cmds:
       - >
-        docker buildx build --platform linux/arm64/v8
+        docker buildx build --platform ${PLATFORMS:-linux/amd64,linux/arm64}
         -t lokey-registry:5000/lokey-controller:latest
         -f cmd/controller/Dockerfile
         --push
@@ -260,7 +262,7 @@ tasks:
     desc: Build API image and push to registry
     cmds:
       - >
-        docker buildx build --platform linux/arm64/v8
+        docker buildx build --platform ${PLATFORMS:-linux/amd64,linux/arm64}
         -t lokey-registry:5000/lokey-api:latest
         -f cmd/api/Dockerfile
         --push
@@ -272,7 +274,7 @@ tasks:
     desc: Build Fortuna image and push to registry
     cmds:
       - >
-        docker buildx build --platform linux/arm64/v8
+        docker buildx build --platform ${PLATFORMS:-linux/amd64,linux/arm64}
         -t lokey-registry:5000/lokey-fortuna:latest
         -f cmd/fortuna/Dockerfile
         --push
@@ -284,7 +286,7 @@ tasks:
     desc: Build VirtIO image and push to registry
     cmds:
       - >
-        docker buildx build --platform linux/arm64/v8
+        docker buildx build --platform ${PLATFORMS:-linux/amd64,linux/arm64}
         -t lokey-registry:5000/lokey-virtio:latest
         -f cmd/virtio/Dockerfile
         --push
@@ -296,7 +298,7 @@ tasks:
     desc: Build controller image locally (without pushing to registry)
     cmds:
       - >
-        docker buildx build --platform linux/arm64/v8
+        docker buildx build --platform ${LOCAL_PLATFORM:-linux/amd64}
         -t lokey-controller:latest
         -f cmd/controller/Dockerfile
         --load
@@ -308,7 +310,7 @@ tasks:
     desc: Build API image locally (without pushing to registry)
     cmds:
       - >
-        docker buildx build --platform linux/arm64/v8
+        docker buildx build --platform ${LOCAL_PLATFORM:-linux/amd64}
         -t lokey-api:latest
         -f cmd/api/Dockerfile
         --load
@@ -320,7 +322,7 @@ tasks:
     desc: Build Fortuna image locally (without pushing to registry)
     cmds:
       - >
-        docker buildx build --platform linux/arm64/v8
+        docker buildx build --platform ${LOCAL_PLATFORM:-linux/amd64}
         -t lokey-fortuna:latest
         -f cmd/fortuna/Dockerfile
         --load
@@ -332,7 +334,7 @@ tasks:
     desc: Build VirtIO image locally (without pushing to registry)
     cmds:
       - >
-        docker buildx build --platform linux/arm64/v8
+        docker buildx build --platform ${LOCAL_PLATFORM:-linux/amd64}
         -t lokey-virtio:latest
         -f cmd/virtio/Dockerfile
         --load
@@ -377,6 +379,17 @@ tasks:
       - task: build_virtio_local
 
   build_images_local:
+    desc: Build all images locally without pushing to registry
+    cmds:
+      - echo "Building all images locally (without pushing to registry)..."
+      - task: _build_all_containers_local_sequential
+
+  build_images_and_registry:
+    desc: Setup local registry and build all images (for network access)
+    cmds:
+      - echo "Setting up local Docker registry and building all images..."
+      - docker network create lokey-net || true
+      - docker rm -f registry || true
     desc: Build all images locally without pushing to registry
     cmds:
       - echo "Building all images locally (without pushing to registry)..."

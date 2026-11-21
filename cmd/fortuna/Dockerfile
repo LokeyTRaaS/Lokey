@@ -1,55 +1,30 @@
-FROM golang:1.25-alpine AS builder
+FROM golang:1.27-alpine AS builder
 
 WORKDIR /app
 
-# Install build dependencies for CGO and I2C
 RUN apk add --no-cache gcc musl-dev linux-headers
 
-# Copy the module files first to leverage Docker cache
 COPY go.mod go.sum ./
 COPY cmd/fortuna/go.mod cmd/fortuna/go.sum* ./cmd/fortuna/
 
-# Download dependencies
 RUN go mod download && cd cmd/fortuna && go mod download
 
-# Copy the rest of the source code
 COPY . .
 
-# Build the application with CGO enabled
-# Using -trimpath for smaller binaries and more reproducible builds
-RUN cd cmd/fortuna && CGO_ENABLED=1 GOOS=linux go build -x -trimpath -o /app/fortuna
+RUN cd cmd/fortuna && CGO_ENABLED=1 GOOS=linux go build -trimpath -o /out/fortuna
 
-# Create a smaller runtime image
 FROM alpine:latest
 
-# Add only the necessary runtime dependencies
-# ca-certificates for HTTPS, libc6-compat for dynamic linking
 RUN apk --no-cache add ca-certificates libc6-compat
 
-# Create app-bin directory for binaries (will be copied to tmpfs /app at runtime)
-RUN mkdir -p /app-bin
+COPY --from=builder /out/fortuna /usr/local/bin/fortuna
 
-# Copy the binary from the builder stage to /app-bin
-COPY --from=builder /app/fortuna /app-bin/fortuna
-
-# Create entrypoint script to copy binaries to tmpfs /app
-RUN echo '#!/bin/sh' > /entrypoint.sh && \
-    echo 'mkdir -p /app' >> /entrypoint.sh && \
-    echo 'cp -r /app-bin/* /app/' >> /entrypoint.sh && \
-    echo 'exec /app/fortuna "$@"' >> /entrypoint.sh && \
-    chmod +x /entrypoint.sh
-
-# Set environment variables
 ENV PORT=8082 \
     CONTROLLER_URL="http://controller:8081"
 
-# Expose the port
 EXPOSE 8082
 
-# Health check
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-  CMD wget --no-verbose --tries=1 -O /dev/null http://localhost:8082/health || exit 1
+  CMD ["wget", "--no-verbose", "--tries=1", "-O", "/dev/null", "http://localhost:8082/health"]
 
-# Use entrypoint to copy binaries to tmpfs /app before running
-ENTRYPOINT ["/entrypoint.sh"]
-CMD []
+ENTRYPOINT ["/usr/local/bin/fortuna"]

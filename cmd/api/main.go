@@ -18,14 +18,25 @@ import (
 // @description     LoKey is a high-availability, high-bandwidth true random number generation service named after Loki, the Norse god of chaos, reflecting the unpredictable nature of true randomness. This project provides affordable and accessible hardware-based true randomness through off-the-shelf components with a Go implementation.
 // @description
 // @description     ## Hardware Architecture
-// @description     The system uses a Raspberry Pi Zero 2W and an ATECC608A cryptographic chip, creating a hardware-based solution with a modest bill of materials costing approximately €50. This provides true random number generation (TRNG) from physical entropy sources rather than algorithmic pseudo-random generation.
+// @description     The system targets Raspberry Pi 5 (ARM64) and x86_64 hosts with one or more ATECC608A chips. Local development uses CONTROLLER_MODE=emulated (crypto/rand) without hardware. Production uses hardware TRNG via I2C.
 // @description
 // @description     ## System Architecture
 // @description     LoKey consists of four microservices:
 // @description     - **Controller Service**: Interfaces with the ATECC608A chip to harvest true random numbers and process SHA-256 hashes
 // @description     - **Fortuna Service**: Amplifies the entropy using the Fortuna algorithm for enhanced randomness
 // @description     - **VirtIO Service**: Provides high-performance random data access for virtualization via named pipe (FIFO) and HTTP streaming, serving VMs/containers
-// @description     - **API Service**: Provides endpoints for configuration, data retrieval from TRNG and Fortuna, and VirtIO seeding management
+// @description     - **API Service**: Provides endpoints for configuration, data retrieval from TRNG and Fortuna, and VirtIO seeding management. Entropy queues are held in memory only (`memory://channels`); there is no on-disk database.
+// @description
+// @description     ## VirtIO endpoints (via Traefik prefix /virtio)
+// @description     The VirtIO microservice is exposed separately (not under /api/v1):
+// @description     - GET /virtio/health — VirtIO health
+// @description     - GET /virtio/info — status + pipe path + queue stats
+// @description     - GET /virtio/config/queue — queue depth and counters
+// @description     - GET /virtio/generate?count=1 — pull seeded entropy (hex)
+// @description     - GET /virtio/stream — chunked octet-stream for VMs/containers
+// @description     - POST /virtio/seed — seed queue (used by the API seeder)
+// @description     - GET /api/v1/config/virtio — seeding source / queue size (API)
+// @description     - GET /api/v1/status — includes virtio queue + quality metrics
 // @description
 // @description     ## Use Cases
 // @description     This service is valuable for cryptographic key generation, password management, blockchain applications, Monte Carlo simulations, gaming systems, IoT device authentication, secure communications, financial services, and scientific research requiring provably random data.
@@ -48,7 +59,6 @@ import (
 
 const (
 	DefaultPort                = 8080
-	DefaultDbPath              = "/data/api.db"
 	DefaultControllerAddr      = "http://controller:8081"
 	DefaultFortunaAddr         = "http://fortuna:8082"
 	DefaultVirtioAddr          = "http://virtio:8083"
@@ -70,11 +80,6 @@ func main() {
 			log.Printf("Invalid PORT, using default: %d", DefaultPort)
 			port = DefaultPort
 		}
-	}
-
-	dbPath := DefaultDbPath
-	if val, ok := os.LookupEnv("DB_PATH"); ok && val != "" {
-		dbPath = val
 	}
 
 	controllerAddr := DefaultControllerAddr
@@ -152,8 +157,8 @@ func main() {
 		}
 	}
 
-	// Initialize database using the factory function
-	db, err := database.NewDBHandler(dbPath, trngQueueSize, fortunaQueueSize, virtioQueueSize)
+	// In-memory channel queues (no on-disk database)
+	db, err := database.NewDBHandler(trngQueueSize, fortunaQueueSize, virtioQueueSize)
 	if err != nil {
 		log.Fatalf("Failed to initialize database: %v", err)
 	}
@@ -186,7 +191,7 @@ func main() {
 	}()
 
 	log.Printf("Starting API server with configuration:")
-	log.Printf("  Database Path: %s", dbPath)
+	log.Printf("  Database: %s", db.GetDatabasePath())
 	log.Printf("  Port: %d", port)
 	log.Printf("  Controller Address: %s", controllerAddr)
 	log.Printf("  Fortuna Address: %s", fortunaAddr)

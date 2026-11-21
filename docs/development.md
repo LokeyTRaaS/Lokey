@@ -17,7 +17,7 @@ Guide for developers contributing to LoKey.
 ### Prerequisites
 
 **Required:**
-- Go 1.24 or later
+- Go 1.27 or later
 - Docker and Docker Compose
 - Git
 
@@ -64,27 +64,9 @@ task build
 
 **Using Docker Compose (Recommended):**
 
-**With local registry (for cross-compilation):**
+**Docker Compose (default development):**
 ```bash
-# Start services without tmpfs (lower memory usage)
-docker compose --profile local up -d
-
-# Or with tmpfs (optimized for Raspberry Pi, higher memory usage)
-docker compose --profile local-tmpfs up -d
-
-# View logs
-docker compose --profile local logs -f
-
-# Restart after changes
-docker compose --profile local restart api
-
-# Stop services
-docker compose --profile local down
-```
-
-**Without profiles (default development):**
-```bash
-# Start all services
+# Start all services (emulated controllers by default)
 docker compose up -d
 
 # View logs
@@ -96,10 +78,6 @@ docker compose restart api
 # Stop services
 docker compose down
 ```
-
-**Profile Selection:**
-- Use `local` profile: For development on systems with fast storage (SSD) or limited RAM
-- Use `local-tmpfs` profile: For Raspberry Pi deployment or when you want to reduce disk I/O
 **Running Locally:**
 
 ```bash
@@ -132,9 +110,9 @@ curl http://localhost:8080/api/v1/health
 │   │   └── docs/                # Generated Swagger docs
 │   ├── atecc608a/               # Hardware interface
 │   │   └── controller.go
-│   ├── database/                # Data persistence
+│   ├── database/                # In-memory entropy queues
 │   │   ├── interface.go
-│   │   ├── bolt.go
+│   │   ├── channel.go
 │   │   └── factory.go
 │   └── fortuna/                 # Cryptographic PRNG
 │       └── fortuna.go
@@ -151,7 +129,7 @@ curl http://localhost:8080/api/v1/health
 
 - **`pkg/api`** - REST API, request handling, background polling
 - **`pkg/atecc608a`** - I2C communication with ATECC608A chip
-- **`pkg/database`** - BoltDB implementation, queue management
+- **`pkg/database`** - In-memory circular queues (`memory://channels`)
 - **`pkg/fortuna`** - Fortuna algorithm, AES-256 generation
 
 ## Building from Source
@@ -185,8 +163,6 @@ task build_fortuna
 # Raspberry Pi 4/5 (ARM64)
 GOOS=linux GOARCH=arm64 go build -o bin/controller-arm64 ./cmd/controller
 
-# Raspberry Pi 2/3 (ARMv7)
-GOOS=linux GOARCH=arm GOARM=7 go build -o bin/controller-armv7 ./cmd/controller
 
 # AMD64
 GOOS=linux GOARCH=amd64 go build -o bin/controller-amd64 ./cmd/controller
@@ -195,16 +171,8 @@ GOOS=linux GOARCH=amd64 go build -o bin/controller-amd64 ./cmd/controller
 
 ### Docker Build
 
-All Dockerfiles use a unified pattern that supports tmpfs mounts for reduced disk I/O:
-
-- **Binaries stored in `/app-bin`** (in the image)
-- **Entrypoint script copies to `/app`** at runtime (may be tmpfs/RAM)
-- **Works with or without tmpfs mounts** - same Dockerfile pattern
-
-**Benefits:**
-- Reduced disk I/O on microSD cards (binaries run from RAM)
-- Consistent pattern across all services
-- Works in both development and production
+Alpine multi-stage images: build in Go, copy binary to `/usr/local/bin/<service>`,
+direct `ENTRYPOINT`, exec-form `wget` healthchecks. No `/app-bin` copy script.
 
 ```shell script
 # Development images (builds from source)
@@ -220,8 +188,6 @@ task build_images_and_registry
 **Dockerfile Types:**
 - `Dockerfile` - Builds from source (for local development)
 - `Dockerfile.action` - Uses pre-built binaries (for CI/CD and production)
-
-Both use the same unified pattern with entrypoint scripts for tmpfs support.
 
 
 ## Code Quality

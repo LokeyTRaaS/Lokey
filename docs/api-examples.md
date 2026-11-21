@@ -288,9 +288,9 @@ json
 "total_generated": 5000
 },
 "database": {
-"size_bytes": 10485760,
-"size_human": "10.0 MB",
-"path": "/data/api.db"
+"size_bytes": 0,
+"size_human": "0 B (in-memory)",
+"path": "memory://channels"
 }
 }
 ```

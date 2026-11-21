@@ -11,7 +11,7 @@ Technical architecture and implementation details of the LoKey system.
 - [Fortuna Service](#fortuna-service)
 - [VirtIO Service](#virtio-service)
 - [API Service](#api-service)
-- [Database Design](#database-design)
+- [Queue / storage design](#queue--storage-design)
 - [Communication Patterns](#communication-patterns)
 - [Security Considerations](#security-considerations)
 
@@ -23,8 +23,8 @@ LoKey is a microservices-based true random number generation system designed for
 
 1. **Separation of Concerns** - Each service has a single, well-defined responsibility
 2. **Stateless Services** - Controller and Fortuna services maintain no persistent state
-3. **Centralized Storage** - API service manages all data persistence
-4. **Fault Tolerance** - Services can restart independently without data loss
+3. **In-memory queues** - API holds TRNG/Fortuna entropy in RAM (`memory://channels`); restart clears queues
+4. **Fault Tolerance** - Services can restart independently (entropy buffers are rebuilt by polling)
 5. **Horizontal Scalability** - Fortuna services can be replicated for higher throughput
 
 ### High-Level Architecture
@@ -48,11 +48,10 @@ LoKey is a microservices-based true random number generation system designed for
 │  └──────────────────────────────────────────────────────────┘   │
 │                             │                                    │
 │  ┌──────────────────────────┼───────────────────────────────┐   │
-│  │         BoltDB Database  │                               │   │
+│  │     In-memory queues     │                               │   │
 │  │  • TRNG Data Queue      │                               │   │
 │  │  • Fortuna Data Queue   │                               │   │
 │  │  • (VirtIO has own queue)│                               │   │
-│  │  • Configuration        │                               │   │
 │  │  • Counters & Stats     │                               │   │
 │  └──────────────────────────┼───────────────────────────────┘   │
 └─────────────────────────────┼────────────────────────────────────┘
@@ -92,7 +91,7 @@ Hardware TRNG           Cryptographic PRNG      VirtIO Consumer
 - Handle I2C communication
 
 **Technology:**
-- Go 1.24
+- Go 1.27
 - `github.com/d2r2/go-i2c` for I2C communication
 - Gin web framework
 - Stateless design
@@ -114,7 +113,7 @@ Hardware TRNG           Cryptographic PRNG      VirtIO Consumer
 - Periodic reseeding
 
 **Technology:**
-- Go 1.24
+- Go 1.27
 - AES-256 cipher for generation
 - SHA-256 for pool hashing
 - Gin web framework
@@ -144,7 +143,7 @@ Hardware TRNG           Cryptographic PRNG      VirtIO Consumer
 - **Note**: Device access (`/dev/hwrng`) is NOT required - VirtIO works purely from seeded queue data
 
 **Technology:**
-- Go 1.24
+- Go 1.27
 - Gin web framework (HTTP API)
 - Named pipe (FIFO) for local VM access
 - HTTP chunked streaming for network access
@@ -227,8 +226,8 @@ The HTTP streaming endpoint enables network-based access:
 - **Seed VirtIO service** (configurable source: TRNG, Fortuna, or both) - data flows one way: API → VirtIO
 
 **Technology:**
-- Go 1.24
-- BoltDB for persistence
+- Go 1.27
+- In-memory circular queues (`pkg/database` channel implementation)
 - Gin web framework
 - Prometheus metrics
 - Swagger/OpenAPI documentation
@@ -266,7 +265,7 @@ The HTTP streaming endpoint enables network-based access:
 │ API Service  │
 │              │ 4. Store in TRNG queue
 │ ┌──────────┐ │    (max: TRNG_QUEUE_SIZE)
-│ │ BoltDB   │ │
+│ │ In-mem   │ │
 │ │ TRNG     │ │ 5. Mark as unconsumed
 │ │ Queue    │ │
 │ └──────────┘ │
@@ -306,7 +305,7 @@ The HTTP streaming endpoint enables network-based access:
 │ API Service  │
 │              │ 7. Store in Fortuna queue
 │ ┌──────────┐ │    (max: FORTUNA_QUEUE_SIZE)
-│ │ BoltDB   │ │
+│ │ In-mem   │ │
 │ │ Fortuna  │ │ 8. Mark as unconsumed
 │ │ Queue    │ │
 │ └──────────┘ │
@@ -782,78 +781,45 @@ Data arrives from polling
 - Consumption tracking
 - Metrics for drops and utilization
 
-## Database Design
+## Queue / storage design
 
-### BoltDB Schema
+### In-memory circular queues
 
-LoKey uses BoltDB, an embedded key-value store with ACID guarantees.
+LoKey does **not** use an on-disk database. The API holds entropy in RAM via
+`ChannelDBHandler` (`pkg/database`), reported as `path: memory://channels`.
 
-**Buckets:**
+**Structure:**
 
 ```
-lokey.db
-├── trng_data          # TRNG random data
-│   ├── [id: uint64] → TRNGData JSON
-│   ├── [id: uint64] → TRNGData JSON
-│   └── ...
-│
-├── fortuna_data       # Fortuna random data
-│   ├── [id: uint64] → FortunaData JSON
-│   ├── [id: uint64] → FortunaData JSON
-│   └── ...
-│
-├── counters           # System counters
-│   ├── trng_next_id → uint64
-│   ├── fortuna_next_id → uint64
-│   ├── trng_polling_count → uint64
-│   ├── fortuna_polling_count → uint64
-│   ├── trng_dropped_count → uint64
-│   ├── fortuna_dropped_count → uint64
-│   ├── trng_consumed_count → uint64
-│   └── fortuna_consumed_count → uint64
-│
-├── config             # Configuration
-│   ├── trng_queue_size → uint64
-│   └── fortuna_queue_size → uint64
-│
-└── usage_stats        # Usage statistics
-    ├── [source_timestamp] → UsageStat JSON
-    └── ...
+memory://channels
+├── TRNGQueue      # circular buffer of TRNG samples
+├── FortunaQueue   # circular buffer of Fortuna samples
+└── VirtIOQueue    # API-side VirtIO seed buffer (VirtIO service has its own queue)
 ```
 
+**Properties:**
+- FIFO circular buffers with configurable capacity (`TRNG_QUEUE_SIZE`, etc.)
+- When full, oldest items are dropped (`queue_dropped`)
+- Optional consume-on-read
+- Runtime resize via `PUT /api/v1/config/queue`
+- **Not durable** — container restart clears queues; polling refills them
 
-**Data Structures:**
+**Data item shape:**
 
-```textmate
-type TRNGData struct {
-    ID        uint64    `json:"id"`
-    Data      []byte    `json:"data"`
-    Timestamp time.Time `json:"timestamp"`
-    Consumed  bool      `json:"consumed"`
-}
-
-type FortunaData struct {
-    ID        uint64    `json:"id"`
-    Data      []byte    `json:"data"`
-    Timestamp time.Time `json:"timestamp"`
-    Consumed  bool      `json:"consumed"`
-}
-
-type UsageStat struct {
-    Source    string    `json:"source"`
-    BytesUsed int64     `json:"bytes_used"`
-    Requests  int64     `json:"requests"`
-    Timestamp time.Time `json:"timestamp"`
+```go
+type DataItem struct {
+    ID        uint64
+    Data      []byte
+    Timestamp time.Time
 }
 ```
-
 
 **Operations:**
 
-1. **Store**: Add new data with auto-incrementing ID
-2. **Retrieve**: Get unconsumed data, optionally mark as consumed
-3. **Trim**: Remove oldest entries when queue is full
-4. **Count**: Track polling, drops, consumption
+1. **Store**: Push into the circular buffer
+2. **Retrieve**: Read with pagination; optionally consume
+3. **Drop**: Overwrite oldest when capacity is exceeded
+4. **Count**: Track polling, drops, consumption in memory
 
 ## Communication Patterns
 
@@ -1247,14 +1213,13 @@ services:
 
 
 **Load balancing:**
-- Use Nginx/HAProxy in front of API
-- Multiple API instances with shared database (requires locking)
-- Read replicas for statistics queries
+- Use Nginx/HAProxy / Traefik in front of API
+- Multiple API instances each hold their own in-memory queues (not shared)
 
 ### Limitations
 
 - **Single ATECC608A**: Hardware generation rate is fixed (~10/sec)
-- **Single BoltDB**: Write throughput limited by disk I/O
+- **In-memory only**: Queues are lost on restart; size is bounded by RAM
 - **No distributed state**: Cannot share queues across API instances
 
 ## Next Steps

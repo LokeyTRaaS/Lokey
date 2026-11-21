@@ -78,26 +78,20 @@ ports:
 - "8080:8080"
 environment:
 - PORT=8080
-- DB_PATH=/data/api.db
 - CONTROLLER_ADDR=http://controller:8081
 - FORTUNA_ADDR=http://fortuna:8082
 - TRNG_QUEUE_SIZE=100
 - FORTUNA_QUEUE_SIZE=100
 - TRNG_POLL_INTERVAL_MS=1000
 - FORTUNA_POLL_INTERVAL_MS=5000
-volumes:
-- api-data:/data
-
-volumes:
-api-data:
 ```
 ## Raspberry Pi Deployment
 
 ### Prerequisites
 
-- Raspberry Pi Zero 2W (or newer)
+- Raspberry Pi 5 (ARM64) or x86_64 host
 - ATECC608A chip properly connected (see [Hardware Setup](hardware-setup.md))
-- Raspberry Pi OS (64-bit recommended for Pi 4/5, 32-bit for older models)
+- Raspberry Pi OS 64-bit (or NixOS) on Pi 5
 - Docker installed on the Pi
 
 ### Step 1: Set Up Development Machine
@@ -176,14 +170,14 @@ i2cdetect -y 1
 
 **Option A: Use the provided docker-compose.yaml (Recommended)**
 
-Copy the `docker-compose.yaml` from the repository to your Raspberry Pi. Then use the `local-tmpfs` profile for optimal performance on microSD cards:
+Copy the `docker-compose.yaml` from the repository to your Raspberry Pi and start the stack:
 
 ```bash
 # On Raspberry Pi
-docker compose --profile local-tmpfs up -d
+docker compose up -d
 ```
 
-The `local-tmpfs` profile automatically configures tmpfs mounts for binaries, reducing disk I/O on microSD cards.
+Entropy queues are held in memory (no on-disk database). Prefer SSD/NVMe on Pi 5 when possible; the old `local-tmpfs` binary-copy profile has been removed.
 
 **Option B: Create custom docker-compose.yaml**
 
@@ -235,15 +229,12 @@ ports:
 - "8080:8080"
 environment:
 - PORT=8080
-- DB_PATH=/data/api.db
 - CONTROLLER_ADDR=http://controller:8081
 - FORTUNA_ADDR=http://fortuna:8082
 - TRNG_QUEUE_SIZE=1000
 - FORTUNA_QUEUE_SIZE=5000
 - TRNG_POLL_INTERVAL_MS=1000
 - FORTUNA_POLL_INTERVAL_MS=1000
-volumes:
-- ./data:/data  # Persist on host filesystem
 depends_on:
 - controller
 - fortuna
@@ -259,16 +250,16 @@ max-file: "3"
 **Using the provided docker-compose.yaml (Recommended):**
 ```bash
 # Pull images from your local registry
-docker compose --profile local-tmpfs pull
+docker compose pull
 
-# Start services with tmpfs optimization
-docker compose --profile local-tmpfs up -d
+# Start services
+docker compose up -d
 
 # Verify all services are running
-docker compose --profile local-tmpfs ps
+docker compose ps
 
 # Check logs
-docker compose --profile local-tmpfs logs -f
+docker compose logs -f
 
 # Test API
 curl http://localhost:8080/api/v1/health
@@ -292,7 +283,7 @@ docker compose logs -f
 curl http://localhost:8080/api/v1/health
 ```
 
-> **Note**: For Raspberry Pi with microSD cards, using the `local-tmpfs` profile is highly recommended as it runs binaries from RAM, significantly reducing disk I/O and extending SD card life.
+> **Note**: Queue data lives in RAM only. After a restart, polling refills the buffers. Size queues for available memory on the Pi.
 ### Step 5: Set Up as System Service (Optional)
 
 To start LoKey automatically on boot:
@@ -334,11 +325,10 @@ LoKey supports multiple architectures:
 
 - **AMD64** (x86_64) - Desktop, laptop, cloud servers
 - **ARM64** (aarch64) - Raspberry Pi 4/5, Apple Silicon, cloud ARM instances
-- **ARMv7** (armhf) - Raspberry Pi 2/3, older ARM devices
 
 ### GitHub Actions Build
 
-The CI/CD pipeline automatically builds multi-architecture images. See `.github/workflows/build-arm64.yml`.
+The CI/CD pipeline automatically builds multi-architecture images. See `.github/workflows/build.yml`.
 
 **Pull pre-built images:**
 ```
@@ -353,10 +343,6 @@ docker pull ghcr.io/lokeytraas/lokey/controller:latest-arm64
 docker pull ghcr.io/lokeytraas/lokey/api:latest-arm64
 docker pull ghcr.io/lokeytraas/lokey/fortuna:latest-arm64
 
-# ARMv7 (Raspberry Pi 2/3)
-docker pull ghcr.io/lokeytraas/lokey/controller:latest-armv7
-docker pull ghcr.io/lokeytraas/lokey/api:latest-armv7
-docker pull ghcr.io/lokeytraas/lokey/fortuna:latest-armv7
 ```
 ### Local Cross-Compilation
 
@@ -374,13 +360,6 @@ docker buildx build \
 --load \
 .
 
-# Build for ARMv7
-docker buildx build \
---platform linux/arm/v7 \
--t lokey-controller:armv7 \
--f cmd/controller/Dockerfile.action \
---load \
-.
 ```
 ## Production Considerations
 
@@ -494,42 +473,16 @@ api:
 environment:
 - FORTUNA_ADDR=http://fortuna-1:8082,http://fortuna-2:8082
 ```
-**Database Backups:**
-```
-bash
-# Backup script
-#!/bin/bash
-DATE=$(date +%Y%m%d_%H%M%S)
-docker compose exec api cp /data/api.db /data/backup_${DATE}.db
+**Queue / storage notes:**
 
-# Rotate old backups
-find /path/to/data -name "backup_*.db" -mtime +7 -delete
-```
-### Storage Management
+There is no on-disk entropy database to back up. Status reports in-memory usage:
 
-**Monitor Database Size:**
+```bash
+curl -sk https://localhost/api/v1/status | jq '.database'
+# {"size_bytes":0,"size_human":"0 B (in-memory)","path":"memory://channels"}
 ```
-bash
-# Check size
-docker compose exec api ls -lh /data/api.db
 
-# Set up alerts when size exceeds threshold
-curl http://localhost:8080/api/v1/status | jq '.database.size_bytes'
-```
-**Database Maintenance:**
-
-The BoltDB database is self-managing, but you can:
-```
-bash
-# Stop services
-docker compose down
-
-# Compact database (optional)
-# BoltDB automatically handles compaction
-
-# Start services
-docker compose up -d
-```
+After `docker compose down` / restart, queues are empty until polling refills them.
 ## Environment Variables
 
 ### API Service
@@ -537,7 +490,6 @@ docker compose up -d
 | Variable                  | Description                          | Default                  | Valid Range         |
 |---------------------------|--------------------------------------|--------------------------|---------------------|
 | `PORT`                    | API server port                      | `8080`                   | 1-65535             |
-| `DB_PATH`                 | Path to BoltDB file                  | `/data/api.db`           | Any valid path      |
 | `CONTROLLER_ADDR`         | Controller service URL               | `http://controller:8081` | Valid HTTP URL      |
 | `FORTUNA_ADDR`            | Fortuna service URL                  | `http://fortuna:8082`    | Valid HTTP URL      |
 | `TRNG_QUEUE_SIZE`         | TRNG data queue capacity             | `100`                    | 10-10000            |
@@ -674,47 +626,16 @@ environment:
 ```
 ## Docker Images
 
-### Unified Dockerfile Pattern
+### Dockerfile pattern
 
-All LoKey Dockerfiles use a unified pattern that supports tmpfs mounts for optimal performance on resource-constrained devices (e.g., Raspberry Pi with microSD cards):
+All LoKey services use multi-stage Alpine images:
 
-**How it works:**
-1. Binaries are stored in `/app-bin` within the Docker image
-2. An entrypoint script copies binaries to `/app` at container startup
-3. If `/app` is mounted as tmpfs (RAM), binaries run from memory instead of disk
-4. This dramatically reduces disk I/O, especially important for microSD cards
+1. Build the Go binary in a `golang:1.27-alpine` builder stage
+2. Copy the binary to `/usr/local/bin/<service>` in a minimal Alpine runtime
+3. `ENTRYPOINT` the binary directly (no `/app-bin` copy script)
+4. Exec-form `HEALTHCHECK` with busybox `wget` (keeps Docker healthchecks without a shell)
 
-**Benefits:**
-- **Reduced disk I/O**: Binaries and health check tools (`wget`) run from RAM
-- **Faster execution**: No disk reads for binary execution
-- **Extended SD card life**: Less wear on flash storage
-- **Works everywhere**: Same pattern works with or without tmpfs mounts
-
-**Docker Compose Profiles:**
-
-Two local profiles are available for different use cases:
-
-1. **`local` profile** (no tmpfs):
-   - Binaries run from disk (normal Docker behavior)
-   - Lower memory usage (~124M total)
-   - Suitable for development or systems with sufficient RAM
-   - API uses persistent volume for `/data`
-   ```bash
-   docker compose --profile local up
-   ```
-
-2. **`local-tmpfs` profile** (with tmpfs):
-   - Binaries run from RAM (`/app` tmpfs)
-   - Optimized for Raspberry Pi (reduced disk I/O on microSD)
-   - Higher memory usage (~388M total)
-   - API uses tmpfs for both `/data` and `/app`
-   ```bash
-   docker compose --profile local-tmpfs up
-   ```
-
-**When to use each:**
-- Use `local` for: Development, systems with fast storage (SSD), or when RAM is limited
-- Use `local-tmpfs` for: Raspberry Pi with microSD cards, systems with slow storage, or when you want to reduce disk I/O
+Entropy queues are in-memory only — no `api-data` volume is required for the API.
 
 ### Official Images
 
@@ -752,7 +673,7 @@ docker build -t lokey-api:custom -f cmd/api/Dockerfile.action .
 - `Dockerfile` - Builds from Go source code (development)
 - `Dockerfile.action` - Uses pre-built binaries (CI/CD, production)
 
-Both use the same unified entrypoint pattern for tmpfs support.
+Both ship the binary at `/usr/local/bin/<service>` with exec-form healthchecks.
 ## Monitoring
 
 ### Health Checks
@@ -980,18 +901,19 @@ i2cdetect -y 1
 # Check container has device access
 docker compose exec controller ls -l /dev/i2c-1
 ```
-### Database Errors
+### Queue / memory issues
 ```
 bash
-# Check database permissions
-docker compose exec api ls -la /data
+# Confirm in-memory storage
+curl -sk https://localhost/api/v1/status | jq '.database'
+# expect path: memory://channels
 
-# Check disk space
-df -h
+# Restart clears in-memory queues (polling refills them)
+docker compose restart api
 
-# Reset database (WARNING: deletes all data)
-docker compose down -v
-docker compose up -d
+# Check host memory pressure if queues are large
+free -h
+docker stats
 ```
 ### Performance Issues
 ```

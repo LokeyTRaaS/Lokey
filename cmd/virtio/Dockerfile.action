@@ -1,6 +1,5 @@
 FROM alpine:latest
 
-# OCI Labels
 LABEL org.opencontainers.image.title="LoKey VirtIO"
 LABEL org.opencontainers.image.description="VirtIO RNG service for virtualized environments"
 LABEL org.opencontainers.image.url="https://lokey.cloud"
@@ -9,37 +8,17 @@ LABEL org.opencontainers.image.licenses="MIT"
 LABEL org.opencontainers.image.vendor="LoKey TRaaS"
 LABEL org.opencontainers.image.documentation="https://github.com/LokeyTRaaS/Lokey/blob/main/README.md"
 
-# Add runtime dependencies
-# ca-certificates: HTTPS support
-# wget: Health check support
 RUN apk --no-cache add ca-certificates wget
 
-# Create app-bin directory for binaries (will be copied to tmpfs /app at runtime)
-RUN mkdir -p /app-bin
+COPY build/lokey-virtio /usr/local/bin/virtio
 
-# Copy pre-built binary (rename to standardized name)
-COPY build/lokey-virtio /app-bin/virtio
-
-# Create entrypoint script to copy binaries to tmpfs /app
-RUN echo '#!/bin/sh' > /entrypoint.sh && \
-    echo 'mkdir -p /app' >> /entrypoint.sh && \
-    echo 'cp -r /app-bin/* /app/' >> /entrypoint.sh && \
-    echo 'exec /app/virtio "$@"' >> /entrypoint.sh && \
-    chmod +x /entrypoint.sh
-
-# Set environment variables
 ENV PORT=8083 \
-    RNG_DEVICE=/dev/hwrng \
     VIRTIO_QUEUE_SIZE=500000 \
     LOG_LEVEL=INFO
 
-# Expose the port
 EXPOSE 8083
 
-# Health check
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-  CMD wget --no-verbose --tries=1 -O /dev/null http://localhost:8083/health || exit 1
+  CMD ["wget", "--no-verbose", "--tries=1", "-O", "/dev/null", "http://localhost:8083/health"]
 
-# Use entrypoint to copy binaries to tmpfs /app before running
-ENTRYPOINT ["/entrypoint.sh"]
-CMD []
+ENTRYPOINT ["/usr/local/bin/virtio"]

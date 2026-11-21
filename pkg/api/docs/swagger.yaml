@@ -1,0 +1,498 @@
+basePath: /api/v1
+definitions:
+  api.ConsumeConfig:
+    properties:
+      consume:
+        type: boolean
+    type: object
+  api.DataRequest:
+    properties:
+      format:
+        enum:
+        - int8
+        - int16
+        - int32
+        - int64
+        - uint8
+        - uint16
+        - uint32
+        - uint64
+        - binary
+        type: string
+      limit:
+        maximum: 100000
+        minimum: 1
+        type: integer
+      offset:
+        minimum: 0
+        type: integer
+      source:
+        enum:
+        - trng
+        - fortuna
+        - virtio
+        type: string
+    required:
+    - format
+    - limit
+    - source
+    type: object
+  api.HealthCheckResponse:
+    properties:
+      details:
+        properties:
+          api:
+            type: boolean
+          controller:
+            type: boolean
+          database:
+            type: boolean
+          fortuna:
+            type: boolean
+          virtio:
+            type: boolean
+        type: object
+      status:
+        type: string
+      timestamp:
+        type: string
+    type: object
+  api.QueueConfig:
+    properties:
+      fortuna_queue_size:
+        maximum: 1000000
+        minimum: 10
+        type: integer
+      trng_queue_size:
+        maximum: 1000000
+        minimum: 10
+        type: integer
+      virtio_queue_size:
+        maximum: 1000000
+        minimum: 10
+        type: integer
+    required:
+    - fortuna_queue_size
+    - trng_queue_size
+    - virtio_queue_size
+    type: object
+  api.StatusResponse:
+    properties:
+      controllers:
+        additionalProperties:
+          type: boolean
+        type: object
+      database:
+        $ref: '#/definitions/database.Stats'
+      fortuna:
+        $ref: '#/definitions/database.DataSourceStats'
+      trng:
+        $ref: '#/definitions/database.DataSourceStats'
+      trng_quality:
+        $ref: '#/definitions/database.QualityMetrics'
+      virtio:
+        $ref: '#/definitions/api.VirtIOStats'
+    type: object
+  api.VirtIOConfig:
+    properties:
+      queue_size:
+        maximum: 1000000
+        minimum: 10
+        type: integer
+      seeding_source:
+        enum:
+        - trng
+        - fortuna
+        - both
+        type: string
+    required:
+    - queue_size
+    - seeding_source
+    type: object
+  api.VirtIOStats:
+    properties:
+      consumed_count:
+        type: integer
+      queue_capacity:
+        type: integer
+      queue_current:
+        type: integer
+      queue_dropped:
+        type: integer
+      queue_percentage:
+        type: number
+      total_generated:
+        type: integer
+      unconsumed_count:
+        type: integer
+    type: object
+  database.APTMetrics:
+    properties:
+      bias_count:
+        type: integer
+      cutoff:
+        type: integer
+      samples_processed:
+        type: integer
+      window_size:
+        type: integer
+    type: object
+  database.DataSourceStats:
+    properties:
+      consumed_count:
+        description: Total items consumed
+        type: integer
+      polling_count:
+        description: How many times data was polled/retrieved
+        type: integer
+      queue_capacity:
+        description: Maximum queue size
+        type: integer
+      queue_current:
+        description: Current items in queue
+        type: integer
+      queue_dropped:
+        description: Items dropped when queue was full
+        type: integer
+      queue_percentage:
+        description: Percentage of queue filled
+        type: number
+      total_generated:
+        description: Total items ever generated
+        type: integer
+      unconsumed_count:
+        description: Current unconsumed items
+        type: integer
+    type: object
+  database.MonobitMetrics:
+    properties:
+      average:
+        type: number
+      ones:
+        type: integer
+      total:
+        type: integer
+      zeros:
+        type: integer
+    type: object
+  database.QualityMetrics:
+    properties:
+      apt:
+        $ref: '#/definitions/database.APTMetrics'
+      monobit:
+        $ref: '#/definitions/database.MonobitMetrics'
+      repetition_count:
+        $ref: '#/definitions/database.RepetitionCountMetrics'
+    type: object
+  database.RepetitionCountMetrics:
+    properties:
+      current_run:
+        type: integer
+      failures:
+        type: integer
+      last_value:
+        type: integer
+    type: object
+  database.Stats:
+    description: In-memory queue storage statistics (no on-disk database).
+    properties:
+      path:
+        example: memory://channels
+        type: string
+      size_bytes:
+        example: 0
+        type: integer
+      size_human:
+        example: 0 B (in-memory)
+        type: string
+    type: object
+info:
+  contact:
+    name: GitHub Repository
+    url: https://github.com/LokeyTRaaS/Lokey
+  description: |-
+    LoKey is a high-availability, high-bandwidth true random number generation service named after Loki, the Norse god of chaos, reflecting the unpredictable nature of true randomness. This project provides affordable and accessible hardware-based true randomness through off-the-shelf components with a Go implementation.
+
+    ## Hardware Architecture
+    The system targets Raspberry Pi 5 (ARM64) and x86_64 hosts with one or more ATECC608A chips. Local development uses CONTROLLER_MODE=emulated (crypto/rand) without hardware. Production uses hardware TRNG via I2C.
+
+    ## System Architecture
+    LoKey consists of four microservices:
+    - **Controller Service**: Interfaces with the ATECC608A chip to harvest true random numbers and process SHA-256 hashes
+    - **Fortuna Service**: Amplifies the entropy using the Fortuna algorithm for enhanced randomness
+    - **VirtIO Service**: Provides high-performance random data access for virtualization via named pipe (FIFO) and HTTP streaming, serving VMs/containers
+    - **API Service**: Provides endpoints for configuration, data retrieval from TRNG and Fortuna, and VirtIO seeding management. Entropy queues are held in memory only (`memory://channels`); there is no on-disk database.
+
+    ## VirtIO endpoints (via Traefik prefix /virtio)
+    The VirtIO microservice is exposed separately (not under /api/v1):
+    - GET /virtio/health — VirtIO health
+    - GET /virtio/info — status + pipe path + queue stats
+    - GET /virtio/config/queue — queue depth and counters
+    - GET /virtio/generate?count=1 — pull seeded entropy (hex)
+    - GET /virtio/stream — chunked octet-stream for VMs/containers
+    - POST /virtio/seed — seed queue (used by the API seeder)
+    - GET /api/v1/config/virtio — seeding source / queue size (API)
+    - GET /api/v1/status — includes virtio queue + quality metrics
+
+    ## Use Cases
+    This service is valuable for cryptographic key generation, password management, blockchain applications, Monte Carlo simulations, gaming systems, IoT device authentication, secure communications, financial services, and scientific research requiring provably random data.
+
+    ## Data Formats
+    Supports multiple output formats: int8, int16, int32, int64, uint8, uint16, uint32, uint64, and raw binary data with configurable chunk sizes and pagination.
+
+    ## Repository & Support
+    For issues, feature requests, contributions, and detailed hardware setup instructions, visit: https://github.com/LokeyTRaaS/Lokey
+    For more information about the OSS initiative, please visit our website: https://lokey.cloud
+  license:
+    name: MIT License
+    url: https://opensource.org/licenses/MIT
+  title: 'LoKey: True Random Number Generation Service API'
+  version: "1.0"
+paths:
+  /config/consume:
+    get:
+      consumes:
+      - application/json
+      description: Get current consume mode setting (true = delete-on-read, false
+        = keep data in queue)
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.ConsumeConfig'
+      summary: Get consume configuration
+      tags:
+      - configuration
+    put:
+      consumes:
+      - application/json
+      description: Update consume mode setting (true = delete-on-read, false = keep
+        data in queue)
+      parameters:
+      - description: Consume configuration
+        in: body
+        name: config
+        required: true
+        schema:
+          $ref: '#/definitions/api.ConsumeConfig'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.ConsumeConfig'
+        "400":
+          description: Invalid request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Update consume configuration
+      tags:
+      - configuration
+  /config/queue:
+    get:
+      consumes:
+      - application/json
+      description: Get current queue size configuration for TRNG, Fortuna, and VirtIO
+        data
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.QueueConfig'
+        "500":
+          description: Database error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get queue configuration
+      tags:
+      - configuration
+    put:
+      consumes:
+      - application/json
+      description: Update queue size configuration for TRNG, Fortuna, and VirtIO data.
+        VirtIO queue size changes are forwarded to the VirtIO service.
+      parameters:
+      - description: Queue configuration
+        in: body
+        name: config
+        required: true
+        schema:
+          $ref: '#/definitions/api.QueueConfig'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.QueueConfig'
+        "400":
+          description: Invalid request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Server error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Update queue configuration
+      tags:
+      - configuration
+  /config/virtio:
+    get:
+      consumes:
+      - application/json
+      description: Get current VirtIO configuration including seeding source (TRNG,
+        Fortuna, or both) and queue size. Queue size is queried from the VirtIO service.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.VirtIOConfig'
+        "500":
+          description: Server error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get VirtIO configuration
+      tags:
+      - configuration
+    put:
+      consumes:
+      - application/json
+      description: Update VirtIO seeding source (TRNG, Fortuna, or both) and queue
+        size. Queue size changes are forwarded to the VirtIO service. Seeding source
+        changes take effect immediately.
+      parameters:
+      - description: VirtIO configuration
+        in: body
+        name: config
+        required: true
+        schema:
+          $ref: '#/definitions/api.VirtIOConfig'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.VirtIOConfig'
+        "400":
+          description: Invalid request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Server error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Update VirtIO configuration
+      tags:
+      - configuration
+  /data:
+    post:
+      consumes:
+      - application/json
+      description: 'Retrieve random data in various formats with pagination. Valid
+        sources are "trng" (True Random Number Generator) and "fortuna" (Fortuna CSPRNG).
+        Note: VirtIO is a consumer endpoint for virtualization (named pipe/HTTP streaming)
+        and cannot be used as a data source here. To access VirtIO data, use the named
+        pipe or HTTP streaming endpoint directly.'
+      parameters:
+      - description: Data request parameters
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/api.DataRequest'
+      produces:
+      - application/json
+      - application/octet-stream
+      responses:
+        "200":
+          description: Random data in requested format
+          schema:
+            items: {}
+            type: array
+        "400":
+          description: Invalid request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not enough data available
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Server error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get random data
+      tags:
+      - data
+  /health:
+    get:
+      consumes:
+      - application/json
+      description: Checks health of the API server and its dependencies (Controller,
+        Fortuna, VirtIO, and Database services)
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.HealthCheckResponse'
+      summary: Health check endpoint
+      tags:
+      - status
+  /status:
+    get:
+      consumes:
+      - application/json
+      description: 'Get detailed status of TRNG, Fortuna, and VirtIO systems with
+        comprehensive metrics. VirtIO metrics are queried directly from the VirtIO
+        service. Note: VirtIO does not have polling_count as it is not polled by the
+        API (only seeded).'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.StatusResponse'
+        "500":
+          description: Server error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get system status
+      tags:
+      - status
+schemes:
+- http
+- https
+swagger: "2.0"

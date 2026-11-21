@@ -105,9 +105,8 @@ tests/
 │   ├── server_test.go          # API server endpoint tests
 │   └── polling_test.go          # Background polling tests
 ├── database_test/
-│   ├── channel_test.go          # In-memory database tests
-│   ├── bolt_test.go             # BoltDB implementation tests
-│   └── interface_test.go        # Interface compliance tests
+│   ├── channel_test.go          # In-memory queue tests
+│   └── interface_test.go        # Interface / factory tests
 ├── fortuna_test/
 │   └── fortuna_test.go          # Fortuna PRNG algorithm tests
 ├── atecc608a_test/
@@ -160,23 +159,14 @@ tests/
 
 ### tests/database_test/ (59 tests)
 
-**channel_test.go** - In-memory database tests:
-- `CircularQueue` tests: `Push`, `Get`, `Size`, `Capacity`, concurrency
+**channel_test.go** - In-memory queue tests:
+- `CircularQueue` tests: `Push`, `Get`, `Size`, `Capacity`, `Resize`, concurrency
 - `ChannelDBHandler` tests: `StoreTRNGData`, `GetTRNGData`, `StoreFortunaData`, `GetFortunaData`
-- Statistics and health check tests
-- Note: `UpdateQueueSizes` is not supported (returns error)
-
-**bolt_test.go** - BoltDB implementation tests:
-- `BoltDBHandler` initialization and configuration
-- Data storage and retrieval (TRNG and Fortuna)
-- Database size and path queries
-- Statistics and health checks
-- Uses temporary directories for test isolation
+- Statistics, health check, and `UpdateQueueSizes` (in-memory resize)
 
 **interface_test.go** - Interface compliance tests:
-- Verifies both implementations satisfy the `DBHandler` interface
-- Tests the factory function `NewDBHandler`
-- Tests environment variable-based selection
+- Verifies `ChannelDBHandler` satisfies the `DBHandler` interface
+- Tests the factory function `NewDBHandler` (always returns the channel implementation)
 
 ### tests/fortuna_test/ (36 tests)
 
@@ -206,7 +196,7 @@ tests/
   - Status endpoints (GET /status, GET /health)
   - Metrics endpoints (GET /metrics, GET /api/v1/metrics)
   - Documentation (GET /swagger/index.html)
-  - Tests with both ChannelDBHandler and BoltDBHandler
+  - Uses ChannelDBHandler (in-memory)
 - `TestAPI_CompleteFlow` - Tests complete data flow: store → retrieve → consume
   - Store TRNG data via polling
   - Store Fortuna data via polling
@@ -214,12 +204,12 @@ tests/
   - Enable consume mode
   - Retrieve data in consume mode (verify data is removed)
   - Verify queue statistics
-  - Tests with both database implementations
+  - Uses ChannelDBHandler (in-memory)
 - `TestAPI_StartPolling` - Tests orchestration of all three polling goroutines
   - Verifies TRNG polling, Fortuna polling, and Fortuna seeding work together
   - Tests polling counts are incremented correctly
   - Verifies context cancellation stops all polling
-  - Tests with both database implementations
+  - Uses ChannelDBHandler (in-memory)
 - `TestAPI_CORS` - Tests CORS middleware functionality
   - OPTIONS request returns correct CORS headers
   - GET requests include CORS headers
@@ -234,17 +224,10 @@ tests/
   - Database metrics
 
 **database_integration_test.go** - Database integration tests:
-- `TestDatabaseImplementations` - Tests both database implementations with same test cases
-  - Table-driven tests run for both ChannelDBHandler and BoltDBHandler
-  - Tests all DBHandler interface methods
-  - Verifies known differences (UpdateQueueSizes, GetRNGStatistics, GetDatabasePath)
-- `TestDatabaseConsistency` - Verifies consistent behavior between implementations
-  - Same data stored returns consistent results
-  - Queue capacity/current size matches
-  - Statistics structure matches
-  - Store/Get operations behave identically
-  - Pagination works the same way
-  - Consume mode behavior matches
+- `TestChannelDatabase` - End-to-end exercises of the in-memory handler
+  - Store/retrieve TRNG and Fortuna data
+  - Queue info, stats, resize, consume mode
+  - Path is always `memory://channels`
 
 ### tests/ (156+ tests)
 
@@ -310,19 +293,10 @@ defer controllerServer.Close()
 
 ### Test Database Setup
 
-Tests use in-memory `ChannelDBHandler` for speed:
+Tests use in-memory `ChannelDBHandler`:
 
 ```go
-db, _ := database.NewChannelDBHandler("", 10, 20)
-```
-
-For BoltDB tests, temporary directories are used:
-
-```go
-tmpDir, _ := os.MkdirTemp("", "bolt_test_*")
-defer os.RemoveAll(tmpDir)
-dbPath := filepath.Join(tmpDir, "test.db")
-db, _ := database.NewBoltDBHandler(dbPath, 10, 20)
+db, _ := database.NewChannelDBHandler(10, 20, 15)
 ```
 
 ### Table-Driven Tests
@@ -362,7 +336,7 @@ for _, tt := range tests {
 ```go
 func TestNewFeature(t *testing.T) {
     // Setup
-    db, _ := database.NewChannelDBHandler("", 10, 20)
+    db, _ := database.NewChannelDBHandler(10, 20, 15)
     testRegistry := prometheus.NewRegistry()
     server := NewServer(db, "http://localhost:8081", "http://localhost:8082", 0, testRegistry)
     
@@ -405,16 +379,9 @@ testRegistry := prometheus.NewRegistry()
 server := NewServer(db, addr1, addr2, port, testRegistry)
 ```
 
-### Tests Fail with "database locked"
-
-Only one process can access a BoltDB file at a time. Ensure:
-- Tests use temporary directories
-- Tests clean up after themselves
-- No other processes are using the test database
-
 ### Tests Are Slow
 
-- Use `ChannelDBHandler` for unit tests (in-memory, faster)
+- Prefer focused unit tests over long integration sleeps
 - Use `-parallel` flag to run tests concurrently
 - Check for unnecessary sleeps or timeouts
 - Use `-short` flag to skip long-running tests

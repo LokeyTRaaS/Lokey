@@ -30,7 +30,7 @@ func TestServer_fetchAndStoreTRNGData(t *testing.T) {
 		}))
 		defer controllerServer.Close()
 
-		db, _ := database.NewChannelDBHandler("", 10, 20, 15)
+		db, _ := database.NewChannelDBHandler(10, 20, 15)
 		testRegistry := prometheus.NewRegistry()
 		server := api.NewServer(db, controllerServer.URL, "http://localhost:8082", "http://localhost:8083", 0, testRegistry)
 
@@ -50,7 +50,7 @@ func TestServer_fetchAndStoreTRNGData(t *testing.T) {
 	})
 
 	t.Run("HTTP error", func(t *testing.T) {
-		db, _ := database.NewChannelDBHandler("", 10, 20, 15)
+		db, _ := database.NewChannelDBHandler(10, 20, 15)
 		testRegistry := prometheus.NewRegistry()
 		server := api.NewServer(db, "http://localhost:99999", "http://localhost:8082", "http://localhost:8083", 0, testRegistry)
 
@@ -69,7 +69,7 @@ func TestServer_fetchAndStoreTRNGData(t *testing.T) {
 		}))
 		defer controllerServer.Close()
 
-		db, _ := database.NewChannelDBHandler("", 10, 20, 15)
+		db, _ := database.NewChannelDBHandler(10, 20, 15)
 		testRegistry := prometheus.NewRegistry()
 		server := api.NewServer(db, controllerServer.URL, "http://localhost:8082", "http://localhost:8083", 0, testRegistry)
 
@@ -89,7 +89,7 @@ func TestServer_fetchAndStoreTRNGData(t *testing.T) {
 		}))
 		defer controllerServer.Close()
 
-		db, _ := database.NewChannelDBHandler("", 10, 20, 15)
+		db, _ := database.NewChannelDBHandler(10, 20, 15)
 		testRegistry := prometheus.NewRegistry()
 		server := api.NewServer(db, controllerServer.URL, "http://localhost:8082", "http://localhost:8083", 0, testRegistry)
 
@@ -110,7 +110,7 @@ func TestServer_fetchAndStoreTRNGData(t *testing.T) {
 		}))
 		defer controllerServer.Close()
 
-		db, _ := database.NewChannelDBHandler("", 10, 20, 15)
+		db, _ := database.NewChannelDBHandler(10, 20, 15)
 		testRegistry := prometheus.NewRegistry()
 		server := api.NewServer(db, controllerServer.URL, "http://localhost:8082", "http://localhost:8083", 0, testRegistry)
 
@@ -140,7 +140,7 @@ func TestServer_fetchAndStoreFortunaData(t *testing.T) {
 		}))
 		defer fortunaServer.Close()
 
-		db, _ := database.NewChannelDBHandler("", 10, 20, 15)
+		db, _ := database.NewChannelDBHandler(10, 20, 15)
 		testRegistry := prometheus.NewRegistry()
 		server := api.NewServer(db, "http://localhost:8081", fortunaServer.URL, "http://localhost:8083", 0, testRegistry)
 
@@ -160,7 +160,7 @@ func TestServer_fetchAndStoreFortunaData(t *testing.T) {
 	})
 
 	t.Run("HTTP error", func(t *testing.T) {
-		db, _ := database.NewChannelDBHandler("", 10, 20, 15)
+		db, _ := database.NewChannelDBHandler(10, 20, 15)
 		testRegistry := prometheus.NewRegistry()
 		server := api.NewServer(db, "http://localhost:8081", "http://localhost:99999", "http://localhost:8083", 0, testRegistry)
 
@@ -176,7 +176,7 @@ func TestServer_fetchAndStoreFortunaData(t *testing.T) {
 		}))
 		defer fortunaServer.Close()
 
-		db, _ := database.NewChannelDBHandler("", 10, 20, 15)
+		db, _ := database.NewChannelDBHandler(10, 20, 15)
 		testRegistry := prometheus.NewRegistry()
 		server := api.NewServer(db, "http://localhost:8081", fortunaServer.URL, "http://localhost:8083", 0, testRegistry)
 
@@ -227,7 +227,7 @@ func TestServer_seedFortuna(t *testing.T) {
 		defer controllerServer.Close()
 		defer fortunaServer.Close()
 
-		db, _ := database.NewChannelDBHandler("", 10, 20, 15)
+		db, _ := database.NewChannelDBHandler(10, 20, 15)
 		testRegistry := prometheus.NewRegistry()
 		server := api.NewServer(db, controllerServer.URL, fortunaServer.URL, "http://localhost:8083", 0, testRegistry)
 
@@ -252,7 +252,7 @@ func TestServer_seedFortuna(t *testing.T) {
 		}))
 		defer fortunaServer.Close()
 
-		db, _ := database.NewChannelDBHandler("", 10, 20, 15)
+		db, _ := database.NewChannelDBHandler(10, 20, 15)
 		testRegistry := prometheus.NewRegistry()
 		server := api.NewServer(db, controllerServer.URL, fortunaServer.URL, "http://localhost:8083", 0, testRegistry)
 
@@ -287,7 +287,7 @@ func TestServer_seedFortuna(t *testing.T) {
 		}))
 		defer fortunaServer.Close()
 
-		db, _ := database.NewChannelDBHandler("", 10, 20, 15)
+		db, _ := database.NewChannelDBHandler(10, 20, 15)
 		testRegistry := prometheus.NewRegistry()
 		server := api.NewServer(db, controllerServer.URL, fortunaServer.URL, "http://localhost:8083", 0, testRegistry)
 
@@ -321,7 +321,7 @@ func TestServer_seedFortuna(t *testing.T) {
 		}))
 		defer fortunaServer.Close()
 
-		db, _ := database.NewChannelDBHandler("", 10, 20, 15)
+		db, _ := database.NewChannelDBHandler(10, 20, 15)
 		testRegistry := prometheus.NewRegistry()
 		server := api.NewServer(db, controllerServer.URL, fortunaServer.URL, "http://localhost:8083", 0, testRegistry)
 
@@ -395,7 +395,7 @@ func TestServer_pollTRNGService_Cancellation(t *testing.T) {
 	}))
 	defer controllerServer.Close()
 
-		db, _ := database.NewChannelDBHandler("", 10, 20, 15)
+		db, _ := database.NewChannelDBHandler(10, 20, 15)
 		testRegistry := prometheus.NewRegistry()
 		server := api.NewServer(db, controllerServer.URL, "http://localhost:8082", "http://localhost:8083", 0, testRegistry)
 
@@ -426,7 +426,7 @@ func TestServer_pollFortunaService_Cancellation(t *testing.T) {
 	}))
 	defer fortunaServer.Close()
 
-	db, _ := database.NewChannelDBHandler("", 10, 20, 15)
+	db, _ := database.NewChannelDBHandler(10, 20, 15)
 	testRegistry := prometheus.NewRegistry()
 	server := api.NewServer(db, "http://localhost:8081", fortunaServer.URL, "http://localhost:8083", 0, testRegistry)
 
@@ -460,7 +460,7 @@ func TestServer_seedFortunaWithTRNG_Cancellation(t *testing.T) {
 	defer controllerServer.Close()
 	defer fortunaServer.Close()
 
-	db, _ := database.NewChannelDBHandler("", 10, 20, 15)
+	db, _ := database.NewChannelDBHandler(10, 20, 15)
 	testRegistry := prometheus.NewRegistry()
 	server := api.NewServer(db, controllerServer.URL, fortunaServer.URL, "http://localhost:8083", 0, testRegistry)
 
@@ -517,7 +517,7 @@ func TestServer_SeedVirtIOFromTRNG(t *testing.T) {
 		defer controllerServer.Close()
 		defer virtioServer.Close()
 
-		db, _ := database.NewChannelDBHandler("", 10, 20, 15)
+		db, _ := database.NewChannelDBHandler(10, 20, 15)
 		testRegistry := prometheus.NewRegistry()
 		server := api.NewServer(db, controllerServer.URL, "http://localhost:8082", virtioServer.URL, 0, testRegistry)
 
@@ -535,7 +535,7 @@ func TestServer_SeedVirtIOFromTRNG(t *testing.T) {
 func TestServer_SeedVirtIOFromFortuna(t *testing.T) {
 	t.Run("successful seeding", func(t *testing.T) {
 		// Store some Fortuna data in database
-		db, _ := database.NewChannelDBHandler("", 10, 20, 15)
+		db, _ := database.NewChannelDBHandler(10, 20, 15)
 		testData := []byte{1, 2, 3, 4, 5}
 		if err := db.StoreFortunaData(testData); err != nil {
 			t.Fatalf("Failed to store Fortuna data: %v", err)

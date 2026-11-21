@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -16,7 +14,7 @@ import (
 )
 
 func setupTestServer() (*api.Server, database.DBHandler) {
-	db, _ := database.NewChannelDBHandler("", 10, 20, 15)
+	db, _ := database.NewChannelDBHandler(10, 20, 15)
 	testRegistry := prometheus.NewRegistry()
 	server := api.NewServer(db, "http://localhost:8081", "http://localhost:8082", "http://localhost:8083", 0, testRegistry)
 	return server, db
@@ -26,7 +24,7 @@ func TestNewServer(t *testing.T) {
 	// Skip this test to avoid Prometheus metrics registration conflicts
 	// when multiple tests create servers in the same test run
 	// The server creation is tested by other tests that use setupTestServer
-	db, _ := database.NewChannelDBHandler("", 10, 20, 15)
+	db, _ := database.NewChannelDBHandler(10, 20, 15)
 	testRegistry := prometheus.NewRegistry()
 	server := api.NewServer(db, "http://localhost:8081", "http://localhost:8082", "http://localhost:8083", 8080, testRegistry)
 	if server == nil {
@@ -69,19 +67,8 @@ func TestServer_GetQueueConfig(t *testing.T) {
 }
 
 func TestServer_UpdateQueueConfig(t *testing.T) {
-	t.Run("valid config with BoltDBHandler", func(t *testing.T) {
-		// Test with BoltDBHandler which supports UpdateQueueSizes
-		tmpDir := t.TempDir()
-		dbPath := filepath.Join(tmpDir, "test.db")
-		db, err := database.NewBoltDBHandler(dbPath, 10, 20, 15)
-		if err != nil {
-			t.Fatalf("Failed to create BoltDB handler: %v", err)
-		}
-		defer db.Close()
-		defer os.RemoveAll(tmpDir)
-
-		testRegistry := prometheus.NewRegistry()
-		server := api.NewServer(db, "http://localhost:8081", "http://localhost:8082", "http://localhost:8083", 0, testRegistry)
+	t.Run("valid config with ChannelDBHandler", func(t *testing.T) {
+		server, _ := setupTestServer()
 
 		config := api.QueueConfig{
 			TRNGQueueSize:    50,
@@ -110,28 +97,6 @@ func TestServer_UpdateQueueConfig(t *testing.T) {
 		}
 		if response.VirtIOQueueSize != 70 {
 			t.Errorf("Expected VirtIO queue size 70, got %d", response.VirtIOQueueSize)
-		}
-	})
-
-	t.Run("valid config with ChannelDBHandler", func(t *testing.T) {
-		// Test with ChannelDBHandler which doesn't support UpdateQueueSizes
-		// Should return 500 Internal Server Error
-		server, _ := setupTestServer()
-
-		config := api.QueueConfig{
-			TRNGQueueSize:    50,
-			FortunaQueueSize: 60,
-			VirtIOQueueSize:  70,
-		}
-		body, _ := json.Marshal(config)
-		w := httptest.NewRecorder()
-		req, _ := http.NewRequest("PUT", "/api/v1/config/queue", bytes.NewBuffer(body))
-		req.Header.Set("Content-Type", "application/json")
-		server.Router.ServeHTTP(w, req)
-
-		// ChannelDBHandler doesn't support UpdateQueueSizes, so should return 500
-		if w.Code != http.StatusInternalServerError {
-			t.Errorf("Expected status 500 for ChannelDBHandler, got %d: %s", w.Code, w.Body.String())
 		}
 	})
 
@@ -278,7 +243,7 @@ func TestServer_GetRandomData(t *testing.T) {
 	})
 
 	t.Run("no data available", func(t *testing.T) {
-		emptyDB, _ := database.NewChannelDBHandler("", 10, 20, 15)
+		emptyDB, _ := database.NewChannelDBHandler(10, 20, 15)
 		testRegistry := prometheus.NewRegistry()
 		emptyServer := api.NewServer(emptyDB, "http://localhost:8081", "http://localhost:8082", "http://localhost:8083", 0, testRegistry)
 
@@ -299,7 +264,7 @@ func TestServer_GetRandomData(t *testing.T) {
 	})
 
 	t.Run("pagination", func(t *testing.T) {
-		testDB, _ := database.NewChannelDBHandler("", 10, 20, 15)
+		testDB, _ := database.NewChannelDBHandler(10, 20, 15)
 		for i := 0; i < 10; i++ {
 			testDB.StoreTRNGData([]byte{byte(i)})
 		}

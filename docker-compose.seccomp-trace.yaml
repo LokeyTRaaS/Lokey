@@ -1,0 +1,50 @@
+# Temporary override for syscall discovery (do not use in production).
+# docker compose -f docker-compose.yaml -f docker-compose.seccomp-trace.yaml up -d --force-recreate api fortuna virtio controller-a controller-b
+x-trace: &trace
+  user: "0:0"
+  security_opt:
+    - seccomp=unconfined
+  volumes:
+    - ./.seccomp-trace:/trace
+
+services:
+  api:
+    <<: *trace
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        apk add --no-cache strace >/trace/api-apk.log 2>&1
+        exec strace -f -o /trace/api.raw /usr/local/bin/api
+  fortuna:
+    <<: *trace
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        apk add --no-cache strace >/trace/fortuna-apk.log 2>&1
+        exec strace -f -o /trace/fortuna.raw /usr/local/bin/fortuna
+  virtio:
+    <<: *trace
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        apk add --no-cache strace >/trace/virtio-apk.log 2>&1
+        exec strace -f -o /trace/virtio.raw /usr/local/bin/virtio
+  controller-a:
+    <<: *trace
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        apk add --no-cache strace >/trace/controller-a-apk.log 2>&1
+        exec strace -f -o /trace/controller-a.raw /usr/local/bin/controller
+  controller-b:
+    <<: *trace
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        apk add --no-cache strace >/trace/controller-b-apk.log 2>&1
+        exec strace -f -o /trace/controller-b.raw /usr/local/bin/controller

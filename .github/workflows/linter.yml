@@ -25,7 +25,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version: '1.24'
+          go-version: '1.27'
           cache: true
 
       - name: Download dependencies
@@ -35,6 +35,7 @@ jobs:
           cd cmd/api && go mod download && go mod tidy && cd ../..
           cd cmd/controller && go mod download && go mod tidy && cd ../..
           cd cmd/fortuna && go mod download && go mod tidy && cd ../..
+          cd cmd/virtio && go mod download && go mod tidy && cd ../..
 
       - name: Run golangci-lint on source code
         uses: golangci/golangci-lint-action@v8
@@ -58,7 +59,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version: '1.24'
+          go-version: '1.27'
           cache: true
 
       - name: Download dependencies
@@ -68,6 +69,7 @@ jobs:
           cd cmd/api && go mod download && go mod tidy && cd ../..
           cd cmd/controller && go mod download && go mod tidy && cd ../..
           cd cmd/fortuna && go mod download && go mod tidy && cd ../..
+          cd cmd/virtio && go mod download && go mod tidy && cd ../..
 
       - name: Run tests
         run: go test -race -coverprofile=coverage.out ./...

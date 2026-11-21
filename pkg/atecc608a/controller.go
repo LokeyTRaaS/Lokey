@@ -140,6 +140,8 @@ type Controller struct {
 	LastError        error
 	mutex            sync.Mutex
 	busNumber        int
+	deviceID         string
+	i2cAddress       uint8
 	state            DeviceState
 	autoConfig       bool
 	recoveryInFlight bool
@@ -206,22 +208,36 @@ func NewController(busNumber int) (*Controller, error) {
 
 	logDebug("Container I2C Debug - UID: %d, GID: %d", os.Getuid(), os.Getgid())
 
+	devicePath := fmt.Sprintf("/dev/i2c-%d", busNumber)
 	// Check if I2C device exists
-	if _, err := os.Stat("/dev/i2c-1"); os.IsNotExist(err) {
+	if _, err := os.Stat(devicePath); os.IsNotExist(err) {
 		if logOutput != nil {
 			log.SetOutput(logOutput)
 		}
-		return nil, fmt.Errorf("I2C device /dev/i2c-1 does not exist in container")
+		return nil, fmt.Errorf("I2C device %s does not exist in container", devicePath)
 	}
 
 	// Check I2C device permissions
-	info, err := os.Stat("/dev/i2c-1")
+	info, err := os.Stat(devicePath)
 	if err == nil {
 		logDebug("I2C device permissions: %s", info.Mode())
 	}
 
-	logInfo("Initializing I2C connection to 0x%02x on bus %d", DefaultI2CAddress, busNumber)
-	i2c, err := i2c.NewI2C(DefaultI2CAddress, busNumber)
+	i2cAddress := uint8(DefaultI2CAddress)
+	if val, ok := os.LookupEnv("I2C_ADDRESS"); ok && val != "" {
+		parsed, perr := strconv.ParseUint(val, 0, 8)
+		if perr == nil {
+			i2cAddress = uint8(parsed)
+		}
+	}
+
+	deviceID := os.Getenv("DEVICE_ID")
+	if deviceID == "" {
+		deviceID = "default"
+	}
+
+	logInfo("Initializing I2C connection to 0x%02x on bus %d (device_id=%s)", i2cAddress, busNumber, deviceID)
+	i2c, err := i2c.NewI2C(i2cAddress, busNumber)
 	if err != nil {
 		if logOutput != nil {
 			log.SetOutput(logOutput)
@@ -257,12 +273,14 @@ func NewController(busNumber int) (*Controller, error) {
 	}
 
 	controller := &Controller{
-		i2c:              i2c,
-		LastError:        nil,
-		busNumber:        busNumber,
-		state:            DeviceStateUnknown,
-		autoConfig:       true, // Enable auto-configuration by default
-		recoveryInFlight: false,
+		i2c:                 i2c,
+		LastError:           nil,
+		busNumber:           busNumber,
+		deviceID:            deviceID,
+		i2cAddress:          i2cAddress,
+		state:               DeviceStateUnknown,
+		autoConfig:          true, // Enable auto-configuration by default
+		recoveryInFlight:    false,
 		circuitOpenDuration: circuitOpenDuration,
 		recoveryCooldown:    recoveryCooldown,
 		validationAttempts:  validationAttemptsCount,
@@ -932,6 +950,19 @@ func (c *Controller) Close() error {
 }
 
 // HealthCheck verifies the device is responsive
+// Mode returns the entropy backend mode.
+func (c *Controller) Mode() string {
+	return "hardware"
+}
+
+// DeviceID returns the configured device identifier.
+func (c *Controller) DeviceID() string {
+	if c.deviceID == "" {
+		return "default"
+	}
+	return c.deviceID
+}
+
 func (c *Controller) HealthCheck() bool {
 	// Check state first
 	if c.getState() != DeviceStateHealthy {

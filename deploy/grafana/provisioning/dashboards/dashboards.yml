@@ -1,0 +1,21 @@
+apiVersion: 1
+providers:
+  - name: lokey
+    orgId: 1
+    folder: LoKey
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    options:
+      path: /var/lib/grafana/dashboards/lokey
+      foldersFromFilesStructure: false
+
+  - name: infrastructure
+    orgId: 1
+    folder: Infrastructure
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    options:
+      path: /var/lib/grafana/dashboards/infrastructure
+      foldersFromFilesStructure: false

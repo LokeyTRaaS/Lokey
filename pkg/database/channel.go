@@ -132,7 +132,38 @@ func (q *CircularQueue) Size() int {
 
 // Capacity returns queue capacity
 func (q *CircularQueue) Capacity() int {
+	q.mu.RLock()
+	defer q.mu.RUnlock()
 	return q.capacity
+}
+
+// Resize changes capacity, preserving newest items when shrinking.
+func (q *CircularQueue) Resize(newCap int) error {
+	if newCap < 1 {
+		return fmt.Errorf("queue capacity must be at least 1")
+	}
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if newCap == q.capacity {
+		return nil
+	}
+
+	start := 0
+	count := q.size
+	if count > newCap {
+		start = count - newCap
+		count = newCap
+	}
+	next := make([]DataItem, newCap)
+	for i := 0; i < count; i++ {
+		next[i] = q.items[(q.head+start+i)%q.capacity]
+	}
+	q.items = next
+	q.capacity = newCap
+	q.head = 0
+	q.tail = count % newCap
+	q.size = count
+	return nil
 }
 
 // ChannelDBHandler implements DBHandler using in-memory circular queues
@@ -148,7 +179,7 @@ type ChannelDBHandler struct {
 }
 
 // NewChannelDBHandler creates a new channel-based database handler
-func NewChannelDBHandler(_ string, trngQueueSize, fortunaQueueSize, virtioQueueSize int) (*ChannelDBHandler, error) {
+func NewChannelDBHandler(trngQueueSize, fortunaQueueSize, virtioQueueSize int) (*ChannelDBHandler, error) {
 	return &ChannelDBHandler{
 		TRNGQueue:    NewCircularQueue(trngQueueSize),
 		FortunaQueue: NewCircularQueue(fortunaQueueSize),
@@ -375,9 +406,24 @@ func (h *ChannelDBHandler) GetQueueInfo() (map[string]int, error) {
 	return info, nil
 }
 
-// UpdateQueueSizes is not supported for channel implementation
-func (h *ChannelDBHandler) UpdateQueueSizes(_ int, _ int, _ int) error {
-	return fmt.Errorf("dynamic queue resizing not supported in channel implementation")
+// UpdateQueueSizes resizes in-memory queues (0 leaves a queue unchanged).
+func (h *ChannelDBHandler) UpdateQueueSizes(trngSize, fortunaSize, virtioSize int) error {
+	if trngSize > 0 {
+		if err := h.TRNGQueue.Resize(trngSize); err != nil {
+			return err
+		}
+	}
+	if fortunaSize > 0 {
+		if err := h.FortunaQueue.Resize(fortunaSize); err != nil {
+			return err
+		}
+	}
+	if virtioSize > 0 {
+		if err := h.VirtIOQueue.Resize(virtioSize); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 //---------------------- Health Check ----------------------

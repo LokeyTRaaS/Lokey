@@ -1,6 +1,6 @@
 module github.com/lokey/rng-service/cmd/virtio
 
-go 1.24.0
+go 1.27
 
 replace github.com/lokey/rng-service => ../../
 
@@ -31,7 +31,6 @@ require (
 	github.com/quic-go/quic-go v0.54.0 // indirect
 	github.com/twitchyliquid64/golang-asm v0.15.1 // indirect
 	github.com/ugorji/go/codec v1.3.0 // indirect
-	go.etcd.io/bbolt v1.4.3 // indirect
 	go.uber.org/mock v0.5.0 // indirect
 	golang.org/x/arch v0.20.0 // indirect
 	golang.org/x/crypto v0.46.0 // indirect

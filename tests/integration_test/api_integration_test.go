@@ -61,19 +61,7 @@ func setupMockFortuna(t *testing.T) (*httptest.Server, func()) {
 func TestAPI_Endpoints(t *testing.T) {
 	t.Run("with ChannelDBHandler", func(t *testing.T) {
 		testAPIEndpoints(t, func() (database.DBHandler, func()) {
-			db, _ := database.NewChannelDBHandler("", 10, 20, 15)
-			return db, func() { db.Close() }
-		})
-	})
-
-	t.Run("with BoltDBHandler", func(t *testing.T) {
-		testAPIEndpoints(t, func() (database.DBHandler, func()) {
-			tmpDir := t.TempDir()
-			dbPath := tmpDir + "/test.db"
-			db, err := database.NewBoltDBHandler(dbPath, 10, 20, 15)
-			if err != nil {
-				t.Fatalf("Failed to create BoltDB handler: %v", err)
-			}
+			db, _ := database.NewChannelDBHandler(10, 20, 15)
 			return db, func() { db.Close() }
 		})
 	})
@@ -124,23 +112,19 @@ func testAPIEndpoints(t *testing.T, setupDB func() (database.DBHandler, func()))
 		req.Header.Set("Content-Type", "application/json")
 		server.Router.ServeHTTP(w, req)
 
-		// ChannelDBHandler doesn't support UpdateQueueSizes, so it may return 500
-		// BoltDBHandler should return 200
-		if w.Code != http.StatusOK && w.Code != http.StatusInternalServerError {
-			t.Errorf("Expected status 200 or 500, got %d: %s", w.Code, w.Body.String())
+		if w.Code != http.StatusOK {
+			t.Errorf("Expected status 200, got %d: %s", w.Code, w.Body.String())
 		}
 
-		if w.Code == http.StatusOK {
-			var response api.QueueConfig
-			if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
-				t.Fatalf("Failed to unmarshal response: %v", err)
-			}
-			if response.TRNGQueueSize != 50 {
-				t.Errorf("Expected TRNG queue size 50, got %d", response.TRNGQueueSize)
-			}
-			if response.VirtIOQueueSize != 70 {
-				t.Errorf("Expected VirtIO queue size 70, got %d", response.VirtIOQueueSize)
-			}
+		var response api.QueueConfig
+		if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+			t.Fatalf("Failed to unmarshal response: %v", err)
+		}
+		if response.TRNGQueueSize != 50 {
+			t.Errorf("Expected TRNG queue size 50, got %d", response.TRNGQueueSize)
+		}
+		if response.VirtIOQueueSize != 70 {
+			t.Errorf("Expected VirtIO queue size 70, got %d", response.VirtIOQueueSize)
 		}
 	})
 
@@ -370,19 +354,7 @@ func testAPIEndpoints(t *testing.T, setupDB func() (database.DBHandler, func()))
 func TestAPI_CompleteFlow(t *testing.T) {
 	t.Run("with ChannelDBHandler", func(t *testing.T) {
 		testCompleteFlow(t, func() (database.DBHandler, func()) {
-			db, _ := database.NewChannelDBHandler("", 10, 20, 15)
-			return db, func() { db.Close() }
-		})
-	})
-
-	t.Run("with BoltDBHandler", func(t *testing.T) {
-		testCompleteFlow(t, func() (database.DBHandler, func()) {
-			tmpDir := t.TempDir()
-			dbPath := tmpDir + "/test.db"
-			db, err := database.NewBoltDBHandler(dbPath, 10, 20, 15)
-			if err != nil {
-				t.Fatalf("Failed to create BoltDB handler: %v", err)
-			}
+			db, _ := database.NewChannelDBHandler(10, 20, 15)
 			return db, func() { db.Close() }
 		})
 	})
@@ -586,19 +558,7 @@ func testCompleteFlow(t *testing.T, setupDB func() (database.DBHandler, func()))
 func TestAPI_StartPolling(t *testing.T) {
 	t.Run("with ChannelDBHandler", func(t *testing.T) {
 		testStartPolling(t, func() (database.DBHandler, func()) {
-			db, _ := database.NewChannelDBHandler("", 10, 20, 15)
-			return db, func() { db.Close() }
-		})
-	})
-
-	t.Run("with BoltDBHandler", func(t *testing.T) {
-		testStartPolling(t, func() (database.DBHandler, func()) {
-			tmpDir := t.TempDir()
-			dbPath := tmpDir + "/test.db"
-			db, err := database.NewBoltDBHandler(dbPath, 10, 20, 15)
-			if err != nil {
-				t.Fatalf("Failed to create BoltDB handler: %v", err)
-			}
+			db, _ := database.NewChannelDBHandler(10, 20, 15)
 			return db, func() { db.Close() }
 		})
 	})
@@ -719,7 +679,7 @@ func testStartPolling(t *testing.T, setupDB func() (database.DBHandler, func()))
 
 func TestAPI_CORS(t *testing.T) {
 	db, cleanupDB := func() (database.DBHandler, func()) {
-		db, _ := database.NewChannelDBHandler("", 10, 20, 15)
+		db, _ := database.NewChannelDBHandler(10, 20, 15)
 		return db, func() { db.Close() }
 	}()
 	defer cleanupDB()
@@ -769,7 +729,7 @@ func TestAPI_CORS(t *testing.T) {
 
 func TestAPI_HealthCheckFailures(t *testing.T) {
 	db, cleanupDB := func() (database.DBHandler, func()) {
-		db, _ := database.NewChannelDBHandler("", 10, 20, 15)
+		db, _ := database.NewChannelDBHandler(10, 20, 15)
 		return db, func() { db.Close() }
 	}()
 	defer cleanupDB()
@@ -920,7 +880,7 @@ func TestAPI_HealthCheckFailures(t *testing.T) {
 
 func TestAPI_MetricsAccuracy(t *testing.T) {
 	db, cleanupDB := func() (database.DBHandler, func()) {
-		db, _ := database.NewChannelDBHandler("", 10, 20, 15)
+		db, _ := database.NewChannelDBHandler(10, 20, 15)
 		return db, func() { db.Close() }
 	}()
 	defer cleanupDB()

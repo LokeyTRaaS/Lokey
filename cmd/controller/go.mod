@@ -1,6 +1,6 @@
 module github.com/lokey/rng-service/cmd/controller
 
-go 1.24.0
+go 1.27
 
 replace github.com/lokey/rng-service => ../../
 

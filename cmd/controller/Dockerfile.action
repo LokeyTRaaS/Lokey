@@ -1,6 +1,5 @@
 FROM alpine:latest
 
-# OCI Labels
 LABEL org.opencontainers.image.title="LoKey Controller"
 LABEL org.opencontainers.image.description="ATECC608A hardware TRNG controller service for true random number generation"
 LABEL org.opencontainers.image.url="https://lokey.cloud"
@@ -9,38 +8,18 @@ LABEL org.opencontainers.image.licenses="MIT"
 LABEL org.opencontainers.image.vendor="LoKey TRaaS"
 LABEL org.opencontainers.image.documentation="https://github.com/LokeyTRaaS/Lokey/blob/main/README.md"
 
-# Add runtime dependencies
-# ca-certificates: HTTPS support
-# libc6-compat: glibc compatibility for CGO binaries
-# i2c-tools: I2C hardware interface support
 RUN apk --no-cache add ca-certificates libc6-compat i2c-tools wget
 
-# Create app-bin directory for binaries (will be copied to tmpfs /app at runtime)
-RUN mkdir -p /app-bin
+COPY build/lokey-controller /usr/local/bin/controller
 
-# Copy pre-built binary (rename to standardized name)
-COPY build/lokey-controller /app-bin/controller
-
-# Create entrypoint script to copy binaries to tmpfs /app
-RUN echo '#!/bin/sh' > /entrypoint.sh && \
-    echo 'mkdir -p /app' >> /entrypoint.sh && \
-    echo 'cp -r /app-bin/* /app/' >> /entrypoint.sh && \
-    echo 'exec /app/controller "$@"' >> /entrypoint.sh && \
-    chmod +x /entrypoint.sh
-
-# Set environment variables
 ENV PORT=8081 \
     I2C_BUS_NUMBER=1 \
     FORCE_CONFIG=false \
     LOG_LEVEL=INFO
 
-# Expose the port
 EXPOSE 8081
 
-# Health check
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-  CMD wget --no-verbose --tries=1 -O /dev/null http://localhost:8081/health || exit 1
+  CMD ["wget", "--no-verbose", "--tries=1", "-O", "/dev/null", "http://localhost:8081/health"]
 
-# Use entrypoint to copy binaries to tmpfs /app before running
-ENTRYPOINT ["/entrypoint.sh"]
-CMD []
+ENTRYPOINT ["/usr/local/bin/controller"]

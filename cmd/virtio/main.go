@@ -114,6 +114,7 @@ func (v *VirtIOService) setupRoutes() {
 	v.router.POST("/seed", v.seedHandler)
 	v.router.GET("/config/queue", v.getQueueConfigHandler)
 	v.router.PUT("/config/queue", v.updateQueueConfigHandler)
+	v.router.GET("/metrics", v.metricsHandler)
 }
 
 func (v *VirtIOService) Start() error {
@@ -204,11 +205,34 @@ func (v *VirtIOService) healthCheckHandler(ctx *gin.Context) {
 }
 
 func (v *VirtIOService) infoHandler(ctx *gin.Context) {
+	queueSize := v.device.GetQueueSize()
+	queueCurrent := v.device.GetQueueCurrent()
+	totalGenerated, consumedCount, droppedCount := v.device.GetQueueStats()
+	unconsumed := queueCurrent
+	if unconsumed < 0 {
+		unconsumed = 0
+	}
+	pct := 0.0
+	if queueSize > 0 {
+		pct = float64(queueCurrent) * 100.0 / float64(queueSize)
+	}
+
 	info := gin.H{
-		"status": "running",
+		"status":          "running",
+		"service":         "virtio",
+		"queue_size":      queueSize,
+		"queue_current":   queueCurrent,
+		"queue_percentage": pct,
+		"total_generated": int64(totalGenerated),
+		"consumed_count":  int64(consumedCount),
+		"unconsumed_count": int64(unconsumed),
+		"queue_dropped":   int64(droppedCount),
 	}
 	if v.pipe != nil {
 		info["pipe_path"] = v.pipe.Path()
+		info["pipe_enabled"] = true
+	} else {
+		info["pipe_enabled"] = false
 	}
 	ctx.JSON(http.StatusOK, info)
 }
@@ -393,6 +417,37 @@ func (v *VirtIOService) getQueueConfigHandler(ctx *gin.Context) {
 		"consumed_count":  int64(consumedCount),
 		"queue_dropped":   int64(droppedCount),
 	})
+}
+
+// metricsHandler exposes Prometheus text for VirtIO queue visibility.
+func (v *VirtIOService) metricsHandler(ctx *gin.Context) {
+	queueSize := v.device.GetQueueSize()
+	queueCurrent := v.device.GetQueueCurrent()
+	totalGenerated, consumedCount, droppedCount := v.device.GetQueueStats()
+	pct := 0.0
+	if queueSize > 0 {
+		pct = float64(queueCurrent) * 100.0 / float64(queueSize)
+	}
+
+	ctx.Header("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+	fmt.Fprintf(ctx.Writer, "# HELP lokey_virtio_queue_current Current VirtIO queue depth\n")
+	fmt.Fprintf(ctx.Writer, "# TYPE lokey_virtio_queue_current gauge\n")
+	fmt.Fprintf(ctx.Writer, "lokey_virtio_queue_current %d\n", queueCurrent)
+	fmt.Fprintf(ctx.Writer, "# HELP lokey_virtio_queue_capacity VirtIO queue capacity\n")
+	fmt.Fprintf(ctx.Writer, "# TYPE lokey_virtio_queue_capacity gauge\n")
+	fmt.Fprintf(ctx.Writer, "lokey_virtio_queue_capacity %d\n", queueSize)
+	fmt.Fprintf(ctx.Writer, "# HELP lokey_virtio_queue_percentage VirtIO queue utilization percent\n")
+	fmt.Fprintf(ctx.Writer, "# TYPE lokey_virtio_queue_percentage gauge\n")
+	fmt.Fprintf(ctx.Writer, "lokey_virtio_queue_percentage %g\n", pct)
+	fmt.Fprintf(ctx.Writer, "# HELP lokey_virtio_total_generated_total Items ever pushed into VirtIO queue\n")
+	fmt.Fprintf(ctx.Writer, "# TYPE lokey_virtio_total_generated_total counter\n")
+	fmt.Fprintf(ctx.Writer, "lokey_virtio_total_generated_total %d\n", totalGenerated)
+	fmt.Fprintf(ctx.Writer, "# HELP lokey_virtio_consumed_total Items consumed from VirtIO queue\n")
+	fmt.Fprintf(ctx.Writer, "# TYPE lokey_virtio_consumed_total counter\n")
+	fmt.Fprintf(ctx.Writer, "lokey_virtio_consumed_total %d\n", consumedCount)
+	fmt.Fprintf(ctx.Writer, "# HELP lokey_virtio_dropped_total Items dropped from VirtIO queue\n")
+	fmt.Fprintf(ctx.Writer, "# TYPE lokey_virtio_dropped_total counter\n")
+	fmt.Fprintf(ctx.Writer, "lokey_virtio_dropped_total %d\n", droppedCount)
 }
 
 func (v *VirtIOService) updateQueueConfigHandler(ctx *gin.Context) {

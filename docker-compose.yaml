@@ -1,7 +1,22 @@
 ---
+# LoKey stack — linux/amd64 + linux/arm64
+# Networks: edge (Traefik), app (api/fortuna/virtio), devices (controllers), metrics
+# Local default: CONTROLLER_MODE=emulated (no ATECC required)
+
 networks:
-  lokey-internal:
+  lokey-edge:
     driver: bridge
+  lokey-app:
+    driver: bridge
+  lokey-devices:
+    driver: bridge
+  lokey-metrics:
+    driver: bridge
+
+volumes:
+  traefik-acme:
+  prometheus-data:
+  grafana-data:
 
 x-logging: &logging-common
   driver: "json-file"
@@ -9,383 +24,321 @@ x-logging: &logging-common
     max-size: "10m"
     max-file: "3"
 
-x-api-common: &api-common
-  deploy:
-    resources:
-      limits:
-        memory: 242M # accounts for service (64M) + /data tmpfs (128M) + /app tmpfs (50M)
-  networks:
-    - lokey-internal
-  image: ghcr.io/lokeytraas/lokey/api:prerelease-major-refactor-arm64
-  restart: unless-stopped
-  logging: *logging-common
-  ports:
-    - '8080:8080'
-  volumes:
-    - type: tmpfs
-      target: /data
-      tmpfs:
-        size: 128M
-    - type: tmpfs
-      target: /app
-      tmpfs:
-        size: 50M
-
 x-api-env: &api-env
-  PORT: 8080
-  DB_PATH: /data/api.db
-  DB_IMPLEMENTATION: channel
-  CONTROLLER_ADDR: http://controller:8081
+  PORT: "8080"
+  CONTROLLER_ADDR: http://controller-a:8081
+  CONTROLLER_ADDRS: "device_a=http://controller-a:8081,device_b=http://controller-b:8081"
   FORTUNA_ADDR: http://fortuna:8082
-  TRNG_QUEUE_SIZE: 500000 #For raspberry pi zero 2 max 500.000 of 31 bit items
-  FORTUNA_QUEUE_SIZE: 10000 #For raspberry pi zero 2 max 1000 of 256 bit items, note that these settings are optimistic and assume the device to solely be used for random number generation.
-  TRNG_POLL_INTERVAL_MS: 100
-  FORTUNA_POLL_INTERVAL_MS: 100
   VIRTIO_ADDR: http://virtio:8083
-  VIRTIO_QUEUE_SIZE: 500000
-  VIRTIO_POLL_INTERVAL_MS: 100
-  VIRTIO_SEED_INTERVAL_SECONDS: 30
+  TRNG_QUEUE_SIZE: "100000"
+  FORTUNA_QUEUE_SIZE: "50000"
+  VIRTIO_QUEUE_SIZE: "15000"
+  TRNG_POLL_INTERVAL_MS: "100"
+  FORTUNA_POLL_INTERVAL_MS: "100"
+  VIRTIO_SEED_INTERVAL_SECONDS: "30"
   VIRTIO_SEEDING_SOURCE: trng
-  TRNG_APT_WINDOW_SIZE: 512 # APT test window size in bytes (256-2048)
-
-x-controller-common: &controller-common
-  deploy:
-    resources:
-      limits:
-        memory: 42M # accounts for service (20M) + /app tmpfs (22M)
-  networks:
-    - lokey-internal
-  devices:
-    - /dev/i2c-1:/dev/i2c-1
-  image: ghcr.io/lokeytraas/lokey/controller:prerelease-major-refactor-arm64
-  privileged: true
-  restart: unless-stopped
-  logging: *logging-common
-  volumes:
-    - type: tmpfs
-      target: /app
-      tmpfs:
-        size: 22M
-
-x-controller-env: &controller-env
-  PORT: 8081
-  I2C_BUS_NUMBER: 1
-  FORCE_CONFIG: "false"
-
-x-fortuna-common: &fortuna-common
-  deploy:
-    resources:
-      limits:
-        memory: 52M # accounts for service (20M) + /app tmpfs (32M)
-  networks:
-    - lokey-internal
-  image: ghcr.io/lokeytraas/lokey/fortuna:prerelease-major-refactor-arm64
-  restart: unless-stopped
-  logging: *logging-common
-  volumes:
-    - type: tmpfs
-      target: /app
-      tmpfs:
-        size: 32M
+  TRNG_APT_WINDOW_SIZE: "512"
 
 x-fortuna-env: &fortuna-env
-  PORT: 8082
-  AMPLIFICATION_FACTOR: 4
-
-x-virtio-common: &virtio-common
-  deploy:
-    resources:
-      limits:
-        memory: 52M # accounts for service (20M) + /app tmpfs (32M)
-  networks:
-    - lokey-internal
-  image: ghcr.io/lokeytraas/lokey/virtio:prerelease-major-refactor-arm64
-  restart: unless-stopped
-  logging: *logging-common
-  volumes:
-    - type: tmpfs
-      target: /app
-      tmpfs:
-        size: 32M
-
-x-virtio-common-with-devices: &virtio-common-with-devices
-  <<: *virtio-common
-  devices:
-    - /dev/hwrng:/dev/hwrng
-    - /dev/random:/dev/random
-
-# Common definitions WITHOUT tmpfs (for local profile)
-x-api-common-no-tmpfs: &api-common-no-tmpfs
-  deploy:
-    resources:
-      limits:
-        memory: 128M # service only, no tmpfs, 128M if you use the ringbuffer database
-  networks:
-    - lokey-internal
-  image: ghcr.io/lokeytraas/lokey/api:prerelease-major-refactor-arm64
-  restart: unless-stopped
-  logging: *logging-common
-  ports:
-    - '8080:8080'
-
-x-controller-common-no-tmpfs: &controller-common-no-tmpfs
-  deploy:
-    resources:
-      limits:
-        memory: 20M # service only, no tmpfs
-  networks:
-    - lokey-internal
-  devices:
-    - /dev/i2c-1:/dev/i2c-1
-  image: ghcr.io/lokeytraas/lokey/controller:prerelease-major-refactor-arm64
-  privileged: true
-  restart: unless-stopped
-  logging: *logging-common
-
-x-fortuna-common-no-tmpfs: &fortuna-common-no-tmpfs
-  deploy:
-    resources:
-      limits:
-        memory: 20M # service only, no tmpfs
-  networks:
-    - lokey-internal
-  image: ghcr.io/lokeytraas/lokey/fortuna:prerelease-major-refactor-arm64
-  restart: unless-stopped
-  logging: *logging-common
-
-x-virtio-common-no-tmpfs: &virtio-common-no-tmpfs
-  deploy:
-    resources:
-      limits:
-        memory: 20M # service only, no tmpfs
-  networks:
-    - lokey-internal
-  image: ghcr.io/lokeytraas/lokey/virtio:prerelease-major-refactor-arm64
-  restart: unless-stopped
-  logging: *logging-common
+  PORT: "8082"
+  AMPLIFICATION_FACTOR: "4"
 
 x-virtio-env: &virtio-env
-  PORT: 8083
-  RNG_DEVICE: /dev/hwrng
-  VIRTIO_QUEUE_SIZE: 15000
+  PORT: "8083"
+  VIRTIO_QUEUE_SIZE: "15000"
   VIRTIO_PIPE_PATH: /var/run/lokey/virtio-rng
 
-x-local-registry-images: &local-registry-images
-  api: ${DEV_MACHINE_IP:-localhost}:5000/lokey-api:latest
-  controller: ${DEV_MACHINE_IP:-localhost}:5000/lokey-controller:latest
-  fortuna: ${DEV_MACHINE_IP:-localhost}:5000/lokey-fortuna:latest
-  virtio: ${DEV_MACHINE_IP:-localhost}:5000/lokey-virtio:latest
+x-controller-env-base: &controller-env-base
+  PORT: "8081"
+  CONTROLLER_MODE: emulated
+  FORCE_CONFIG: "false"
+  GIN_MODE: release
+  LOG_LEVEL: WARN
 
 services:
+  traefik:
+    image: traefik:v3.3
+    restart: unless-stopped
+    logging: *logging-common
+    ports:
+      - "${TRAEFIK_HTTP_PORT:-80}:80"
+      - "${TRAEFIK_HTTPS_PORT:-443}:443"
+    environment:
+      LOKEY_DOMAIN: ${LOKEY_DOMAIN:-localhost}
+      LOKEY_ACME_EMAIL: ${LOKEY_ACME_EMAIL:-admin@example.com}
+    command:
+      # File provider is primary (works without Docker API negotiation).
+      # Docker provider optional via LOKEY_TRAEFIK_DOCKER=true on compatible hosts.
+      - --providers.file.directory=/etc/traefik/dynamic
+      - --providers.file.watch=true
+      - --entrypoints.web.address=:80
+      - --entrypoints.websecure.address=:443
+      # Prometheus metrics on an internal entrypoint (scraped on lokey-metrics only).
+      - --entrypoints.metrics.address=:8082
+      - --metrics.prometheus=true
+      - --metrics.prometheus.entryPoint=metrics
+      - --metrics.prometheus.addEntryPointsLabels=true
+      - --metrics.prometheus.addServicesLabels=true
+      - --metrics.prometheus.addRoutersLabels=true
+      - --api.dashboard=true
+      - --api.insecure=false
+      - --certificatesresolvers.letsencrypt.acme.email=${LOKEY_ACME_EMAIL:-admin@example.com}
+      - --certificatesresolvers.letsencrypt.acme.storage=/acme/acme.json
+      - --certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web
+      - --log.level=INFO
+    volumes:
+      - ./deploy/traefik/dynamic:/etc/traefik/dynamic:ro
+      - ./deploy/traefik/certs:/certs:ro
+      - traefik-acme:/acme
+    security_opt:
+      - seccomp=./deploy/seccomp/observability.json
+    networks:
+      - lokey-edge
+      - lokey-app
+      - lokey-metrics
 
   api:
-    <<: *api-common
+    image: ${LOKEY_IMAGE_API:-ghcr.io/lokeytraas/lokey/api:latest}
+    build:
+      context: .
+      dockerfile: cmd/api/Dockerfile
+    restart: unless-stopped
+    logging: *logging-common
     depends_on:
-      - controller
+      - controller-a
+      - controller-b
       - fortuna
       - virtio
     environment:
       <<: *api-env
       GIN_MODE: release
       LOG_LEVEL: WARN
-    profiles:
-      - production
-
-  controller:
-    <<: *controller-common
-    environment:
-      <<: *controller-env
-      GIN_MODE: release
-      LOG_LEVEL: WARN
-    profiles:
-      - production
+    security_opt:
+      - seccomp=./deploy/seccomp/api.json
+    networks:
+      - lokey-edge
+      - lokey-app
+      - lokey-devices
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=lokey-edge
+      - traefik.http.routers.lokey-api.rule=Host(`${LOKEY_DOMAIN:-localhost}`) && (PathPrefix(`/api`) || PathPrefix(`/metrics`) || PathPrefix(`/swagger`))
+      - traefik.http.routers.lokey-api.entrypoints=websecure
+      - traefik.http.routers.lokey-api.tls=true
+      - traefik.http.services.lokey-api.loadbalancer.server.port=8080
+    deploy:
+      resources:
+        limits:
+          memory: 512M
 
   fortuna:
-    <<: *fortuna-common
-    depends_on:
-      - controller
+    image: ${LOKEY_IMAGE_FORTUNA:-ghcr.io/lokeytraas/lokey/fortuna:latest}
+    build:
+      context: .
+      dockerfile: cmd/fortuna/Dockerfile
+    restart: unless-stopped
+    logging: *logging-common
     environment:
       <<: *fortuna-env
-      GIN_MODE: release
-      LOG_LEVEL: WARN
-    profiles:
-      - production
-
-  virtio:
-    <<: *virtio-common-with-devices
-    environment:
-      <<: *virtio-env
-      GIN_MODE: release
-      LOG_LEVEL: WARN
-    profiles:
-      - production
-
-  api-debug:
-    <<: *api-common
-    depends_on:
-      - controller-debug
-      - fortuna-debug
-      - virtio-debug
-    environment:
-      <<: *api-env
-      CONTROLLER_ADDR: http://controller-debug:8081
-      FORTUNA_ADDR: http://fortuna-debug:8082
-      VIRTIO_ADDR: http://virtio-debug:8083
-      GIN_MODE: debug
-      LOG_LEVEL: DEBUG
-    profiles:
-      - debug
-
-  controller-debug:
-    <<: *controller-common
-    environment:
-      <<: *controller-env
-      GIN_MODE: debug
-      LOG_LEVEL: DEBUG
-    ports:
-      - '8081:8081'
-    profiles:
-      - debug
-
-  fortuna-debug:
-    <<: *fortuna-common
-    depends_on:
-      - controller-debug
-    environment:
-      <<: *fortuna-env
-      GIN_MODE: debug
-      LOG_LEVEL: DEBUG
-    ports:
-      - '8082:8082'
-    profiles:
-      - debug
-
-  virtio-debug:
-    <<: *virtio-common-with-devices
-    environment:
-      <<: *virtio-env
-      GIN_MODE: debug
-      LOG_LEVEL: DEBUG
-    ports:
-      - '8083:8083'  # HTTP API
-    profiles:
-      - debug
-
-  # Local registry profile - uses images from local Docker registry (NO tmpfs)
-  api-local:
-    <<: *api-common-no-tmpfs
-    image: ${DEV_MACHINE_IP:-localhost}:5000/lokey-api:latest
-    depends_on:
-      - controller-local
-      - fortuna-local
-      - virtio-local
-    environment:
-      <<: *api-env
-      CONTROLLER_ADDR: http://controller-local:8081
-      FORTUNA_ADDR: http://fortuna-local:8082
-      VIRTIO_ADDR: http://virtio-local:8083
       GIN_MODE: release
       LOG_LEVEL: WARN
     volumes:
-      - api-data-local:/data
-    profiles:
-      - local
+      - ./deploy/seccomp/fortuna.json:/seccomp/fortuna.json:ro
+    security_opt:
+      - seccomp=./deploy/seccomp/fortuna.json
+    networks:
+      - lokey-app
+    deploy:
+      resources:
+        limits:
+          memory: 128M
 
-  controller-local:
-    <<: *controller-common-no-tmpfs
-    image: ${DEV_MACHINE_IP:-localhost}:5000/lokey-controller:latest
-    environment:
-      <<: *controller-env
-      FORCE_CONFIG: "true"
-      GIN_MODE: release
-      LOG_LEVEL: WARN
-    ports:
-      - '8081:8081'
-    profiles:
-      - local
-
-  fortuna-local:
-    <<: *fortuna-common-no-tmpfs
-    image: ${DEV_MACHINE_IP:-localhost}:5000/lokey-fortuna:latest
-    depends_on:
-      - controller-local
-    environment:
-      <<: *fortuna-env
-      GIN_MODE: release
-      LOG_LEVEL: WARN
-    ports:
-      - '8082:8082'
-    profiles:
-      - local
-
-  virtio-local:
-    <<: *virtio-common-no-tmpfs
-    image: ${DEV_MACHINE_IP:-localhost}:5000/lokey-virtio:latest
+  virtio:
+    image: ${LOKEY_IMAGE_VIRTIO:-ghcr.io/lokeytraas/lokey/virtio:latest}
+    build:
+      context: .
+      dockerfile: cmd/virtio/Dockerfile
+    restart: unless-stopped
+    logging: *logging-common
     environment:
       <<: *virtio-env
       GIN_MODE: release
       LOG_LEVEL: WARN
-    ports:
-      - '8083:8083'  # HTTP API
-    profiles:
-      - local
+    volumes:
+      - ./run/lokey:/var/run/lokey
+      - ./deploy/seccomp/virtio.json:/seccomp/virtio.json:ro
+    security_opt:
+      - seccomp=./deploy/seccomp/virtio.json
+    networks:
+      - lokey-edge
+      - lokey-app
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=lokey-edge
+      - traefik.http.routers.lokey-virtio.rule=Host(`${LOKEY_DOMAIN:-localhost}`) && PathPrefix(`/virtio`)
+      - traefik.http.routers.lokey-virtio.entrypoints=websecure
+      - traefik.http.routers.lokey-virtio.tls=true
+      - traefik.http.middlewares.lokey-virtio-strip.stripprefix.prefixes=/virtio
+      - traefik.http.routers.lokey-virtio.middlewares=lokey-virtio-strip
+      - traefik.http.services.lokey-virtio.loadbalancer.server.port=8083
+      - traefik.http.services.lokey-virtio.loadbalancer.responseforwarding.flushinterval=1ms
+    deploy:
+      resources:
+        limits:
+          memory: 128M
 
-  # Local registry profile WITH tmpfs - optimized for Raspberry Pi (reduced disk I/O)
-  api-local-tmpfs:
-    <<: *api-common
-    image: ${DEV_MACHINE_IP:-localhost}:5000/lokey-api:latest
-    depends_on:
-      - controller-local-tmpfs
-      - fortuna-local-tmpfs
-      - virtio-local-tmpfs
+  controller-a:
+    image: ${LOKEY_IMAGE_CONTROLLER:-ghcr.io/lokeytraas/lokey/controller:latest}
+    build:
+      context: .
+      dockerfile: cmd/controller/Dockerfile
+    restart: unless-stopped
+    logging: *logging-common
     environment:
-      <<: *api-env
-      CONTROLLER_ADDR: http://controller-local-tmpfs:8081
-      FORTUNA_ADDR: http://fortuna-local-tmpfs:8082
-      VIRTIO_ADDR: http://virtio-local-tmpfs:8083
+      <<: *controller-env-base
+      DEVICE_ID: device_a
+    volumes:
+      - ./deploy/seccomp/controller.json:/seccomp/controller.json:ro
+    security_opt:
+      - seccomp=./deploy/seccomp/controller.json
+    networks:
+      - lokey-devices
+    deploy:
+      resources:
+        limits:
+          memory: 64M
+
+  controller-b:
+    image: ${LOKEY_IMAGE_CONTROLLER:-ghcr.io/lokeytraas/lokey/controller:latest}
+    build:
+      context: .
+      dockerfile: cmd/controller/Dockerfile
+    restart: unless-stopped
+    logging: *logging-common
+    environment:
+      <<: *controller-env-base
+      DEVICE_ID: device_b
+    volumes:
+      - ./deploy/seccomp/controller.json:/seccomp/controller.json:ro
+    security_opt:
+      - seccomp=./deploy/seccomp/controller.json
+    networks:
+      - lokey-devices
+    deploy:
+      resources:
+        limits:
+          memory: 64M
+
+  # Hardware controllers (Pi): use profile "hardware"
+  controller-hw-a:
+    image: ${LOKEY_IMAGE_CONTROLLER:-ghcr.io/lokeytraas/lokey/controller:latest}
+    profiles: ["hardware"]
+    restart: unless-stopped
+    logging: *logging-common
+    environment:
+      PORT: "8081"
+      CONTROLLER_MODE: hardware
+      DEVICE_ID: device_a
+      I2C_BUS_NUMBER: "1"
+      I2C_ADDRESS: "0x60"
+      FORCE_CONFIG: "false"
       GIN_MODE: release
       LOG_LEVEL: WARN
-    profiles:
-      - local-tmpfs
+    devices:
+      - /dev/i2c-1:/dev/i2c-1
+    cap_add:
+      - SYS_RAWIO
+    security_opt:
+      - seccomp=./deploy/seccomp/controller.json
+    networks:
+      - lokey-devices
 
-  controller-local-tmpfs:
-    <<: *controller-common
-    image: ${DEV_MACHINE_IP:-localhost}:5000/lokey-controller:latest
+  node-exporter:
+    image: prom/node-exporter:v1.9.0
+    restart: unless-stopped
+    logging: *logging-common
+    pid: host
+    command:
+      - --path.procfs=/host/proc
+      - --path.sysfs=/host/sys
+      - --path.rootfs=/rootfs
+      - --collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    security_opt:
+      - seccomp=./deploy/seccomp/observability.json
+    networks:
+      - lokey-metrics
+
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.49.2
+    restart: unless-stopped
+    logging: *logging-common
+    # Host/cgroup visibility still needs privileged; seccomp still applies when set
+    # explicitly and blocks kexec/modules/ptrace while allowing mount/setns.
+    privileged: true
+    devices:
+      - /dev/kmsg:/dev/kmsg
+    command:
+      - --housekeeping_interval=15s
+      - --docker_only=true
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      # Snap Docker uses /var/snap/docker/common/var-lib-docker; override via DOCKER_ROOT_DIR.
+      - ${DOCKER_ROOT_DIR:-/var/lib/docker}:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
+    security_opt:
+      - seccomp=./deploy/seccomp/cadvisor.json
+    networks:
+      - lokey-metrics
+
+  prometheus:
+    image: prom/prometheus:v3.2.1
+    restart: unless-stopped
+    logging: *logging-common
+    volumes:
+      - ./deploy/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+    security_opt:
+      - seccomp=./deploy/seccomp/observability.json
+    networks:
+      - lokey-metrics
+      - lokey-app
+      - lokey-devices
+
+  grafana:
+    image: grafana/grafana:11.5.2
+    restart: unless-stopped
+    logging: *logging-common
     environment:
-      <<: *controller-env
-      FORCE_CONFIG: "true"
-      GIN_MODE: release
-      LOG_LEVEL: WARN
-    ports:
-      - '8081:8081'
-    profiles:
-      - local-tmpfs
-
-  fortuna-local-tmpfs:
-    <<: *fortuna-common
-    image: ${DEV_MACHINE_IP:-localhost}:5000/lokey-fortuna:latest
-    depends_on:
-      - controller-local-tmpfs
-    environment:
-      <<: *fortuna-env
-      GIN_MODE: release
-      LOG_LEVEL: WARN
-    ports:
-      - '8082:8082'
-    profiles:
-      - local-tmpfs
-
-  virtio-local-tmpfs:
-    <<: *virtio-common
-    image: ${DEV_MACHINE_IP:-localhost}:5000/lokey-virtio:latest
-    environment:
-      <<: *virtio-env
-      GIN_MODE: release
-      LOG_LEVEL: WARN
-    ports:
-      - '8083:8083'  # HTTP API
-    profiles:
-      - local-tmpfs
-
-volumes:
-  api-data-local:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-lokey}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      # Required when exposed under Traefik PathPrefix /grafana (do not strip the prefix).
+      GF_SERVER_DOMAIN: ${LOKEY_DOMAIN:-localhost}
+      GF_SERVER_ROOT_URL: https://${LOKEY_DOMAIN:-localhost}:${TRAEFIK_HTTPS_PORT:-443}/grafana/
+      GF_SERVER_SERVE_FROM_SUB_PATH: "true"
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./deploy/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./deploy/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - ./deploy/grafana/img/lokey-logo.png:/usr/share/grafana/public/img/lokey-logo.png:ro
+    security_opt:
+      - seccomp=./deploy/seccomp/observability.json
+    networks:
+      - lokey-edge
+      - lokey-metrics
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=lokey-edge
+      - traefik.http.routers.lokey-grafana.rule=Host(`${LOKEY_DOMAIN:-localhost}`) && PathPrefix(`/grafana`)
+      - traefik.http.routers.lokey-grafana.entrypoints=websecure
+      - traefik.http.routers.lokey-grafana.tls=true
+      - traefik.http.services.lokey-grafana.loadbalancer.server.port=3000

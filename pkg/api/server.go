@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -27,7 +28,8 @@ import (
 // Server represents the HTTP API server for the random number generation service.
 type Server struct {
 	DB             database.DBHandler
-	ControllerAddr string
+	ControllerAddr string // legacy single-controller address (first endpoint)
+	Controllers    []ControllerEndpoint
 	FortunaAddr    string
 	VirtioAddr     string
 	port           int
@@ -52,12 +54,20 @@ type Server struct {
 
 	// TRNG quality metrics tracker
 	trngQualityTracker *TRNGQualityTracker
-	// VirtIO quality metrics tracker
-	virtioQualityTracker *TRNGQualityTracker
+	// Per-device TRNG quality trackers
+	trngDeviceTrackers map[string]*TRNGQualityTracker
+	trngDeviceMu       sync.RWMutex
+	// Fortuna / VirtIO quality metrics trackers
+	fortunaQualityTracker *TRNGQualityTracker
+	virtioQualityTracker  *TRNGQualityTracker
 
 	// VirtIO configuration (thread-safe)
 	virtioSeedingSource string
 	virtioConfigMutex   sync.RWMutex
+
+	controllerRoundRobin uint64
+	fortunaSeedBytesAcc  atomic.Uint64
+	fortunaOutputBytesAcc atomic.Uint64
 }
 
 // QueueConfig represents the queue configuration
@@ -120,6 +130,30 @@ type Metrics struct {
 	VirtIOUnconsumed      prometheus.Gauge
 
 	DatabaseSizeBytes prometheus.Gauge
+
+	// Labeled queue / quality / amplification metrics
+	QueueCurrent      *prometheus.GaugeVec
+	QueueCapacity     *prometheus.GaugeVec
+	QueuePercentage   *prometheus.GaugeVec
+	ConsumedTotal     *prometheus.GaugeVec
+	Unconsumed        *prometheus.GaugeVec
+	MonobitAverage    *prometheus.GaugeVec
+	MonobitOnes       *prometheus.GaugeVec
+	MonobitZeros      *prometheus.GaugeVec
+	MonobitTotal      *prometheus.GaugeVec
+	RepetitionFails   *prometheus.CounterVec
+	RepetitionCurrent *prometheus.GaugeVec // absolute failure count (always published)
+	APTBiasTotal      *prometheus.CounterVec
+	APTBiasCurrent    *prometheus.GaugeVec // absolute bias count (always published)
+	APTSamplesTotal   *prometheus.CounterVec
+	BytesProduced     *prometheus.CounterVec
+	FortunaSeedBytes  prometheus.Counter
+	FortunaOutputBytes prometheus.Counter
+	FortunaAmplification prometheus.Gauge
+	FortunaReseedTotal prometheus.Counter
+	FortunaLastReseed  prometheus.Gauge
+	ServiceUp          *prometheus.GaugeVec // lokey_service_up{service=...}
+	ControllerUp       *prometheus.GaugeVec // lokey_controller_up{device_id=...}
 }
 
 // NewServer creates a new API server
@@ -206,6 +240,95 @@ func NewServer(db database.DBHandler, controllerAddr, fortunaAddr, virtioAddr st
 			Name: "database_size_bytes",
 			Help: "Size of database in bytes",
 		}),
+
+		QueueCurrent: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "lokey_queue_current",
+			Help: "Current queue depth by source",
+		}, []string{"source"}),
+		QueueCapacity: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "lokey_queue_capacity",
+			Help: "Queue capacity by source",
+		}, []string{"source"}),
+		QueuePercentage: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "lokey_queue_percentage",
+			Help: "Queue utilization percentage by source",
+		}, []string{"source"}),
+		ConsumedTotal: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "lokey_consumed_total",
+			Help: "Consumed items by source",
+		}, []string{"source"}),
+		Unconsumed: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "lokey_unconsumed",
+			Help: "Unconsumed items by source",
+		}, []string{"source"}),
+		MonobitAverage: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "lokey_randomness_monobit_average",
+			Help: "Monobit ones ratio by source",
+		}, []string{"source", "device_id"}),
+		MonobitOnes: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "lokey_randomness_monobit_ones",
+			Help: "Monobit ones count by source",
+		}, []string{"source", "device_id"}),
+		MonobitZeros: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "lokey_randomness_monobit_zeros",
+			Help: "Monobit zeros count by source",
+		}, []string{"source", "device_id"}),
+		MonobitTotal: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "lokey_randomness_monobit_total",
+			Help: "Monobit total bits by source",
+		}, []string{"source", "device_id"}),
+		RepetitionFails: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "lokey_randomness_repetition_failures_total",
+			Help: "Repetition count test failures by source (monotonic increments)",
+		}, []string{"source", "device_id"}),
+		RepetitionCurrent: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "lokey_randomness_repetition_failures",
+			Help: "Current repetition-count test failure total by source (0 = healthy)",
+		}, []string{"source", "device_id"}),
+		APTBiasTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "lokey_randomness_apt_bias_total",
+			Help: "APT bias detections by source (monotonic increments)",
+		}, []string{"source", "device_id"}),
+		APTBiasCurrent: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "lokey_randomness_apt_bias",
+			Help: "Current APT bias detection count by source (0 = healthy)",
+		}, []string{"source", "device_id"}),
+		APTSamplesTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "lokey_randomness_apt_samples_total",
+			Help: "APT samples processed by source",
+		}, []string{"source", "device_id"}),
+		BytesProduced: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "lokey_bytes_produced_total",
+			Help: "Bytes produced/stored by source",
+		}, []string{"source", "device_id"}),
+		FortunaSeedBytes: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "lokey_fortuna_seed_bytes_total",
+			Help: "Total seed bytes accepted by Fortuna via API seeding",
+		}),
+		FortunaOutputBytes: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "lokey_fortuna_output_bytes_total",
+			Help: "Total Fortuna output bytes polled by API",
+		}),
+		FortunaAmplification: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "lokey_fortuna_amplification_ratio",
+			Help: "Fortuna output/seed amplification ratio",
+		}),
+		FortunaReseedTotal: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "lokey_fortuna_reseed_total",
+			Help: "Successful Fortuna reseed operations from API",
+		}),
+		FortunaLastReseed: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "lokey_fortuna_last_reseed_timestamp",
+			Help: "Unix timestamp of last successful Fortuna reseed",
+		}),
+		ServiceUp: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "lokey_service_up",
+			Help: "1 if LoKey dependency is healthy, 0 otherwise (api, controller, fortuna, virtio, database)",
+		}, []string{"service"}),
+		ControllerUp: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "lokey_controller_up",
+			Help: "1 if a controller device is healthy, 0 otherwise",
+		}, []string{"device_id"}),
 	}
 
 	// Register metrics to the provided registry
@@ -226,6 +349,28 @@ func NewServer(db database.DBHandler, controllerAddr, fortunaAddr, virtioAddr st
 		metrics.VirtIOConsumed,
 		metrics.VirtIOUnconsumed,
 		metrics.DatabaseSizeBytes,
+		metrics.QueueCurrent,
+		metrics.QueueCapacity,
+		metrics.QueuePercentage,
+		metrics.ConsumedTotal,
+		metrics.Unconsumed,
+		metrics.MonobitAverage,
+		metrics.MonobitOnes,
+		metrics.MonobitZeros,
+		metrics.MonobitTotal,
+		metrics.RepetitionFails,
+		metrics.RepetitionCurrent,
+		metrics.APTBiasTotal,
+		metrics.APTBiasCurrent,
+		metrics.APTSamplesTotal,
+		metrics.BytesProduced,
+		metrics.FortunaSeedBytes,
+		metrics.FortunaOutputBytes,
+		metrics.FortunaAmplification,
+		metrics.FortunaReseedTotal,
+		metrics.FortunaLastReseed,
+		metrics.ServiceUp,
+		metrics.ControllerUp,
 	)
 
 	// Read APT window size from environment (default: 512)
@@ -236,9 +381,20 @@ func NewServer(db database.DBHandler, controllerAddr, fortunaAddr, virtioAddr st
 		}
 	}
 
+	controllers, err := ParseControllerAddrs(os.Getenv("CONTROLLER_ADDRS"), controllerAddr)
+	if err != nil {
+		log.Printf("[WARN] controller address parse: %v; using fallback %s", err, controllerAddr)
+		controllers = []ControllerEndpoint{{DeviceID: "default", Addr: strings.TrimRight(controllerAddr, "/")}}
+	}
+	primary := controllerAddr
+	if len(controllers) > 0 {
+		primary = controllers[0].Addr
+	}
+
 	server := &Server{
 		DB:                    db,
-		ControllerAddr:        controllerAddr,
+		ControllerAddr:        primary,
+		Controllers:           controllers,
 		FortunaAddr:           fortunaAddr,
 		VirtioAddr:            virtioAddr,
 		port:                  port,
@@ -250,6 +406,8 @@ func NewServer(db database.DBHandler, controllerAddr, fortunaAddr, virtioAddr st
 		seedingCooldown:       5 * time.Minute, // Default cooldown for seeding circuit breaker
 		virtioSeedingCooldown: 5 * time.Minute, // Default cooldown for VirtIO seeding circuit breaker
 		trngQualityTracker:    NewTRNGQualityTracker(aptWindowSize),
+		trngDeviceTrackers:    make(map[string]*TRNGQualityTracker),
+		fortunaQualityTracker: NewTRNGQualityTracker(aptWindowSize),
 		virtioQualityTracker:  NewTRNGQualityTracker(aptWindowSize),
 		virtioSeedingSource:   "trng", // Default seeding source
 	}
@@ -274,8 +432,22 @@ func (s *Server) setupRoutes() {
 		c.Next()
 	})
 
-	// Swagger UI - uses embedded docs from swaggo
-	s.Router.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
+	// Swagger UI — gin-swagger 404s bare /swagger/ (no index match); redirect in-handler.
+	swaggerHandler := ginSwagger.WrapHandler(
+		swaggerFiles.Handler,
+		ginSwagger.URL("/swagger/doc.json"),
+		ginSwagger.DefaultModelsExpandDepth(1),
+	)
+	s.Router.GET("/swagger", func(c *gin.Context) {
+		c.Redirect(http.StatusMovedPermanently, "/swagger/index.html")
+	})
+	s.Router.GET("/swagger/*any", func(c *gin.Context) {
+		if p := c.Param("any"); p == "/" || p == "" {
+			c.Redirect(http.StatusMovedPermanently, "/swagger/index.html")
+			return
+		}
+		swaggerHandler(c)
+	})
 
 	// Prometheus metrics endpoint
 	s.Router.GET("/metrics", s.MetricsHandler)
@@ -681,6 +853,7 @@ type StatusResponse struct {
 	VirtIO      VirtIOStats              `json:"virtio"`
 	Database    database.Stats           `json:"database"`
 	TRNGQuality database.QualityMetrics  `json:"trng_quality"`
+	Controllers map[string]bool          `json:"controllers,omitempty"`
 }
 
 // GetStatus returns the system status.
@@ -704,27 +877,16 @@ func (s *Server) GetStatus(c *gin.Context) {
 
 	// Get VirtIO metrics from VirtIO service directly (not from API database)
 	virtioStats := s.getVirtIOQueueMetrics()
+	stats.VirtIO = virtioStats
+	s.refreshQueuePrometheusMetrics()
+	s.publishQuality("trng", "aggregate", s.trngQualityTracker)
+	s.publishQuality("fortuna", "fortuna", s.fortunaQualityTracker)
+	s.publishQuality("virtio", "virtio", s.virtioQualityTracker)
 
-	// Update Prometheus metrics
-	s.metrics.TRNGQueueCurrent.Set(float64(stats.TRNG.QueueCurrent))
-	s.metrics.TRNGQueueCapacity.Set(float64(stats.TRNG.QueueCapacity))
-	s.metrics.TRNGQueuePercentage.Set(stats.TRNG.QueuePercentage)
-	s.metrics.TRNGConsumed.Set(float64(stats.TRNG.ConsumedCount))
-	s.metrics.TRNGUnconsumed.Set(float64(stats.TRNG.UnconsumedCount))
-
-	s.metrics.FortunaQueueCurrent.Set(float64(stats.Fortuna.QueueCurrent))
-	s.metrics.FortunaQueueCapacity.Set(float64(stats.Fortuna.QueueCapacity))
-	s.metrics.FortunaQueuePercentage.Set(stats.Fortuna.QueuePercentage)
-	s.metrics.FortunaConsumed.Set(float64(stats.Fortuna.ConsumedCount))
-	s.metrics.FortunaUnconsumed.Set(float64(stats.Fortuna.UnconsumedCount))
-
-	s.metrics.VirtIOQueueCurrent.Set(float64(virtioStats.QueueCurrent))
-	s.metrics.VirtIOQueueCapacity.Set(float64(virtioStats.QueueCapacity))
-	s.metrics.VirtIOQueuePercentage.Set(virtioStats.QueuePercentage)
-	s.metrics.VirtIOConsumed.Set(float64(virtioStats.ConsumedCount))
-	s.metrics.VirtIOUnconsumed.Set(float64(virtioStats.UnconsumedCount))
-
-	s.metrics.DatabaseSizeBytes.Set(float64(stats.Database.SizeBytes))
+	deviceHealth := map[string]bool{}
+	for _, ep := range s.controllersOrDefault() {
+		deviceHealth[ep.DeviceID] = s.checkServiceHealth(ep.Addr)
+	}
 
 	// Build response with custom VirtIO stats (without polling_count)
 	response := StatusResponse{
@@ -741,6 +903,7 @@ func (s *Server) GetStatus(c *gin.Context) {
 			UnconsumedCount: virtioStats.UnconsumedCount,
 			TotalGenerated:  virtioStats.TotalGenerated,
 		},
+		Controllers: deviceHealth,
 	}
 
 	c.JSON(http.StatusOK, response)
@@ -766,8 +929,18 @@ func (s *Server) HealthCheck(c *gin.Context) {
 	// Check API (always true if we got here)
 	response.Details.API = true
 
-	// Check controller service
-	response.Details.Controller = s.checkServiceHealth(s.ControllerAddr)
+	// Check controllers (healthy if any device is up; degraded if some are down)
+	controllerOK := false
+	anyControllerDown := false
+	for _, ep := range s.controllersOrDefault() {
+		ok := s.checkServiceHealth(ep.Addr)
+		if ok {
+			controllerOK = true
+		} else {
+			anyControllerDown = true
+		}
+	}
+	response.Details.Controller = controllerOK
 
 	// Check Fortuna service
 	response.Details.Fortuna = s.checkServiceHealth(s.FortunaAddr)
@@ -776,7 +949,7 @@ func (s *Server) HealthCheck(c *gin.Context) {
 	response.Details.VirtIO = s.checkServiceHealth(s.VirtioAddr)
 
 	// Determine overall status
-	if !response.Details.Database || !response.Details.Controller || !response.Details.Fortuna || !response.Details.VirtIO {
+	if !response.Details.Database || !response.Details.Controller || !response.Details.Fortuna || !response.Details.VirtIO || anyControllerDown {
 		response.Status = "degraded"
 	}
 
@@ -804,7 +977,76 @@ func (s *Server) checkServiceHealth(serviceAddr string) bool {
 
 // MetricsHandler serves Prometheus metrics
 func (s *Server) MetricsHandler(c *gin.Context) {
+	// Refresh gauges on every scrape so Grafana sees continuous samples,
+	// not only when /api/v1/status is hit.
+	s.publishHealthMetrics()
+	s.refreshQueuePrometheusMetrics()
 	promhttp.HandlerFor(s.registry, promhttp.HandlerOpts{}).ServeHTTP(c.Writer, c.Request)
+}
+
+// refreshQueuePrometheusMetrics updates queue/capacity gauges from live DB + VirtIO state.
+func (s *Server) refreshQueuePrometheusMetrics() {
+	if s.metrics == nil {
+		return
+	}
+	stats, err := s.DB.GetDetailedStats()
+	if err != nil {
+		return
+	}
+	virtioStats := s.getVirtIOQueueMetrics()
+	stats.VirtIO = virtioStats
+
+	s.metrics.TRNGQueueCurrent.Set(float64(stats.TRNG.QueueCurrent))
+	s.metrics.TRNGQueueCapacity.Set(float64(stats.TRNG.QueueCapacity))
+	s.metrics.TRNGQueuePercentage.Set(stats.TRNG.QueuePercentage)
+	s.metrics.TRNGConsumed.Set(float64(stats.TRNG.ConsumedCount))
+	s.metrics.TRNGUnconsumed.Set(float64(stats.TRNG.UnconsumedCount))
+
+	s.metrics.FortunaQueueCurrent.Set(float64(stats.Fortuna.QueueCurrent))
+	s.metrics.FortunaQueueCapacity.Set(float64(stats.Fortuna.QueueCapacity))
+	s.metrics.FortunaQueuePercentage.Set(stats.Fortuna.QueuePercentage)
+	s.metrics.FortunaConsumed.Set(float64(stats.Fortuna.ConsumedCount))
+	s.metrics.FortunaUnconsumed.Set(float64(stats.Fortuna.UnconsumedCount))
+
+	s.metrics.VirtIOQueueCurrent.Set(float64(virtioStats.QueueCurrent))
+	s.metrics.VirtIOQueueCapacity.Set(float64(virtioStats.QueueCapacity))
+	s.metrics.VirtIOQueuePercentage.Set(virtioStats.QueuePercentage)
+	s.metrics.VirtIOConsumed.Set(float64(virtioStats.ConsumedCount))
+	s.metrics.VirtIOUnconsumed.Set(float64(virtioStats.UnconsumedCount))
+
+	s.metrics.DatabaseSizeBytes.Set(float64(stats.Database.SizeBytes))
+	s.publishQueueMetrics(stats)
+	s.updateFortunaAmplification()
+}
+
+// publishHealthMetrics refreshes dependency up/down gauges for Grafana status panels.
+func (s *Server) publishHealthMetrics() {
+	if s.metrics == nil || s.metrics.ServiceUp == nil {
+		return
+	}
+	boolTo := func(ok bool) float64 {
+		if ok {
+			return 1
+		}
+		return 0
+	}
+
+	s.metrics.ServiceUp.WithLabelValues("api").Set(1)
+	s.metrics.ServiceUp.WithLabelValues("database").Set(boolTo(s.DB.HealthCheck()))
+
+	controllerOK := false
+	for _, ep := range s.controllersOrDefault() {
+		ok := s.checkServiceHealth(ep.Addr)
+		if ok {
+			controllerOK = true
+		}
+		if s.metrics.ControllerUp != nil {
+			s.metrics.ControllerUp.WithLabelValues(ep.DeviceID).Set(boolTo(ok))
+		}
+	}
+	s.metrics.ServiceUp.WithLabelValues("controller").Set(boolTo(controllerOK))
+	s.metrics.ServiceUp.WithLabelValues("fortuna").Set(boolTo(s.checkServiceHealth(s.FortunaAddr)))
+	s.metrics.ServiceUp.WithLabelValues("virtio").Set(boolTo(s.checkServiceHealth(s.VirtioAddr)))
 }
 
 // GetVirtIOConfig returns the current VirtIO configuration.

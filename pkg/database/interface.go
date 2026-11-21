@@ -61,11 +61,12 @@ type DataSourceStats struct {
 	TotalGenerated  int64   `json:"total_generated"`  // Total items ever generated
 }
 
-// Stats represents database-related statistics.
+// Stats represents in-memory queue storage statistics.
+// Path is always memory://channels (no on-disk database).
 type Stats struct {
-	SizeBytes int64  `json:"size_bytes"`
-	SizeHuman string `json:"size_human"`
-	Path      string `json:"path"`
+	SizeBytes int64  `json:"size_bytes" example:"0"`
+	SizeHuman string `json:"size_human" example:"0 B (in-memory)"`
+	Path      string `json:"path" example:"memory://channels"`
 }
 
 // TRNGData represents true random number generator data
