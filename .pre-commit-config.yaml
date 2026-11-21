@@ -1,0 +1,51 @@
+# Static checks only — mirrors CI Lint and Test (golangci, Nix flake, Grype).
+# Does not run go test, Docker builds, or multi-arch packaging.
+#
+# Install:  pre-commit install
+# Run all:  pre-commit run --all-files
+# Or:       ./scripts/check-static.sh
+#
+# Requires: golangci-lint v2.15+, grype, nix (with flakes)
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+        # Taskfile allows duplicate keys (task overrides); Grafana JSON-ish YAML is noisy.
+        exclude: ^(Taskfile\.yaml|deploy/grafana/|deploy/prometheus/)
+      - id: check-added-large-files
+        args: [--maxkb=1024]
+      - id: check-merge-conflict
+
+  - repo: local
+    hooks:
+      - id: golangci-lint-source
+        name: golangci-lint (source)
+        entry: ./scripts/check-static.sh golangci-source
+        language: system
+        pass_filenames: false
+        types: [go]
+
+      - id: golangci-lint-tests
+        name: golangci-lint (tests)
+        entry: ./scripts/check-static.sh golangci-tests
+        language: system
+        pass_filenames: false
+        types: [go]
+
+      - id: nix-flake-check
+        name: nix flake check
+        entry: ./scripts/check-static.sh nix-flake
+        language: system
+        pass_filenames: false
+        files: ^(flake\.(nix|lock)|nix/|scripts/check-static\.sh)$
+
+      - id: grype
+        name: grype (dir scan)
+        entry: ./scripts/check-static.sh grype
+        language: system
+        pass_filenames: false
+        files: ^(go\.mod|go\.sum|cmd/.*/go\.(mod|sum)|\.grype\.yaml|pkg/|cmd/|scripts/check-static\.sh)

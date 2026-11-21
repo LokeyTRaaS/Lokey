@@ -152,7 +152,7 @@ tasks:
         echo ""
         echo "Test Summary:"
         go test -json ./tests/... 2>&1 | jq -rs '
-          group_by(.Package) | 
+          group_by(.Package) |
           map({
             package: .[0].Package,
             total: [.[] | select(.Action=="run" and .Test)] | unique | length,
@@ -160,7 +160,7 @@ tasks:
             failed: [.[] | select(.Action=="fail" and .Test)] | length,
             skipped: [.[] | select(.Action=="skip" and .Test)] | length,
             skipped_tests: [.[] | select(.Action=="skip" and .Test) | .Test] | unique
-          }) | 
+          }) |
           (map(.passed) | add) as $total_passed |
           (map(.total) | add) as $total_tests |
           (map(.failed) | add) as $total_failed |
@@ -189,7 +189,7 @@ tasks:
         echo ""
         echo "Test Summary:"
         go test -json ./tests/... 2>&1 | jq -rs '
-          group_by(.Package) | 
+          group_by(.Package) |
           map({
             package: .[0].Package,
             total: [.[] | select(.Action=="run" and .Test)] | unique | length,
@@ -197,7 +197,7 @@ tasks:
             failed: [.[] | select(.Action=="fail" and .Test)] | length,
             skipped: [.[] | select(.Action=="skip" and .Test)] | length,
             skipped_tests: [.[] | select(.Action=="skip" and .Test) | .Test] | unique
-          }) | 
+          }) |
           (map(.passed) | add) as $total_passed |
           (map(.total) | add) as $total_tests |
           (map(.failed) | add) as $total_failed |

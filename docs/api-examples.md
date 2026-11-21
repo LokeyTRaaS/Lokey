@@ -643,7 +643,7 @@ database_size_bytes
 ```
 
 
-**Solution:** 
+**Solution:**
 - Wait for more data to be generated
 - Check queue status: `curl http://localhost:8080/api/v1/status`
 - Use Fortuna source for higher throughput

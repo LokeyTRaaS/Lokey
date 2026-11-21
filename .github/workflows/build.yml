@@ -41,7 +41,7 @@ jobs:
             --generalInfo main.go \
             --dir ./cmd/api/,./pkg/api \
             --output ./pkg/api/docs
-          
+
           echo ""
           echo "=== Generated Swagger files ==="
           ls -lah ./pkg/api/docs/
@@ -230,7 +230,7 @@ jobs:
             cp "$BINARY_WITH_ARCH" "$BINARY_STANDARD"
             echo "Created standardized binary: $BINARY_STANDARD"
             ls -lh "$BINARY_STANDARD"
-          
+
             # Verify the file is readable and in the correct location
             echo ""
             echo "=== Final verification before Docker build ==="
@@ -423,7 +423,7 @@ jobs:
       - name: Create checksums
         run: |
           cd artifacts
-          
+
           # Create checksums for each architecture
           for arch in amd64 arm64; do
             echo "Creating checksums for ${arch}"
@@ -435,10 +435,10 @@ jobs:
               fi
             done
           done
-          
+
           # Create combined checksum file for all binaries
           find . -name "lokey-*" -type f -exec sha256sum {} \; > ../all-checksums.txt
-          
+
           # Create checksum for swagger docs
           if [ -d "swagger-docs" ]; then
             cd swagger-docs
@@ -534,50 +534,50 @@ jobs:
         run: |
           REPO_LOWER=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
           BRANCH_TAG=$(echo "${GITHUB_REF_NAME}" | sed 's/\//-/g')
-          
+
           echo "# 🚀 Multi-Architecture Build Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          
+
           echo "## 📊 Build Status" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Service | AMD64 Binary | ARM64 Binary | Container | Status |" >> $GITHUB_STEP_SUMMARY
           echo "|---------|--------------|--------------|-----------|--------|" >> $GITHUB_STEP_SUMMARY
-          
+
           BINARY_STATUS="${{ needs.build-binaries.result }}"
           CONTAINER_STATUS="${{ needs.build-containers.result }}"
-          
+
           if [ "$BINARY_STATUS" == "success" ] && [ "$CONTAINER_STATUS" == "success" ]; then
             OVERALL="✅ All Passed"
           else
             OVERALL="❌ Failed"
           fi
-          
+
           for service in controller api fortuna virtio; do
             AMD64_ICON="❌"
             ARM64_ICON="❌"
-          
+
             [ -f "./artifacts/lokey-${service}-amd64/lokey-${service}-amd64" ] && AMD64_ICON="✅"
             [ -f "./artifacts/lokey-${service}-arm64/lokey-${service}-arm64" ] && ARM64_ICON="✅"
-          
+
             CONTAINER_ICON="✅"
             [ "$CONTAINER_STATUS" != "success" ] && CONTAINER_ICON="❌"
-          
+
             echo "| lokey-${service} | ${AMD64_ICON} | ${ARM64_ICON} | ${CONTAINER_ICON} | ${OVERALL} |" >> $GITHUB_STEP_SUMMARY
           done
-          
+
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "---" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          
+
           echo "## 📦 Binary Artifacts by Architecture" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          
+
           for arch in amd64 arm64; do
             echo "### ${arch^^}" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "| Service | Binary Name | Size | SHA256 |" >> $GITHUB_STEP_SUMMARY
             echo "|---------|-------------|------|--------|" >> $GITHUB_STEP_SUMMARY
-          
+
             for service in controller api fortuna virtio; do
               ARTIFACT_PATH="./artifacts/lokey-${service}-${arch}/lokey-${service}-${arch}"
               if [ -f "$ARTIFACT_PATH" ]; then
@@ -590,43 +590,43 @@ jobs:
             done
             echo "" >> $GITHUB_STEP_SUMMARY
           done
-          
+
           echo "> 💡 **Tip**: All binaries are available in the **Artifacts** section for 30 days." >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "---" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          
+
           echo "## 📚 API Documentation (OpenAPI/Swagger)" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          
+
           if [ -d "./artifacts/swagger-docs" ]; then
             echo "✅ OpenAPI specification available for download." >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "| File | Size |" >> $GITHUB_STEP_SUMMARY
             echo "|------|------|" >> $GITHUB_STEP_SUMMARY
-          
+
             [ -f "./artifacts/swagger-docs/swagger.json" ] && \
               echo "| \`swagger.json\` | $(ls -lh ./artifacts/swagger-docs/swagger.json | awk '{print $5}') |" >> $GITHUB_STEP_SUMMARY
             [ -f "./artifacts/swagger-docs/swagger.yaml" ] && \
               echo "| \`swagger.yaml\` | $(ls -lh ./artifacts/swagger-docs/swagger.yaml | awk '{print $5}') |" >> $GITHUB_STEP_SUMMARY
-          
+
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "**Access at:** \`http://your-api:8080/swagger/index.html\`" >> $GITHUB_STEP_SUMMARY
           fi
-          
+
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "---" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          
+
           echo "## 🐳 Container Images" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          
+
           if [ "${{ github.event_name }}" != "pull_request" ]; then
             echo "Multi-architecture images available:" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "| Service | Architecture | Name | SHA |" >> $GITHUB_STEP_SUMMARY
             echo "|---------|--------------|------|-----|" >> $GITHUB_STEP_SUMMARY
-          
+
             for service in controller api fortuna virtio; do
               for arch in amd64 arm64; do
                 # Read digest from artifact if it exists
@@ -642,7 +642,7 @@ jobs:
                 fi
               done
             done
-          
+
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "**Pull commands:**" >> $GITHUB_STEP_SUMMARY
             echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
@@ -658,11 +658,11 @@ jobs:
           else
             echo "🔄 Pull request build - images not pushed." >> $GITHUB_STEP_SUMMARY
           fi
-          
+
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "---" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          
+
           echo "## ℹ️ Build Information" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "- **Workflow**: ${{ github.workflow }}" >> $GITHUB_STEP_SUMMARY
@@ -674,7 +674,7 @@ jobs:
           echo "- **CGO**: Enabled" >> $GITHUB_STEP_SUMMARY
           echo "- **Project**: [lokey.cloud](https://lokey.cloud)" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          
+
           if [ "$BINARY_STATUS" == "success" ] && [ "$CONTAINER_STATUS" == "success" ]; then
             echo "### ✅ All builds completed successfully!" >> $GITHUB_STEP_SUMMARY
           else

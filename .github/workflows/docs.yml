@@ -48,7 +48,7 @@ jobs:
             --generalInfo server.go \
             --dir ./ \
             --output ./docs
-          
+
           echo "Generated Swagger files:"
           ls -la ./docs/
 
@@ -62,7 +62,7 @@ jobs:
           npx @redocly/cli build-docs \
             pkg/api/docs/swagger.json \
             -o docs/api-reference.html
-          
+
           echo "Generated API reference at docs/api-reference.html"
 
       - name: Copy swagger.json for direct access

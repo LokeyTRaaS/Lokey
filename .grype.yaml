@@ -1,0 +1,14 @@
+# Shared by CI (anchore/scan-action) and local pre-commit.
+# Directory scans must ignore compiled binaries or Grype reports the
+# Go stdlib version baked into leftover build artifacts.
+exclude:
+  - "**/.git/**"
+  - "**/build/**"
+  - "**/result*/**"
+  - "**/cmd/api/api"
+  - "**/cmd/controller/controller"
+  - "**/cmd/fortuna/fortuna"
+  - "**/cmd/virtio/virtio"
+  - "**/*.img"
+  - "**/*.img.zst"
+  - "**/*.img.gz"

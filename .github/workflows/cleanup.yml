@@ -54,48 +54,48 @@ jobs:
           DRY_RUN: ${{ inputs.dry_run || 'false' }}
         run: |
           set -e
-          
+
           PACKAGE_NAME="${{ matrix.service }}"
           ARCH="${{ matrix.arch }}"
           REPO_OWNER="${{ github.repository_owner }}"
           REPO_LOWER=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]' | cut -d'/' -f2)
-          
+
           echo "=================================================="
           echo "Cleaning up: ${PACKAGE_NAME} (${ARCH})"
           echo "Dry run: ${DRY_RUN}"
           echo "=================================================="
           echo ""
-          
+
           # Get all versions for this package
           VERSIONS=$(gh api \
             -H "Accept: application/vnd.github+json" \
             -H "X-GitHub-Api-Version: 2022-11-28" \
             "/orgs/${REPO_OWNER}/packages/container/${REPO_LOWER}%2F${PACKAGE_NAME}/versions" \
             --paginate | jq -r '.[] | @json')
-          
+
           if [ -z "$VERSIONS" ]; then
             echo "No versions found for ${PACKAGE_NAME}"
             exit 0
           fi
-          
+
           # Arrays to store versions by category
           declare -a RELEASE_VERSIONS=()
           declare -a PRERELEASE_VERSIONS=()
           declare -a BRANCH_VERSIONS=()
           declare -a LATEST_VERSIONS=()
           declare -a UNTAGGED_VERSIONS=()
-          
+
           # Categorize versions
           while IFS= read -r version_json; do
             VERSION_ID=$(echo "$version_json" | jq -r '.id')
             TAGS=$(echo "$version_json" | jq -r '.metadata.container.tags[]?' 2>/dev/null || echo "")
             CREATED_AT=$(echo "$version_json" | jq -r '.created_at')
-          
+
             if [ -z "$TAGS" ]; then
               UNTAGGED_VERSIONS+=("${VERSION_ID}|untagged|${CREATED_AT}")
               continue
             fi
-          
+
             # Check each tag for this version
             CATEGORIZED=false
             for tag in $TAGS; do
@@ -103,40 +103,40 @@ jobs:
               if [[ ! "$tag" =~ -${ARCH}$ ]]; then
                 continue
               fi
-          
+
               # Release version (v1.2.3-arch)
               if [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-${ARCH}$ ]]; then
                 RELEASE_VERSIONS+=("${VERSION_ID}|${tag}|${CREATED_AT}")
                 CATEGORIZED=true
                 break
               fi
-          
+
               # Latest tag
               if [[ "$tag" == "latest-${ARCH}" ]]; then
                 LATEST_VERSIONS+=("${VERSION_ID}|${tag}|${CREATED_AT}")
                 CATEGORIZED=true
                 break
               fi
-          
+
               # Pre-release branches (prerelease/**-arch)
               if [[ "$tag" =~ ^prerelease- ]]; then
                 PRERELEASE_VERSIONS+=("${VERSION_ID}|${tag}|${CREATED_AT}")
                 CATEGORIZED=true
                 break
               fi
-          
+
               # Branch builds (main-arch, feature-xyz-arch, etc.)
               BRANCH_VERSIONS+=("${VERSION_ID}|${tag}|${CREATED_AT}")
               CATEGORIZED=true
               break
             done
-          
+
             # If not categorized, it's untagged for this arch
             if [ "$CATEGORIZED" = false ]; then
               UNTAGGED_VERSIONS+=("${VERSION_ID}|${TAGS}|${CREATED_AT}")
             fi
           done <<< "$VERSIONS"
-          
+
           echo "📊 Summary for ${PACKAGE_NAME}-${ARCH}:"
           echo "  - Release versions: ${#RELEASE_VERSIONS[@]} (keeping all)"
           echo "  - Pre-release versions: ${#PRERELEASE_VERSIONS[@]} (keeping latest 3)"
@@ -144,13 +144,13 @@ jobs:
           echo "  - Latest tags: ${#LATEST_VERSIONS[@]} (keeping all)"
           echo "  - Untagged versions: ${#UNTAGGED_VERSIONS[@]} (deleting all)"
           echo ""
-          
+
           # Function to delete a version
           delete_version() {
             local version_id=$1
             local tag=$2
             local created=$3
-          
+
             if [ "${DRY_RUN}" = "true" ]; then
               echo "  [DRY RUN] Would delete: ${tag} (ID: ${version_id}, created: ${created})"
             else
@@ -163,7 +163,7 @@ jobs:
                 || echo "  ⚠️  Failed to delete version ${version_id}"
             fi
           }
-          
+
           # Keep all release versions
           echo "✅ Keeping all ${#RELEASE_VERSIONS[@]} release versions"
           for version in "${RELEASE_VERSIONS[@]}"; do
@@ -171,7 +171,7 @@ jobs:
             echo "  ✓ ${tag} (created: ${created})"
           done
           echo ""
-          
+
           # Keep latest tag
           echo "✅ Keeping all ${#LATEST_VERSIONS[@]} latest tags"
           for version in "${LATEST_VERSIONS[@]}"; do
@@ -179,14 +179,14 @@ jobs:
             echo "  ✓ ${tag} (created: ${created})"
           done
           echo ""
-          
+
           # Keep only latest 3 pre-release versions
           if [ ${#PRERELEASE_VERSIONS[@]} -gt 0 ]; then
             echo "🔍 Processing pre-release versions..."
             # Sort by creation date (newest first)
             IFS=$'\n' SORTED_PRERELEASE=($(sort -t'|' -k3 -r <<< "${PRERELEASE_VERSIONS[*]}"))
             unset IFS
-          
+
             KEEP_COUNT=3
             for i in "${!SORTED_PRERELEASE[@]}"; do
               IFS='|' read -r id tag created <<< "${SORTED_PRERELEASE[$i]}"
@@ -198,14 +198,14 @@ jobs:
             done
             echo ""
           fi
-          
+
           # Keep only latest 3 branch versions
           if [ ${#BRANCH_VERSIONS[@]} -gt 0 ]; then
             echo "🔍 Processing branch versions..."
             # Sort by creation date (newest first)
             IFS=$'\n' SORTED_BRANCH=($(sort -t'|' -k3 -r <<< "${BRANCH_VERSIONS[*]}"))
             unset IFS
-          
+
             KEEP_COUNT=3
             for i in "${!SORTED_BRANCH[@]}"; do
               IFS='|' read -r id tag created <<< "${SORTED_BRANCH[$i]}"
@@ -217,7 +217,7 @@ jobs:
             done
             echo ""
           fi
-          
+
           # Delete all untagged versions
           if [ ${#UNTAGGED_VERSIONS[@]} -gt 0 ]; then
             echo "🗑️  Deleting ${#UNTAGGED_VERSIONS[@]} untagged versions..."
@@ -227,7 +227,7 @@ jobs:
             done
             echo ""
           fi
-          
+
           echo "=================================================="
           echo "✅ Cleanup complete for ${PACKAGE_NAME}-${ARCH}"
           echo "=================================================="

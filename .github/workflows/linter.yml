@@ -104,3 +104,29 @@ jobs:
           test "${host}" = "lokey-pi5"
           nix eval .#packages.aarch64-linux.sdcard.name --raw
           echo "Nix flake OK"
+
+  grype:
+    name: Grype
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Scan dependencies with Grype
+        id: scan
+        uses: anchore/scan-action@v7
+        with:
+          path: "."
+          fail-build: true
+          severity-cutoff: high
+          output-format: sarif
+
+      - name: Upload SARIF to GitHub code scanning
+        if: always() && steps.scan.outputs.sarif != ''
+        uses: github/codeql-action/upload-sarif@v3
+        continue-on-error: true
+        with:
+          sarif_file: ${{ steps.scan.outputs.sarif }}

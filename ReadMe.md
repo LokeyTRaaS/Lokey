@@ -96,6 +96,17 @@ API -------------- Controllers                 (lokey-devices only)
 Prometheus scrapes app + devices
 ```
 
+## Local checks (pre-commit)
+
+Static checks mirror CI (golangci-lint, Nix flake validate, Grype). No tests, image builds, or container scans on commit:
+
+```bash
+pre-commit install
+pre-commit run --all-files
+```
+
+Requires `golangci-lint` (v2.15+), `grype`, and `nix` with flakes. CI also runs Grype on every push/PR (`severity-cutoff: high`).
+
 ## Project Status
 
 - Production-oriented Docker Compose + NixOS deploy path

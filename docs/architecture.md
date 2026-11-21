@@ -503,19 +503,19 @@ LoKey implements the Fortuna cryptographically secure pseudo-random number gener
 func GenerateRandomData(length int) []byte {
     result := make([]byte, length)
     blocks := (length + blockSize - 1) / blockSize
-    
+
     for i := 0; i < blocks; i++ {
         // Encrypt counter value
         counterBytes := encodeCounter(counter)
         block := aesEncrypt(key, counterBytes)
-        
+
         // Copy to result
         copy(result[i*blockSize:], block)
-        
+
         // Increment counter
         counter++
     }
-    
+
     return result
 }
 ```
@@ -528,7 +528,7 @@ func GenerateRandomData(length int) []byte {
 func ReseedFromPools() {
     reseedCount := counter
     poolsToUse := [][]byte{}
-    
+
     for i := 0; i < 32; i++ {
         // Use pool if bit i is set in reseedCount
         if (reseedCount & (1 << i)) != 0 {
@@ -538,10 +538,10 @@ func ReseedFromPools() {
             }
         }
     }
-    
+
     // Hash all pool data with current key
     newKey := sha256(key || poolsToUse...)
-    
+
     // Update cipher with new key
     cipher = aes.NewCipher(newKey)
     counter++
@@ -713,7 +713,7 @@ The API service uses background goroutines to continuously poll the controller a
 func pollTRNGService(ctx context.Context, interval time.Duration) {
     ticker := time.NewTicker(interval)
     defer ticker.Stop()
-    
+
     for {
         select {
         case <-ctx.Done():
@@ -721,13 +721,13 @@ func pollTRNGService(ctx context.Context, interval time.Duration) {
         case <-ticker.C:
             // Fetch from controller
             data := fetchFromController()
-            
+
             // Calculate quality metrics BEFORE storing
             qualityTracker.ProcessData(data)
-            
+
             // Store in database
             db.StoreTRNGData(data)
-            
+
             // Increment counter
             db.IncrementPollingCount("trng")
         }
@@ -892,7 +892,7 @@ flowchart TD
     C -->|"Calculate Metrics"| D[TRNGQualityTracker]
     D -->|"Update Counters"| E[QualityMetrics]
     E -->|"Store Data"| F["DB.StoreTRNGData"]
-    
+
     G["GetStatus Endpoint"] -->|"Query Metrics"| D
     D -->|"Return Quality Stats"| H["DetailedStats with trng_quality"]
 ```
@@ -1200,11 +1200,11 @@ services:
   fortuna-1:
     image: lokey-fortuna
     ports: ["8082:8082"]
-  
+
   fortuna-2:
     image: lokey-fortuna
     ports: ["8083:8082"]
-  
+
   api:
     environment:
       - FORTUNA_ADDR=http://fortuna-1:8082

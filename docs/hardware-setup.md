@@ -384,7 +384,7 @@ Any writing to disk behaviour is detrenmental for performance therefore. There a
   * The API Service has reduced logging too
 * Database/State
   * The API maintains a buffer of data, for both TRNG (Raw ATECC608a data) and Fortuna (Seeded with ATECC608a, but amplified to 256 Bits) data.
-  * We can choose the queue in the docker-compose.yaml to our preferred size. 
+  * We can choose the queue in the docker-compose.yaml to our preferred size.
   * Queues are **in-memory only** (Go circular buffers / `memory://channels`). There is no BoltDB or other on-disk entropy store. Size queues for available RAM; restart clears buffers and polling refills them.
 
 ### Advised Configuration
@@ -408,7 +408,7 @@ When we hammer down the API Service, we can expect an additional 30-40 MB of RAM
 
 ![img.png](assets/resources_api_loaded.png)
 
-We can see the increase in RAM consumption when we hammer down the API Service from 82 MB to 115 MB. We can also see that we have a massive increase in Disk I/O and that it presents itself as peak loads. Note that this API has not been called back-to-back, but instead allowed for a sleep of 0.1 ms between calls. We also note that we have about 50 MB of RAM left in this case, which is really not much. 
+We can see the increase in RAM consumption when we hammer down the API Service from 82 MB to 115 MB. We can also see that we have a massive increase in Disk I/O and that it presents itself as peak loads. Note that this API has not been called back-to-back, but instead allowed for a sleep of 0.1 ms between calls. We also note that we have about 50 MB of RAM left in this case, which is really not much.
 
 The data that was stored in the queue was as noted above 500k items for Raw ATECC608a (31 Bytes) data and 10k items for Fortuna data (256 Bytes). Extraction of the raw TRNG (ATECC608a) data was done with the PythonSDK and took about 6 mins with the 0.1 sleep and provided about 20 MB of TRNG data in binary format. The setting was to consume the data. Note that conversion to specific datatypes like int64, int32, will yield a increase in RAM consumption on the LoKey device.
 

@@ -767,7 +767,7 @@ If the controller is stuck in a recovery loop:
    # Verify device is connected
    i2cdetect -y 1
    # Should show 0x60 for ATECC608A
-   
+
    # Check I2C permissions
    ls -l /dev/i2c-1
    # Should be readable/writable by container user
@@ -789,7 +789,7 @@ If the controller is stuck in a recovery loop:
    ```bash
    # Test I2C communication
    docker compose exec controller i2cdetect -y 1
-   
+
    # Check for I2C errors in kernel logs
    dmesg | grep i2c
    ```
@@ -814,7 +814,7 @@ If Fortuna shows as unhealthy:
    ```bash
    # Check if API is successfully seeding Fortuna
    docker compose logs api | grep "seeded Fortuna"
-   
+
    # Test seeding manually
    curl -X POST http://localhost:8082/seed \
      -H "Content-Type: application/json" \
@@ -844,7 +844,7 @@ If Fortuna shows as unhealthy:
    # Enable I2C in Raspberry Pi config
    sudo raspi-config
    # Interface Options -> I2C -> Enable
-   
+
    # Reload I2C module
    sudo modprobe -r i2c-dev
    sudo modprobe i2c-dev

@@ -339,7 +339,7 @@ func TestNewFeature(t *testing.T) {
     db, _ := database.NewChannelDBHandler(10, 20, 15)
     testRegistry := prometheus.NewRegistry()
     server := NewServer(db, "http://localhost:8081", "http://localhost:8082", 0, testRegistry)
-    
+
     t.Run("success case", func(t *testing.T) {
         // Test implementation
         err := server.NewFeature()
@@ -347,7 +347,7 @@ func TestNewFeature(t *testing.T) {
             t.Fatalf("Expected no error, got %v", err)
         }
     })
-    
+
     t.Run("error case", func(t *testing.T) {
         // Test error handling
         err := server.NewFeatureWithError()
@@ -430,4 +430,3 @@ See `.github/workflows/linter.yml` for CI configuration.
 - [Go Testing Best Practices](https://golang.org/doc/effective_go#testing)
 - [Table-Driven Tests](https://github.com/golang/go/wiki/TableDrivenTests)
 - [httptest Package](https://pkg.go.dev/net/http/httptest)
-
