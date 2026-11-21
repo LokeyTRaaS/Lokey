@@ -6,9 +6,10 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/prometheus/client_golang/prometheus"
+
 	"github.com/lokey/rng-service/pkg/api"
 	"github.com/lokey/rng-service/pkg/database"
-	"github.com/prometheus/client_golang/prometheus"
 )
 
 func TestControllerStatus_EmulatorFromHealth(t *testing.T) {
@@ -71,7 +72,7 @@ func TestControllerStatus_EmulatorFromHealth(t *testing.T) {
 }
 
 func TestControllerStatus_LastKnownEmulatorOnFailure(t *testing.T) {
-	var healthy bool = true
+	healthy := true
 	ctrl := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/health" {
 			http.NotFound(w, r)

@@ -1,11 +1,12 @@
 # Changelog
 
-## Unreleased
+## 1.2.0 (2026-11-21)
 
 ### Features
 
 * `/api/v1/status` and `/api/v1/health` report per-controller `healthy` and `emulator` from each controller’s `/health` body (with last-known `emulator` while unreachable)
 * Prometheus `lokey_controller_emulated{device_id=...}` after the first successful controller health probe
+* Compose `COMPOSE_PROFILES=hardware` for a single ATECC608A/B controller; cAdvisor v0.61.1 for Docker 29
 
 ### Breaking Changes
 
