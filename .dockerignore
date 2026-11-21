@@ -9,6 +9,7 @@ build/
 !build/lokey-controller
 !build/lokey-api
 !build/lokey-fortuna
+!build/lokey-virtio
 
 # Development files
 .idea/
