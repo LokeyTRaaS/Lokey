@@ -58,13 +58,18 @@ BREAKING CHANGE: /api/v1/status controllers is now an object per device."
 GitHub’s default `GITHUB_TOKEN` cannot start new workflows from events it creates (tag push / bot commit). Set a dedicated PAT so automated releases are reliable:
 
 1. Create a fine-grained PAT (or classic) with access to this repository:
+   - **Resource owner:** `LokeyTRaaS`, repository `Lokey` only
    - **Contents:** Read and write (tags, release commit, GitHub Release)
    - **Actions:** Read and write (dispatch `build.yml`)
-2. Add it as a repository secret named exactly **`RELEASE_TOKEN`**:  
-   Settings → Secrets and variables → Actions → New repository secret.
+   - **Expiration:** **≤ 366 days** — the LokeyTRaaS org rejects fine-grained tokens with a longer lifetime
+2. Add it as a **repository** secret named exactly **`RELEASE_TOKEN`**:  
+   Settings → Secrets and variables → Actions → New repository secret  
+   (repo-only; not an org-wide secret).
 3. The release workflow uses `RELEASE_TOKEN` when present, otherwise falls back to `GITHUB_TOKEN` and still tries to `gh workflow run build.yml --ref vX.Y.Z`.
 
-Rotate the PAT if it leaks; do not commit it. Branch protection on `main` must allow the bot identity (or admins) to push the `chore(release)` commit and tags.
+Rotate the PAT before it expires or if it leaks; do not commit it. Branch protection on `main` must allow the token’s identity (or admins) to push the `chore(release)` commit and tags.
+
+If semantic-release fails with `organization forbids access via a fine-grained personal access tokens if the token's lifetime is greater than 366 days`, recreate the PAT with a shorter expiry and update the `RELEASE_TOKEN` secret.
 
 ## Consuming a release
 
