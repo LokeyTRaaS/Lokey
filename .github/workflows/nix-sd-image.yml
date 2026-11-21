@@ -1,10 +1,12 @@
 name: NixOS SD Image (Pi 5)
 
+# Full Pi 5 SD images are too heavy for every tag (cold kernel builds often
+# take 1–4h). Run manually or on the weekly schedule; attach to a release
+# with: gh release upload <tag> dist/* --clobber
 on:
-  push:
-    tags:
-      - 'v*'
   workflow_dispatch:
+  schedule:
+    - cron: '0 4 * * 1' # Mondays 04:00 UTC
 
 permissions:
   contents: write
