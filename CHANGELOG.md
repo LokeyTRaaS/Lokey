@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.2.3](https://github.com/LokeyTRaaS/Lokey/compare/v1.2.2...v1.2.3) (2026-11-21)
+
+### Bug Fixes
+
+* **fortuna:** stop reseeds from depending on AES counter bits ([94ae504](https://github.com/LokeyTRaaS/Lokey/commit/94ae504695ff9cdf316446dae0c53c9f58524ffb))
+
 ## [1.2.2](https://github.com/LokeyTRaaS/Lokey/compare/v1.2.1...v1.2.2) (2026-11-21)
 
 ### Bug Fixes
