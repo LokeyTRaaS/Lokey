@@ -83,6 +83,6 @@ jobs:
             echo "- version: \`${{ steps.semantic.outputs.new_release_version || 'n/a' }}\`"
             if [ "${{ steps.semantic.outputs.new_release_published }}" = "true" ]; then
               echo "- next: \`build.yml\` dispatched for \`v${{ steps.semantic.outputs.new_release_version }}\`"
-              echo "- tip: set repo secret \`RELEASE_TOKEN\` (contents:write + actions:write) so automated tags reliably wake builds"
             fi
+            echo "- docs: https://github.com/${{ github.repository }}/blob/main/docs/releasing.md (\`RELEASE_TOKEN\`)"
           } >> "$GITHUB_STEP_SUMMARY"

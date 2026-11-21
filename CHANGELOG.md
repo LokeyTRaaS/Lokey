@@ -6,6 +6,10 @@
 
 * semantic-release on `main` (conventional commits → `v*` tag, changelog, GitHub Release; dispatches `build.yml` for GHCR/binaries)
 
+### Documentation
+
+* [docs/releasing.md](docs/releasing.md) — release flow, conventional commits, `RELEASE_TOKEN` setup, GHCR pinning
+
 ## 1.2.0 (2026-11-21)
 
 ### Features

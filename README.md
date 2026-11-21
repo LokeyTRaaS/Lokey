@@ -2,6 +2,7 @@
 
 [![Build Status](https://github.com/LokeyTRaaS/Lokey/actions/workflows/build.yml/badge.svg)](https://github.com/LokeyTRaaS/Lokey/actions/workflows/build.yml)
 [![Lint](https://github.com/LokeyTRaaS/Lokey/actions/workflows/linter.yml/badge.svg)](https://github.com/LokeyTRaaS/Lokey/actions/workflows/linter.yml)
+[![Semantic Release](https://github.com/LokeyTRaaS/Lokey/actions/workflows/release.yml/badge.svg)](https://github.com/LokeyTRaaS/Lokey/actions/workflows/release.yml)
 [![API Docs](https://img.shields.io/badge/API-Documentation-blue)](https://lokeytraas.github.io/Lokey/api-reference.html)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
@@ -37,10 +38,10 @@ Full options, TLS, and multi-device setup: **[docs/nixos.md](docs/nixos.md)**.
 
 ### 2. Containers
 
-From a release (multi-arch manifests on GHCR):
+From a [GitHub Release](https://github.com/LokeyTRaaS/Lokey/releases) (multi-arch manifests on GHCR; versions are cut automatically from conventional commits on `main` — see [docs/releasing.md](docs/releasing.md)):
 
 ```bash
-export VER=1.1.0   # or latest
+export VER=1.2.0   # pin a release; or use latest
 docker pull ghcr.io/lokeytraas/lokey/api:${VER}
 docker pull ghcr.io/lokeytraas/lokey/controller:${VER}
 docker pull ghcr.io/lokeytraas/lokey/fortuna:${VER}
@@ -75,6 +76,7 @@ Wire services with the env vars documented in [docs/deployment.md](docs/deployme
 - **[Hardware Setup](docs/hardware-setup.md)** — Pi 5 + ATECC608A
 - **[Deployment](docs/deployment.md)** — production / Traefik HTTPS
 - **[NixOS](docs/nixos.md)** — flake, SD image, I2C + cgroups
+- **[Releasing](docs/releasing.md)** — semantic-release, `RELEASE_TOKEN`, GHCR pins
 - **[API Reference](https://lokeytraas.github.io/Lokey/api-reference.html)**
 - **[Architecture](docs/architecture.md)**
 
@@ -111,6 +113,7 @@ Requires `golangci-lint` (v2.15+), `grype`, and `nix` with flakes. CI also runs 
 
 - Production-oriented Docker Compose + NixOS deploy path
 - Multi-arch CI (amd64, arm64) including VirtIO
+- Automatic semver on `main` via semantic-release (see [docs/releasing.md](docs/releasing.md))
 - Nix flake is checked in CI; SD images are built locally from the flake
 - Pi Zero 2 / ARMv7 are **unsupported** (insufficient for cgroups/namespaces + Compose)
 

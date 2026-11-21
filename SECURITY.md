@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-Security fixes are applied on `main` and the latest tagged release (currently `v1.1.0`).
+Security fixes are applied on `main` and the **latest `v*` GitHub Release** (see [Releases](https://github.com/LokeyTRaaS/Lokey/releases)). Tags are produced automatically by [semantic-release](docs/releasing.md) from conventional commits on `main`.
 
 ## Reporting a vulnerability
 

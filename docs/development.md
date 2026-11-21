@@ -315,13 +315,11 @@ git commit -m "feat: add new feature"
 ```
 
 
-**Commit prefixes:**
-- `feat:` - New feature
-- `fix:` - Bug fix
-- `docs:` - Documentation
-- `refactor:` - Code refactoring
-- `chore:` - Maintenance
-- `ci:` - CI/CD changes
+**Commit prefixes** (these drive [automatic releases](releasing.md)):
+- `feat:` — new feature → **minor** bump on `main`
+- `fix:` — bug fix → **patch** bump
+- `feat!:` / `BREAKING CHANGE:` → **major** bump
+- `docs:`, `refactor:`, `chore:`, `ci:`, `test:` — no version bump
 
 5. **Push and create PR:**
 
@@ -340,6 +338,7 @@ git push origin feature/my-feature
 - [ ] Documentation updated
 - [ ] Swagger annotations added (for API changes)
 - [ ] Backwards compatible
+- [ ] Commit message is conventional (`feat`/`fix`/…) if the change should release
 
 ### Debugging Tips
 
@@ -363,41 +362,9 @@ docker compose exec api sh
 
 ## Release Process
 
-Releases are **automatic** on `main` via [semantic-release](https://semantic-release.gitbook.io/) ([`.github/workflows/release.yml`](../.github/workflows/release.yml) + [`.releaserc.json`](../.releaserc.json)).
+Releases are **automatic** on `main`. Full details (bump table, `RELEASE_TOKEN`, dry-run, manual tags): **[Releasing](releasing.md)**.
 
-### Automatic (preferred)
-
-1. Merge conventional commits to `main` (`feat:`, `fix:`, `feat!:` / `BREAKING CHANGE:`, etc.).
-2. **Semantic Release** analyzes commits since the last `v*` tag, updates [`CHANGELOG.md`](../CHANGELOG.md), creates tag `vX.Y.Z`, and opens the GitHub Release.
-3. It then dispatches [`build.yml`](../.github/workflows/build.yml) for that tag, which:
-   - Builds multi-arch binaries and containers
-   - Creates multi-arch GHCR manifests (`X.Y.Z`, `vX.Y.Z`, `latest`)
-   - Attaches per-service archives to the GitHub Release
-
-| Commit type | Semver bump |
-|-------------|-------------|
-| `fix:` | patch |
-| `feat:` | minor |
-| `BREAKING CHANGE:` / `feat!:` | major |
-| `docs:`, `chore:`, `ci:`, `refactor:` (no break) | no release |
-
-**Secret:** set repo secret `RELEASE_TOKEN` (fine-grained or classic PAT with `contents:write` and `actions:write`) so the tag/commit from semantic-release can trigger `build.yml`. Without it, the workflow falls back to `GITHUB_TOKEN` and dispatches the build explicitly; a PAT is still recommended.
-
-### Manual tag (escape hatch)
-
-```bash
-git tag -a v1.2.1 -m "Release v1.2.1"
-git push origin v1.2.1
-```
-
-That still runs `build.yml` `create-release` for binaries + GHCR.
-
-### Version Numbering
-
-LoKey uses [Semantic Versioning](https://semver.org/):
-- **MAJOR**: Breaking changes
-- **MINOR**: New features (backwards compatible)
-- **PATCH**: Bug fixes
+Summary: merge conventional commits → semantic-release tags `vX.Y.Z` and updates `CHANGELOG.md` → `build.yml` publishes GHCR + binary archives onto that GitHub Release.
 
 ## Resources
 
@@ -405,6 +372,7 @@ LoKey uses [Semantic Versioning](https://semver.org/):
 - [API Reference](https://lokeytraas.github.io/Lokey/api-reference.html)
 - [Architecture Guide](architecture.md)
 - [Deployment Guide](deployment.md)
+- [Releasing](releasing.md)
 - [Testing Guide](tests.md)
 
 ### Go Resources

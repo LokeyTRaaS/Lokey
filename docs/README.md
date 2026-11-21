@@ -18,6 +18,7 @@ Hardware-based true random number generation for **Raspberry Pi 5 (ARM64)** and 
 
 - **[Architecture](architecture.md)**
 - **[Development](development.md)** — Go 1.27, amd64/arm64 builds
+- **[Releasing](releasing.md)** — semantic-release, `RELEASE_TOKEN`, GHCR tags
 - **[Testing](tests.md)**
 
 ## Platforms

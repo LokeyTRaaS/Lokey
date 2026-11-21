@@ -94,9 +94,11 @@ Also ensure the `lokey` user is in the `docker` group (`sudo usermod -aG docker 
 git clone https://github.com/LokeyTRaaS/Lokey.git && cd Lokey
 mkdir -p run/lokey
 cp .env.template .env
-# Pin released images, e.g.:
-# LOKEY_IMAGE_API=ghcr.io/lokeytraas/lokey/api:1.1.0
-# (same for controller/fortuna/virtio)
+# Pin a GitHub Release version (semantic-release on main); see docs/releasing.md:
+# LOKEY_IMAGE_API=ghcr.io/lokeytraas/lokey/api:1.2.0
+# LOKEY_IMAGE_CONTROLLER=ghcr.io/lokeytraas/lokey/controller:1.2.0
+# LOKEY_IMAGE_FORTUNA=ghcr.io/lokeytraas/lokey/fortuna:1.2.0
+# LOKEY_IMAGE_VIRTIO=ghcr.io/lokeytraas/lokey/virtio:1.2.0
 docker compose pull
 docker compose up -d
 curl -k https://localhost/api/v1/health
