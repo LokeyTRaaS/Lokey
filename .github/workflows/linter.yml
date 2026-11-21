@@ -75,9 +75,11 @@ jobs:
         run: go test -race -coverprofile=coverage.out ./...
 
       - name: Upload coverage
-        uses: codecov/codecov-action@v3
+        uses: codecov/codecov-action@v5
         with:
+          token: ${{ secrets.CODECOV_TOKEN }}
           files: ./coverage.out
           flags: unittests
           name: codecov-umbrella
+          fail_ci_if_error: false
         if: always()
