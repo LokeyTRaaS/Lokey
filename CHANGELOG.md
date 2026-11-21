@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.2.2](https://github.com/LokeyTRaaS/Lokey/compare/v1.2.1...v1.2.2) (2026-11-21)
+
+### Bug Fixes
+
+* trigger semantic-release after RELEASE_TOKEN rotation. ([f0735eb](https://github.com/LokeyTRaaS/Lokey/commit/f0735ebdc57fa9d33e3c094dc905afd568cfc28f))
+
 ## [1.2.1](https://github.com/LokeyTRaaS/Lokey/compare/v1.2.0...v1.2.1) (2026-11-21)
 
 ### Bug Fixes
