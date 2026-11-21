@@ -241,11 +241,13 @@ func (p *FortunaProcessor) seedHandler(ctx *gin.Context) {
 		}
 	}
 
-	// Reseed the generator
+	// Reseed the generator (pool 0 is always eligible on the Fortuna schedule)
 	err := p.generator.ReseedFromPools()
 	if err != nil {
-		p.generator.SetHealthy(false)
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to reseed generator"})
+		// Do not flip healthy→unhealthy on empty-pool races; generate can keep
+		// serving from the current key until the next successful reseed.
+		log.Printf("ReseedFromPools failed after accepting %d seeds: %v", len(request.Seeds), err)
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to reseed generator", "detail": err.Error()})
 		return
 	}
 

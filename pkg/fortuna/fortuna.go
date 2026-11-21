@@ -26,7 +26,8 @@ const (
 // Generator implements the Fortuna algorithm for random number generation
 type Generator struct {
 	key               []byte
-	Counter           uint64
+	Counter           uint64 // AES-CTR block counter (unrelated to pool schedule)
+	reseedCount       uint64 // Fortuna reseed schedule counter
 	BlockSize         int
 	cipher            cipher.Block
 	mutex             sync.Mutex
@@ -63,6 +64,7 @@ func NewGenerator(seed []byte) (*Generator, error) {
 	g := &Generator{
 		key:               initKey,
 		Counter:           0,
+		reseedCount:       0,
 		BlockSize:         aesCipher.BlockSize(),
 		cipher:            aesCipher,
 		mutex:             sync.Mutex{},
@@ -280,30 +282,30 @@ func (g *Generator) rekeyUnlocked() error {
 	return nil
 }
 
-// ReseedFromPools reseeds using available entropy pools
+// ReseedFromPools reseeds using available entropy pools.
+// Pool i is included on reseed N when N % 2^i == 0 (classic Fortuna schedule),
+// driven by reseedCount — not the AES-CTR Counter, which advances on every
+// generate and previously caused intermittent "no entropy" failures.
 func (g *Generator) ReseedFromPools() error {
 	g.mutex.Lock()
-	// Determine which pools to use based on the reseed count
-	reseedCount := g.Counter
+	g.reseedCount++
+	rc := g.reseedCount
 	var poolsToUse [][]byte
 
 	for i := 0; i < NumberOfPools; i++ {
-		// Use a pool if its corresponding bit in reseedCount is 1
-		if (reseedCount & (1 << i)) != 0 {
-			if len(g.pools[i]) > 0 {
-				// Create a copy of the pool
-				poolCopy := make([]byte, len(g.pools[i]))
-				copy(poolCopy, g.pools[i])
-				poolsToUse = append(poolsToUse, poolCopy)
-
-				// Clear the used pool
-				g.pools[i] = g.pools[i][:0]
-			}
+		if rc%(1<<uint(i)) != 0 {
+			break
 		}
+		if len(g.pools[i]) == 0 {
+			continue
+		}
+		poolCopy := make([]byte, len(g.pools[i]))
+		copy(poolCopy, g.pools[i])
+		poolsToUse = append(poolsToUse, poolCopy)
+		g.pools[i] = g.pools[i][:0]
 	}
 	g.mutex.Unlock()
 
-	// Only reseed if we have entropy
 	if len(poolsToUse) > 0 {
 		return g.Reseed(poolsToUse)
 	}
@@ -352,11 +354,8 @@ func (g *Generator) HealthCheck() bool {
 		return false
 	}
 
-	// Check time since last reseed
-	timeSinceReseed := time.Since(g.lastReseed)
-	if timeSinceReseed > g.maxReseedInterval {
-		// Haven't been reseeded in max interval, might be a problem
-		// Only fail if also explicitly unhealthy
+	// Stale reseed window: still healthy only if last reseed was recent
+	if time.Since(g.lastReseed) > g.maxReseedInterval {
 		return false
 	}
 

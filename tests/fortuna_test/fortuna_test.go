@@ -166,27 +166,36 @@ func TestGenerator_ReseedFromPools(t *testing.T) {
 	gen, _ := fortuna.NewGenerator(seed)
 
 	t.Run("reseed from pools with data", func(t *testing.T) {
-		// Add data to pools
-		gen.AddRandomEvent(0, []byte{1, 2, 3})
-		gen.AddRandomEvent(1, []byte{4, 5, 6})
+		// Pool 0 is always selected on the classic Fortuna schedule (N % 1 == 0)
+		pool0 := make([]byte, 32)
+		rand.Read(pool0)
+		if err := gen.AddRandomEvent(0, pool0); err != nil {
+			t.Fatalf("AddRandomEvent: %v", err)
+		}
 
-		// Manually set counter to trigger pool selection
-		// Counter 0 means pool 0 will be used (bit 0 is set)
-		// We need to ensure pool 0 has data
-		gen.AddRandomEvent(0, []byte{7, 8, 9})
+		if err := gen.ReseedFromPools(); err != nil {
+			t.Fatalf("Expected reseed from pool 0 to succeed, got %v", err)
+		}
+		if !gen.HealthCheck() {
+			t.Error("Expected generator healthy after successful pool reseed")
+		}
+	})
 
-		// Reseed from pools - this will use pools based on counter bits
-		// Since counter is 0, it will use pool 0 (bit 0 of 0 is 0, so no pools)
-		// Let's add events and reseed manually first to increment counter
-		initialSeed := make([]byte, 32)
-		rand.Read(initialSeed)
-		gen.Reseed([][]byte{initialSeed})
-		gen.AddRandomEvent(0, []byte{10, 11, 12})
-
-		// Now counter is 1, so bit 0 is set, pool 0 should be used
-		// This might fail if no pools match the counter bits
-		// That's acceptable - the test verifies the method exists and works when pools are available
-		_ = gen.ReseedFromPools()
+	t.Run("reseed schedule survives AES counter advance", func(t *testing.T) {
+		gen2, _ := fortuna.NewGenerator(seed)
+		// Advance AES Counter the way /generate does — previously this could
+		// clear bits 0-4 and make ReseedFromPools report "no entropy".
+		if _, err := gen2.GenerateRandomData(16 * 32); err != nil {
+			t.Fatalf("GenerateRandomData: %v", err)
+		}
+		pool0 := make([]byte, 32)
+		rand.Read(pool0)
+		if err := gen2.AddRandomEvent(0, pool0); err != nil {
+			t.Fatalf("AddRandomEvent: %v", err)
+		}
+		if err := gen2.ReseedFromPools(); err != nil {
+			t.Fatalf("ReseedFromPools must not depend on AES Counter, got %v", err)
+		}
 	})
 
 	t.Run("reseed from empty pools", func(t *testing.T) {
@@ -279,10 +288,6 @@ func TestGenerator_AmplifyRandomData(t *testing.T) {
 
 	t.Run("amplify seed", func(t *testing.T) {
 		gen2, _ := fortuna.NewGenerator(seed)
-		// Reseed first to increment counter so ReseedFromPools can select pools
-		initialSeed := make([]byte, 32)
-		rand.Read(initialSeed)
-		gen2.Reseed([][]byte{initialSeed})
 
 		inputSeed := make([]byte, 64)
 		rand.Read(inputSeed)
@@ -324,10 +329,6 @@ func TestGenerator_AmplifyRandomData(t *testing.T) {
 
 	t.Run("large seed", func(t *testing.T) {
 		gen3, _ := fortuna.NewGenerator(seed)
-		// Reseed first to increment counter so ReseedFromPools can select pools
-		initialSeed := make([]byte, 32)
-		rand.Read(initialSeed)
-		gen3.Reseed([][]byte{initialSeed})
 
 		largeSeed := make([]byte, 500)
 		rand.Read(largeSeed)
