@@ -132,8 +132,9 @@ func (v *VirtIOService) Start() error {
 	// Start HTTP server
 	serverErr := make(chan error, 1)
 	server := &http.Server{
-		Addr:    fmt.Sprintf(":%d", v.port),
-		Handler: v.router,
+		Addr:              fmt.Sprintf(":%d", v.port),
+		Handler:           v.router,
+		ReadHeaderTimeout: 10 * time.Second,
 	}
 
 	logLevel := os.Getenv("LOG_LEVEL")

@@ -93,7 +93,7 @@ func (s *Server) deviceTracker(deviceID string) *TRNGQualityTracker {
 // fetchAndStoreTRNGData fetches and stores TRNG data from controllers (round-robin).
 func (s *Server) FetchAndStoreTRNGData() error {
 	ep := s.nextController()
-	resp, err := http.Get(ep.Addr + "/generate")
+	resp, err := s.httpClient.Get(ep.Addr + "/generate")
 	if err != nil {
 		return fmt.Errorf("error connecting to TRNG controller %s (%s): %w", ep.DeviceID, ep.Addr, err)
 	}
@@ -159,7 +159,7 @@ func (s *Server) PollFortunaService(ctx context.Context, interval time.Duration)
 func (s *Server) FetchAndStoreFortunaData() error {
 	// Attempt to fetch data from the Fortuna service using the correct endpoint
 	// Specify size=256 for a reasonable amount of random data
-	resp, err := http.Get(s.FortunaAddr + "/generate?size=256")
+	resp, err := s.httpClient.Get(s.FortunaAddr + "/generate?size=256")
 	if err != nil {
 		return fmt.Errorf("error connecting to Fortuna service: %w", err)
 	}
@@ -299,7 +299,7 @@ func (s *Server) SeedFortuna() error {
 	var seeds []string
 	var seedBytes int
 	for _, ep := range s.controllersOrDefault() {
-		resp, err := http.Get(ep.Addr + "/generate?count=5")
+		resp, err := s.httpClient.Get(ep.Addr + "/generate?count=5")
 		if err != nil {
 			log.Printf("seeding: controller %s unreachable: %v", ep.DeviceID, err)
 			continue
@@ -353,7 +353,7 @@ func (s *Server) SeedFortuna() error {
 		return fmt.Errorf("error marshaling seed request: %w", err)
 	}
 
-	seedResp, err := http.Post(s.FortunaAddr+"/seed", "application/json", bytes.NewBuffer(seedData))
+	seedResp, err := s.httpClient.Post(s.FortunaAddr+"/seed", "application/json", bytes.NewBuffer(seedData))
 	if err != nil {
 		return fmt.Errorf("error seeding Fortuna: %w", err)
 	}
@@ -427,7 +427,7 @@ func (s *Server) SeedVirtIOWithTRNG(ctx context.Context, interval time.Duration)
 func (s *Server) SeedVirtIOFromTRNG() error {
 	var seeds []string
 	for _, ep := range s.controllersOrDefault() {
-		resp, err := http.Get(ep.Addr + "/generate?count=5")
+		resp, err := s.httpClient.Get(ep.Addr + "/generate?count=5")
 		if err != nil {
 			log.Printf("virtio seeding: controller %s unreachable: %v", ep.DeviceID, err)
 			continue
@@ -478,7 +478,7 @@ func (s *Server) SeedVirtIOFromTRNG() error {
 		return fmt.Errorf("error marshaling seed request: %w", err)
 	}
 
-	seedResp, err := http.Post(
+	seedResp, err := s.httpClient.Post(
 		s.VirtioAddr+"/seed",
 		"application/json",
 		bytes.NewBuffer(seedData),
@@ -574,7 +574,7 @@ func (s *Server) SeedVirtIOFromFortuna() error {
 		return fmt.Errorf("error marshaling seed request: %w", err)
 	}
 
-	seedResp, err := http.Post(
+	seedResp, err := s.httpClient.Post(
 		s.VirtioAddr+"/seed",
 		"application/json",
 		bytes.NewBuffer(seedData),

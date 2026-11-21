@@ -96,8 +96,9 @@ func (c *Controller) Start() error {
 
 	serverErr := make(chan error, 1)
 	server := &http.Server{
-		Addr:    fmt.Sprintf(":%d", c.port),
-		Handler: c.router,
+		Addr:              fmt.Sprintf(":%d", c.port),
+		Handler:           c.router,
+		ReadHeaderTimeout: 10 * time.Second,
 	}
 
 	logLevel := os.Getenv("LOG_LEVEL")

@@ -37,6 +37,7 @@ type Server struct {
 	validate       *validator.Validate
 	metrics        *Metrics
 	registry       *prometheus.Registry
+	httpClient     *http.Client // Shared client for controller/fortuna/virtio requests
 	consumeMode    bool         // Global consume setting
 	consumeMutex   sync.RWMutex // Protects consumeMode
 
@@ -402,6 +403,7 @@ func NewServer(db database.DBHandler, controllerAddr, fortunaAddr, virtioAddr st
 		validate:              validate,
 		metrics:               metrics,
 		registry:              reg,
+		httpClient:            &http.Client{Timeout: 10 * time.Second},
 		consumeMode:           false,           // Default: don't consume (read-only mode)
 		seedingCooldown:       5 * time.Minute, // Default cooldown for seeding circuit breaker
 		virtioSeedingCooldown: 5 * time.Minute, // Default cooldown for VirtIO seeding circuit breaker
@@ -418,9 +420,13 @@ func NewServer(db database.DBHandler, controllerAddr, fortunaAddr, virtioAddr st
 
 // setupRoutes configures the API routes
 func (s *Server) setupRoutes() {
-	// Add CORS middleware
+	// Allowed origin can be restricted via CORS_ALLOWED_ORIGIN (default: "*")
+	allowedOrigin := os.Getenv("CORS_ALLOWED_ORIGIN")
+	if allowedOrigin == "" {
+		allowedOrigin = "*"
+	}
 	s.Router.Use(func(c *gin.Context) {
-		c.Header("Access-Control-Allow-Origin", "*")
+		c.Header("Access-Control-Allow-Origin", allowedOrigin)
 		c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 		c.Header("Access-Control-Allow-Headers", "Content-Type, Authorization, Accept")
 
@@ -480,7 +486,12 @@ func (s *Server) setupRoutes() {
 
 // Run starts the API server
 func (s *Server) Run() error {
-	return s.Router.Run(fmt.Sprintf(":%d", s.port))
+	server := &http.Server{
+		Addr:              fmt.Sprintf(":%d", s.port),
+		Handler:           s.Router,
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+	return server.ListenAndServe()
 }
 
 // GetQueueConfig returns the current queue configuration.
@@ -772,9 +783,8 @@ func (s *Server) getVirtIOQueueMetrics() database.DataSourceStats {
 		return stats // Return zero stats if VirtIO not configured
 	}
 
-	client := &http.Client{Timeout: 5 * time.Second}
 	queueConfigURL := fmt.Sprintf("%s/config/queue", s.VirtioAddr)
-	resp, err := client.Get(queueConfigURL)
+	resp, err := s.httpClient.Get(queueConfigURL)
 	if err != nil {
 		// VirtIO service unavailable - return zero stats
 		return stats
@@ -954,7 +964,7 @@ func (s *Server) checkServiceHealth(serviceAddr string) bool {
 	url := serviceAddr + "/health"
 
 	// URL is constructed from validated server configuration, not user input
-	resp, err := http.Get(url) // #nosec G107
+	resp, err := s.httpClient.Get(url) // #nosec G107
 	if err != nil {
 		return false
 	}
@@ -1058,9 +1068,8 @@ func (s *Server) GetVirtIOConfig(c *gin.Context) {
 	// Get queue size from VirtIO service or database
 	queueSize := 0
 	if s.VirtioAddr != "" {
-		client := &http.Client{Timeout: 5 * time.Second}
 		queueConfigURL := fmt.Sprintf("%s/config/queue", s.VirtioAddr)
-		resp, err := client.Get(queueConfigURL)
+		resp, err := s.httpClient.Get(queueConfigURL)
 		if err == nil {
 			defer resp.Body.Close()
 			var queueInfo map[string]int
@@ -1137,7 +1146,6 @@ func (s *Server) notifyVirtIOQueueSize(queueSize int) {
 	if s.VirtioAddr == "" || queueSize <= 0 {
 		return
 	}
-	client := &http.Client{Timeout: 5 * time.Second}
 	queueUpdateURL := fmt.Sprintf("%s/config/queue", s.VirtioAddr)
 	jsonBody, err := json.Marshal(map[string]int{"queue_size": queueSize})
 	if err != nil {
@@ -1150,7 +1158,7 @@ func (s *Server) notifyVirtIOQueueSize(queueSize int) {
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := client.Do(req)
+	resp, err := s.httpClient.Do(req)
 	if err != nil {
 		log.Printf("[WARN] VirtIO queue update failed (service may be unavailable): %v", err)
 		return
