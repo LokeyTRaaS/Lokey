@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.2.4](https://github.com/LokeyTRaaS/Lokey/compare/v1.2.3...v1.2.4) (2026-11-22)
+
+### Bug Fixes
+
+* **ci:** publish images and binaries when notes push is rejected ([442c2f2](https://github.com/LokeyTRaaS/Lokey/commit/442c2f24a9899acc3cba2071293cc754425c26fe))
+
 ## [1.2.3](https://github.com/LokeyTRaaS/Lokey/compare/v1.2.2...v1.2.3) (2026-11-21)
 
 ### Bug Fixes
