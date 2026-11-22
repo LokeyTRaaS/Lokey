@@ -57,14 +57,73 @@ jobs:
           # runner's Node 24 runtime. semantic-release 26 refuses that, so run
           # the CLI on the Node version from setup-node. Plugins are the
           # package.json devDependencies loaded by .releaserc.json.
-          npx semantic-release
-          tag="$(git tag --points-at HEAD --list 'v[0-9]*' | head -n 1 || true)"
-          if [ -n "${tag}" ]; then
+          #
+          # semantic-release pushes the version tag, then pushes
+          # refs/notes/semantic-release-<tag>, and only then publishes. GitHub
+          # sometimes rejects that notes ref with "(failed)". That used to abort
+          # this step before new_release_published was set, so build.yml never
+          # ran and the release shipped with no images or binaries. A new tag is
+          # enough to publish artifacts; the notes ref is retried and is not
+          # required.
+          before="$(mktemp)"
+          after="$(mktemp)"
+          sr_log="$(mktemp)"
+          git ls-remote --refs origin 'refs/tags/v*' | awk '{print $2}' | sort -u > "$before"
+
+          set +e
+          set +o pipefail
+          npx semantic-release 2>&1 | tee "$sr_log"
+          sr_status=${PIPESTATUS[0]}
+          set -o pipefail
+          set -e
+
+          git ls-remote --refs origin 'refs/tags/v*' | awk '{print $2}' | sort -u > "$after"
+          new_tag="$(
+            comm -13 "$before" "$after" \
+              | sed -n 's#^refs/tags/##p' \
+              | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$' \
+              | sort -V \
+              | tail -n 1 || true
+          )"
+
+          notes_rejected=false
+          if [ "$sr_status" -ne 0 ] \
+            && grep -q 'refs/notes/semantic-release-' "$sr_log" \
+            && grep -Eq 'remote rejected|failed to push some refs' "$sr_log"; then
+            notes_rejected=true
+          fi
+
+          if [ -n "$new_tag" ]; then
+            note_ref="refs/notes/semantic-release-${new_tag}"
+            if git show-ref --verify --quiet "$note_ref"; then
+              for attempt in 1 2 3; do
+                if git push origin "$note_ref"; then
+                  echo "Pushed ${note_ref}"
+                  break
+                fi
+                echo "notes push attempt ${attempt} failed"
+                sleep $((attempt * 5))
+              done
+            fi
             echo "new_release_published=true" >> "$GITHUB_OUTPUT"
-            echo "new_release_version=${tag#v}" >> "$GITHUB_OUTPUT"
+            echo "new_release_version=${new_tag#v}" >> "$GITHUB_OUTPUT"
           else
             echo "new_release_published=false" >> "$GITHUB_OUTPUT"
             echo "new_release_version=" >> "$GITHUB_OUTPUT"
+          fi
+
+          fail_job=false
+          if [ "$sr_status" -ne 0 ] && { [ "$notes_rejected" != true ] || [ -z "$new_tag" ]; }; then
+            fail_job=true
+          fi
+          echo "sr_status=${sr_status}" >> "$GITHUB_OUTPUT"
+          echo "notes_rejected=${notes_rejected}" >> "$GITHUB_OUTPUT"
+          echo "fail_job=${fail_job}" >> "$GITHUB_OUTPUT"
+
+          # Leave the tag in place for the dispatch step. Fail here only when
+          # there is nothing to build.
+          if [ "$fail_job" = true ] && [ -z "$new_tag" ]; then
+            exit "$sr_status"
           fi
 
       - name: Trigger artifact build for the new tag
@@ -78,6 +137,15 @@ jobs:
           echo "Dispatching build.yml for ${TAG}"
           gh workflow run build.yml --repo "${{ github.repository }}" --ref "${TAG}"
 
+      - name: Fail when semantic-release failed
+        if: always() && steps.semantic.outputs.fail_job == 'true'
+        run: |
+          echo "semantic-release exited ${{ steps.semantic.outputs.sr_status }}."
+          if [ "${{ steps.semantic.outputs.new_release_published }}" = "true" ]; then
+            echo "build.yml was still dispatched for v${{ steps.semantic.outputs.new_release_version }}."
+          fi
+          exit 1
+
       - name: Summary
         if: always()
         run: |
@@ -85,6 +153,8 @@ jobs:
             echo "## Semantic Release"
             echo "- published: \`${{ steps.semantic.outputs.new_release_published || 'false' }}\`"
             echo "- version: \`${{ steps.semantic.outputs.new_release_version || 'n/a' }}\`"
+            echo "- semantic-release exit: \`${{ steps.semantic.outputs.sr_status || 'n/a' }}\`"
+            echo "- notes rejected: \`${{ steps.semantic.outputs.notes_rejected || 'false' }}\`"
             if [ "${{ steps.semantic.outputs.new_release_published }}" = "true" ]; then
               echo "- next: \`build.yml\` dispatched for \`v${{ steps.semantic.outputs.new_release_version }}\`"
             fi

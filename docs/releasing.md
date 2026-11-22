@@ -30,6 +30,8 @@ flowchart LR
    - Opens / updates the GitHub Release with generated notes
 3. The workflow then **dispatches** `build.yml` for that tag so GHCR images and binary archives are published and attached to the same release.
 
+semantic-release also pushes `refs/notes/semantic-release-<tag>` before it publishes. GitHub sometimes rejects that notes ref. The version tag is already on the remote by then, so the workflow still dispatches `build.yml`. The notes push is retried and is not required for images or binaries. Any other semantic-release failure still fails the job; if the tag was pushed first, the artifact build is dispatched before that failure is reported.
+
 Pushes whose commit message contains `[skip ci]` (including the release commit itself) do not re-enter the release workflow.
 
 ## Commit → version bump
