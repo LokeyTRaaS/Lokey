@@ -24,7 +24,7 @@ const docTemplate = `{
     "paths": {
         "/config/consume": {
             "get": {
-                "description": "Get current consume mode setting (true = delete-on-read, false = keep data in queue)",
+                "description": "Get client read flags plus the Fortuna seed and VirtIO source draws, and the mixed data-sample ratios. A feed ratio of 0.1 takes 10 percent of new items. A data_sample ratio of 0.1 reads every 10th stored item. consume true on a feed removes each chosen item from the source ring.",
                 "consumes": [
                     "application/json"
                 ],
@@ -45,7 +45,7 @@ const docTemplate = `{
                 }
             },
             "put": {
-                "description": "Update consume mode setting (true = delete-on-read, false = keep data in queue)",
+                "description": "Set client read flags, the Fortuna seed and VirtIO source draws, and the mixed data-sample ratios. Omitted fields stay unchanged. A feed ratio of 0.1 takes 10 percent of new items. A data_sample ratio must be 0 or the reciprocal of an integer stride, such as 0.1, 0.25, 0.5, or 1. consume true on a feed removes each chosen item from its source ring. The VirtIO service read flag is forwarded to the VirtIO service.",
                 "consumes": [
                     "application/json"
                 ],
@@ -170,7 +170,7 @@ const docTemplate = `{
         },
         "/config/virtio": {
             "get": {
-                "description": "Get current VirtIO configuration including seeding source (TRNG, Fortuna, or both) and queue size. Queue size is queried from the VirtIO service.",
+                "description": "Get VirtIO queue size, seeding source, client read flags, and the Fortuna and VirtIO feed ratios. A ratio of 0.1 is 10 percent of new items from that ring.",
                 "consumes": [
                     "application/json"
                 ],
@@ -200,7 +200,7 @@ const docTemplate = `{
                 }
             },
             "put": {
-                "description": "Update VirtIO seeding source (TRNG, Fortuna, or both) and queue size. Queue size changes are forwarded to the VirtIO service. Seeding source changes take effect immediately.",
+                "description": "Update VirtIO queue size, client read flags, Fortuna seed draw, and VirtIO source ratios. Omitted fields stay unchanged. A changed seeding_source sets a 10 percent ratio on each source it names unless virtio_sources is included.",
                 "consumes": [
                     "application/json"
                 ],
@@ -252,7 +252,7 @@ const docTemplate = `{
         },
         "/data": {
             "post": {
-                "description": "Retrieve random data in various formats with pagination. Valid sources are \"trng\" (True Random Number Generator) and \"fortuna\" (Fortuna CSPRNG). Note: VirtIO is a consumer endpoint for virtualization (named pipe/HTTP streaming) and cannot be used as a data source here. To access VirtIO data, use the named pipe or HTTP streaming endpoint directly.",
+                "description": "Retrieve random data in various formats with pagination. Valid sources are \"trng\" (True Random Number Generator), \"fortuna\" (Fortuna CSPRNG), and \"mixed\". mixed walks each ring by the data_sample ratio: 0.1 reads indexes 0, 10, 20, and the next lap starts at 1. The two selections are concatenated. VirtIO is a consumer endpoint for virtualization (named pipe/HTTP streaming) and cannot be used as a data source here. To access VirtIO data, use the named pipe or HTTP streaming endpoint directly.",
                 "consumes": [
                     "application/json"
                 ],
@@ -373,8 +373,49 @@ const docTemplate = `{
         "api.ConsumeConfig": {
             "type": "object",
             "properties": {
-                "consume": {
+                "fortuna": {
+                    "description": "true removes Fortuna items when an API client reads them",
                     "type": "boolean"
+                },
+                "trng": {
+                    "description": "true removes TRNG items when an API client reads them",
+                    "type": "boolean"
+                },
+                "virtio": {
+                    "description": "true removes VirtIO items when the VirtIO service serves them",
+                    "type": "boolean"
+                },
+                "fortuna_seed": {
+                    "$ref": "#/definitions/api.FeedSource"
+                },
+                "virtio_sources": {
+                    "$ref": "#/definitions/api.VirtIOSources"
+                },
+                "data_sample": {
+                    "$ref": "#/definitions/api.DataSample"
+                }
+            }
+        },
+        "api.DataSample": {
+            "description": "Ratios for a mixed data read. 0.1 reads every 10th item of that ring. The ratios are independent and do not have to sum to 1.",
+            "type": "object",
+            "properties": {
+                "fortuna": {
+                    "$ref": "#/definitions/api.SampleRatio"
+                },
+                "trng": {
+                    "$ref": "#/definitions/api.SampleRatio"
+                }
+            }
+        },
+        "api.SampleRatio": {
+            "description": "Fraction of one ring. Must be 0 or the reciprocal of an integer stride, such as 0.1, 0.25, 0.5, or 1.",
+            "type": "object",
+            "properties": {
+                "ratio": {
+                    "type": "number",
+                    "maximum": 1,
+                    "minimum": 0
                 }
             }
         },
@@ -414,7 +455,8 @@ const docTemplate = `{
                     "enum": [
                         "trng",
                         "fortuna",
-                        "virtio"
+                        "virtio",
+                        "mixed"
                     ]
                 }
             }
@@ -477,17 +519,17 @@ const docTemplate = `{
             "properties": {
                 "fortuna_queue_size": {
                     "type": "integer",
-                    "maximum": 1000000,
+                    "maximum": 5000000,
                     "minimum": 10
                 },
                 "trng_queue_size": {
                     "type": "integer",
-                    "maximum": 1000000,
+                    "maximum": 5000000,
                     "minimum": 10
                 },
                 "virtio_queue_size": {
                     "type": "integer",
-                    "maximum": 1000000,
+                    "maximum": 5000000,
                     "minimum": 10
                 }
             }
@@ -515,6 +557,12 @@ const docTemplate = `{
                 },
                 "virtio": {
                     "$ref": "#/definitions/api.VirtIOStats"
+                },
+                "consume": {
+                    "$ref": "#/definitions/api.ConsumeConfig"
+                },
+                "intake": {
+                    "$ref": "#/definitions/api.IntakeStats"
                 }
             }
         },
@@ -527,7 +575,7 @@ const docTemplate = `{
             "properties": {
                 "queue_size": {
                     "type": "integer",
-                    "maximum": 1000000,
+                    "maximum": 5000000,
                     "minimum": 10
                 },
                 "seeding_source": {
@@ -537,6 +585,21 @@ const docTemplate = `{
                         "fortuna",
                         "both"
                     ]
+                },
+                "trng": {
+                    "type": "boolean"
+                },
+                "fortuna": {
+                    "type": "boolean"
+                },
+                "virtio": {
+                    "type": "boolean"
+                },
+                "fortuna_seed": {
+                    "$ref": "#/definitions/api.FeedSource"
+                },
+                "virtio_sources": {
+                    "$ref": "#/definitions/api.VirtIOSources"
                 }
             }
         },
@@ -556,12 +619,25 @@ const docTemplate = `{
                     "type": "integer"
                 },
                 "queue_percentage": {
-                    "type": "number"
+                    "type": "number",
+                    "description": "Percentage of the ring that is occupied (0-100)"
                 },
                 "total_generated": {
                     "type": "integer"
                 },
                 "unconsumed_count": {
+                    "type": "integer"
+                },
+                "queue_current_bytes": {
+                    "description": "Sum of stored item lengths",
+                    "type": "integer"
+                },
+                "queue_item_bytes": {
+                    "description": "Bytes per stored item",
+                    "type": "integer"
+                },
+                "queue_capacity_bytes": {
+                    "description": "Capacity times item size, when the size is known",
                     "type": "integer"
                 }
             }
@@ -607,7 +683,7 @@ const docTemplate = `{
                     "type": "integer"
                 },
                 "queue_percentage": {
-                    "description": "Percentage of queue filled",
+                    "description": "Percentage of queue filled (0-100)",
                     "type": "number"
                 },
                 "total_generated": {
@@ -616,6 +692,18 @@ const docTemplate = `{
                 },
                 "unconsumed_count": {
                     "description": "Current unconsumed items",
+                    "type": "integer"
+                },
+                "queue_current_bytes": {
+                    "description": "Sum of stored item lengths",
+                    "type": "integer"
+                },
+                "queue_item_bytes": {
+                    "description": "Bytes per stored item (last length if sizes differ)",
+                    "type": "integer"
+                },
+                "queue_capacity_bytes": {
+                    "description": "Capacity times item size, when the size is known",
                     "type": "integer"
                 }
             }
@@ -677,6 +765,52 @@ const docTemplate = `{
                 },
                 "size_human": {
                     "type": "string"
+                }
+            }
+        },
+        "api.IntakeStats": {
+            "description": "Entropy the API has accepted from the controller and Fortuna.",
+            "type": "object",
+            "properties": {
+                "bytes_total": {
+                    "type": "integer"
+                },
+                "fortuna_bytes_total": {
+                    "type": "integer"
+                },
+                "fortuna_items_total": {
+                    "type": "integer"
+                },
+                "trng_bytes_total": {
+                    "type": "integer"
+                },
+                "trng_items_total": {
+                    "type": "integer"
+                }
+            }
+        },
+        "api.FeedSource": {
+            "description": "A draw from a stored ring. ratio 0.1 takes 10 percent of new items. consume true removes each chosen item from the source ring.",
+            "type": "object",
+            "properties": {
+                "consume": {
+                    "type": "boolean"
+                },
+                "ratio": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1
+                }
+            }
+        },
+        "api.VirtIOSources": {
+            "type": "object",
+            "properties": {
+                "fortuna": {
+                    "$ref": "#/definitions/api.FeedSource"
+                },
+                "trng": {
+                    "$ref": "#/definitions/api.FeedSource"
                 }
             }
         }

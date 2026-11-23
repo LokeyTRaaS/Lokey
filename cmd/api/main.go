@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -63,9 +64,9 @@ const (
 	DefaultControllerAddr      = "http://controller:8081"
 	DefaultFortunaAddr         = "http://fortuna:8082"
 	DefaultVirtioAddr          = "http://virtio:8083"
-	DefaultTRNGQueueSize       = 1000000
-	DefaultFortunaQueueSize    = 1000000
-	DefaultVirtIOQueueSize     = 500000
+	DefaultTRNGQueueSize       = 2000000
+	DefaultFortunaQueueSize    = 2000000
+	DefaultVirtIOQueueSize     = 1000000
 	DefaultTRNGPollInterval    = 100 * time.Millisecond
 	DefaultFortunaPollInterval = 100 * time.Millisecond
 	DefaultVirtIOPollInterval  = 100 * time.Millisecond
@@ -158,6 +159,61 @@ func main() {
 		}
 	}
 
+	parseBoolDefault := func(key string, fallback bool) bool {
+		val, ok := os.LookupEnv(key)
+		if !ok || val == "" {
+			return fallback
+		}
+		switch val {
+		case "1", "true", "TRUE", "True", "yes", "YES":
+			return true
+		case "0", "false", "FALSE", "False", "no", "NO":
+			return false
+		default:
+			log.Printf("Invalid %s, using default: %v", key, fallback)
+			return fallback
+		}
+	}
+	consumeTRNG := parseBoolDefault("TRNG_CONSUME", false)
+	consumeFortuna := parseBoolDefault("FORTUNA_CONSUME", false)
+	consumeVirtIO := parseBoolDefault("VIRTIO_CONSUME", true)
+
+	parseRatioDefault := func(key string, fallback float64) float64 {
+		val, ok := os.LookupEnv(key)
+		if !ok || val == "" {
+			return fallback
+		}
+		parsed, err := strconv.ParseFloat(val, 64)
+		if err != nil || parsed < 0 || parsed > 1 {
+			log.Printf("Invalid %s, using default: %v", key, fallback)
+			return fallback
+		}
+		return parsed
+	}
+	trngFeedRatio := 0.0
+	fortunaFeedRatio := 0.0
+	switch virtioSeedingSource {
+	case "fortuna":
+		fortunaFeedRatio = 0.1
+	case "both":
+		trngFeedRatio = 0.1
+		fortunaFeedRatio = 0.1
+	default:
+		trngFeedRatio = 0.1
+	}
+	trngFeedRatio = parseRatioDefault("VIRTIO_TRNG_RATIO", trngFeedRatio)
+	fortunaFeedRatio = parseRatioDefault("VIRTIO_FORTUNA_RATIO", fortunaFeedRatio)
+	dataTRNGRatio := parseRatioDefault("DATA_TRNG_RATIO", 0)
+	dataFortunaRatio := parseRatioDefault("DATA_FORTUNA_RATIO", 0)
+	if _, _, err := api.StrideForRatio(dataTRNGRatio); err != nil {
+		log.Printf("Invalid DATA_TRNG_RATIO, using 0: %v", err)
+		dataTRNGRatio = 0
+	}
+	if _, _, err := api.StrideForRatio(dataFortunaRatio); err != nil {
+		log.Printf("Invalid DATA_FORTUNA_RATIO, using 0: %v", err)
+		dataFortunaRatio = 0
+	}
+
 	// In-memory channel queues (no on-disk database)
 	db, err := database.NewDBHandler(trngQueueSize, fortunaQueueSize, virtioQueueSize)
 	if err != nil {
@@ -170,6 +226,29 @@ func main() {
 
 	// Initialize VirtIO configuration
 	server.SetVirtIOSeedingSource(virtioSeedingSource)
+	server.SetConsumeConfig(api.ConsumeConfig{
+		TRNG:    consumeTRNG,
+		Fortuna: consumeFortuna,
+		VirtIO:  consumeVirtIO,
+		FortunaSeed: api.FeedSource{
+			Ratio:   parseRatioDefault("FORTUNA_SEED_RATIO", 0.1),
+			Consume: parseBoolDefault("FORTUNA_SEED_CONSUME", false),
+		},
+		VirtIOSources: api.VirtIOSources{
+			TRNG: api.FeedSource{
+				Ratio:   trngFeedRatio,
+				Consume: parseBoolDefault("VIRTIO_TRNG_CONSUME", false),
+			},
+			Fortuna: api.FeedSource{
+				Ratio:   fortunaFeedRatio,
+				Consume: parseBoolDefault("VIRTIO_FORTUNA_CONSUME", false),
+			},
+		},
+		DataSample: api.DataSample{
+			TRNG:    api.SampleRatio{Ratio: dataTRNGRatio},
+			Fortuna: api.SampleRatio{Ratio: dataFortunaRatio},
+		},
+	})
 
 	// Create context for polling that can be cancelled
 	ctx, cancel := context.WithCancel(context.Background())

@@ -444,7 +444,7 @@ deploy:
 resources:
 limits:
 cpus: '1.0'
-memory: 512M
+memory: 2G
 reservations:
 cpus: '0.5'
 memory: 256M
@@ -465,7 +465,7 @@ curl -sk https://localhost/api/v1/status | jq '.database'
 After `docker compose down` / restart, queues are empty until polling refills them.
 ## Environment Variables
 
-Defaults below match [`cmd/api/main.go`](../cmd/api/main.go) and sibling services. Compose often **overrides** queues/intervals to smaller values — see `docker-compose.yaml`.
+Defaults below match [`cmd/api/main.go`](../cmd/api/main.go) and [`docker-compose.yaml`](../docker-compose.yaml). Queue sizes can be raised at runtime up to 5000000.
 
 ### Compose / Traefik (host)
 
@@ -486,13 +486,24 @@ Defaults below match [`cmd/api/main.go`](../cmd/api/main.go) and sibling service
 | `CONTROLLER_ADDRS` | Multi-controller list | (empty) | Format `id=http://host:port,id2=...` |
 | `FORTUNA_ADDR` | Fortuna URL (**single** host) | `http://fortuna:8082` | No CSV multi-instance support |
 | `VIRTIO_ADDR` | VirtIO URL | `http://virtio:8083` | |
-| `TRNG_QUEUE_SIZE` | In-memory TRNG queue capacity | `1000000` | Compose usually lowers this |
-| `FORTUNA_QUEUE_SIZE` | In-memory Fortuna queue capacity | `1000000` | |
-| `VIRTIO_QUEUE_SIZE` | API-side VirtIO queue capacity | `500000` | VirtIO service has its own queue |
+| `TRNG_QUEUE_SIZE` | In-memory TRNG queue capacity | `2000000` | About 62 MB of 31-byte samples |
+| `FORTUNA_QUEUE_SIZE` | In-memory Fortuna queue capacity | `2000000` | About 512 MB of 256-byte pulls |
+| `VIRTIO_QUEUE_SIZE` | API-side VirtIO queue capacity | `1000000` | VirtIO service has its own queue of the same size |
 | `TRNG_POLL_INTERVAL_MS` | Controller poll interval | `100` | |
 | `FORTUNA_POLL_INTERVAL_MS` | Fortuna poll interval | `100` | |
 | `VIRTIO_POLL_INTERVAL_MS` | Parsed/logged only | `100` | VirtIO is **not** polled; seeding is timer-based (~30s hardcoded) |
-| `VIRTIO_SEEDING_SOURCE` | Seeding source | `trng` | `trng`, `fortuna`, or `both` |
+| `VIRTIO_SEEDING_SOURCE` | Which stored rings feed VirtIO when the ratio env vars are unset | `trng` | `trng`, `fortuna`, or `both`. The named sources default to a ratio of 0.1 |
+| `TRNG_CONSUME` | Delete TRNG samples when an API client reads them | `false` | Does not change Fortuna or VirtIO draws |
+| `FORTUNA_CONSUME` | Delete Fortuna samples when an API client reads them | `false` | |
+| `VIRTIO_CONSUME` | Delete VirtIO samples when a VM or stream reads | `true` | `false` copies and leaves the VirtIO ring unchanged |
+| `FORTUNA_SEED_RATIO` | Fraction of new TRNG samples given to Fortuna | `0.1` | `0.1` is 10 percent. `0` turns the reseed draw off. `1` takes every new sample |
+| `FORTUNA_SEED_CONSUME` | Remove each TRNG sample chosen for Fortuna | `false` | `true` deletes it from the TRNG ring as it is chosen |
+| `VIRTIO_TRNG_RATIO` | Fraction of new TRNG samples given to VirtIO | `0.1` when the source includes TRNG, otherwise `0` | Same 0–1 scale |
+| `VIRTIO_FORTUNA_RATIO` | Fraction of new Fortuna pulls given to VirtIO | `0.1` when the source includes Fortuna, otherwise `0` | Both ratios above 0 feed VirtIO from both rings |
+| `VIRTIO_TRNG_CONSUME` | Remove each TRNG sample chosen for VirtIO | `false` | |
+| `VIRTIO_FORTUNA_CONSUME` | Remove each Fortuna pull chosen for VirtIO | `false` | |
+| `DATA_TRNG_RATIO` | Fraction of the TRNG ring returned by `source=mixed` | `0` | `0.1` reads every 10th item. Must be `0` or `1/n`. Does not affect `source=trng` |
+| `DATA_FORTUNA_RATIO` | Fraction of the Fortuna ring returned by `source=mixed` | `0` | Independent of the TRNG ratio. `0.1` and `0.1` returns 10 percent of each ring |
 | `CORS_ALLOWED_ORIGIN` | CORS `Access-Control-Allow-Origin` | `*` | Restrict in browser-exposed deploys |
 
 ### Controller Service
@@ -533,7 +544,7 @@ Defaults below match [`cmd/api/main.go`](../cmd/api/main.go) and sibling service
 |---------------------------|--------------------------------------|----------------------|-------------|
 | `PORT`                    | VirtIO HTTP API port                 | `8083`               | 1-65535     |
 | `RNG_DEVICE`              | (Ignored - VirtIO doesn't use device) | N/A                   | N/A         |
-| `VIRTIO_QUEUE_SIZE`       | Internal queue capacity (items)     | `15000` (~480 KB)    | 10-1000000  |
+| `VIRTIO_QUEUE_SIZE`       | Internal queue capacity (items)     | `1000000` (~32 MB)   | 10-5000000  |
 | `VIRTIO_PIPE_PATH`        | Named pipe (FIFO) filesystem path   | `/var/run/lokey/virtio-rng` | Valid path |
 | `LOG_LEVEL`               | Logging level                        | `INFO`               | DEBUG, INFO, WARN, ERROR |
 

@@ -51,14 +51,17 @@ type APTMetrics struct {
 
 // DataSourceStats represents statistics for a specific data source
 type DataSourceStats struct {
-	PollingCount    int64   `json:"polling_count"`    // How many times data was polled/retrieved
-	QueueCurrent    int     `json:"queue_current"`    // Current items in queue
-	QueueCapacity   int     `json:"queue_capacity"`   // Maximum queue size
-	QueuePercentage float64 `json:"queue_percentage"` // Percentage of queue filled
-	QueueDropped    int64   `json:"queue_dropped"`    // Items dropped when queue was full
-	ConsumedCount   int64   `json:"consumed_count"`   // Total items consumed
-	UnconsumedCount int     `json:"unconsumed_count"` // Current unconsumed items
-	TotalGenerated  int64   `json:"total_generated"`  // Total items ever generated
+	PollingCount       int64   `json:"polling_count"`        // How many times data was polled/retrieved
+	QueueCurrent       int     `json:"queue_current"`        // Current items in queue
+	QueueCapacity      int     `json:"queue_capacity"`       // Maximum queue size
+	QueuePercentage    float64 `json:"queue_percentage"`     // Percentage of queue filled (0-100)
+	QueueCurrentBytes  int     `json:"queue_current_bytes"`  // Sum of stored item lengths
+	QueueItemBytes     int     `json:"queue_item_bytes"`     // Bytes per stored item (last length if sizes differ)
+	QueueCapacityBytes int     `json:"queue_capacity_bytes"` // Capacity times item size, when the size is known
+	QueueDropped       int64   `json:"queue_dropped"`        // Items dropped when queue was full
+	ConsumedCount      int64   `json:"consumed_count"`       // Total items consumed
+	UnconsumedCount    int     `json:"unconsumed_count"`     // Current unconsumed items
+	TotalGenerated     int64   `json:"total_generated"`      // Total items ever generated
 }
 
 // Stats represents in-memory queue storage statistics.
@@ -98,10 +101,20 @@ type DBHandler interface {
 	// TRNG operations
 	StoreTRNGData(data []byte) error
 	GetTRNGData(limit, offset int, consume bool) ([][]byte, error)
+	// SampleTRNGStride copies every stride-th TRNG item from start.
+	// nextIndex is the following index on this pass. wrapped is true when the pass reached the end.
+	SampleTRNGStride(start, stride, maxBytes int, consume bool) (items [][]byte, nextIndex int, wrapped bool, err error)
+	// PopNewestTRNG removes the most recently stored TRNG sample.
+	PopNewestTRNG() ([]byte, bool)
 
 	// Fortuna operations
 	StoreFortunaData(data []byte) error
 	GetFortunaData(limit, offset int, consume bool) ([][]byte, error)
+	// SampleFortunaStride copies every stride-th Fortuna item from start.
+	// nextIndex is the following index on this pass. wrapped is true when the pass reached the end.
+	SampleFortunaStride(start, stride, maxBytes int, consume bool) (items [][]byte, nextIndex int, wrapped bool, err error)
+	// PopNewestFortuna removes the most recently stored Fortuna sample.
+	PopNewestFortuna() ([]byte, bool)
 
 	// VirtIO operations
 	StoreVirtIOData(data []byte) error

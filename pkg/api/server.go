@@ -40,8 +40,18 @@ type Server struct {
 	metrics        *Metrics
 	registry       *prometheus.Registry
 	httpClient     *http.Client // Shared client for controller/fortuna/virtio requests
-	consumeMode    bool         // Global consume setting
-	consumeMutex   sync.RWMutex // Protects consumeMode
+	consumeTRNG    atomic.Bool
+	consumeFortuna atomic.Bool
+	consumeVirtIO  atomic.Bool
+	// Draws from stored rings. Fortuna's reseed reads the TRNG ring.
+	// VirtIO can read the TRNG ring, the Fortuna ring, or both.
+	fortunaSeed       ratioFeed
+	virtioFromTRNG    ratioFeed
+	virtioFromFortuna ratioFeed
+	// Positional cursors for mixed client reads. The phase advances even when
+	// the read copies, so the next request does not repeat the same slots.
+	dataSampleTRNG    sampleCursor
+	dataSampleFortuna sampleCursor
 
 	// Seeding circuit breaker
 	seedingFailures    atomic.Int64
@@ -71,6 +81,10 @@ type Server struct {
 	controllerRoundRobin  uint64
 	fortunaSeedBytesAcc   atomic.Uint64
 	fortunaOutputBytesAcc atomic.Uint64
+	trngIntakeBytes       atomic.Uint64
+	fortunaIntakeBytes    atomic.Uint64
+	trngIntakeItems       atomic.Uint64
+	fortunaIntakeItems    atomic.Uint64
 
 	// Last successful controller /health metadata (emulator/mode), keyed by configured device_id.
 	controllerMetaMu    sync.RWMutex
@@ -79,20 +93,35 @@ type Server struct {
 
 // QueueConfig represents the queue configuration
 type QueueConfig struct {
-	TRNGQueueSize    int `json:"trng_queue_size" validate:"required,min=10,max=1000000"`
-	FortunaQueueSize int `json:"fortuna_queue_size" validate:"required,min=10,max=1000000"`
-	VirtIOQueueSize  int `json:"virtio_queue_size" validate:"required,min=10,max=1000000"`
+	TRNGQueueSize    int `json:"trng_queue_size" validate:"required,min=10,max=5000000"`
+	FortunaQueueSize int `json:"fortuna_queue_size" validate:"required,min=10,max=5000000"`
+	VirtIOQueueSize  int `json:"virtio_queue_size" validate:"required,min=10,max=5000000"`
 }
 
-// VirtIOConfig represents the VirtIO configuration
+// VirtIOConfig represents the VirtIO configuration.
+// The consume flags and feed ratios are the same values as /config/consume.
 type VirtIOConfig struct {
-	SeedingSource string `json:"seeding_source" validate:"required,oneof=trng fortuna both"`
-	QueueSize     int    `json:"queue_size" validate:"required,min=10,max=1000000"`
+	SeedingSource string        `json:"seeding_source" validate:"required,oneof=trng fortuna both"`
+	QueueSize     int           `json:"queue_size" validate:"required,min=10,max=5000000"`
+	TRNG          bool          `json:"trng"`
+	Fortuna       bool          `json:"fortuna"`
+	VirtIO        bool          `json:"virtio"`
+	FortunaSeed   FeedSource    `json:"fortuna_seed"`
+	VirtIOSources VirtIOSources `json:"virtio_sources"`
 }
 
-// ConsumeConfig represents the consume mode configuration
+// ConsumeConfig sets client read behavior and the draws that feed Fortuna and VirtIO.
+// trng and fortuna control API client reads. virtio controls VirtIO service reads.
+// fortuna_seed and virtio_sources control how much stored entropy is passed on,
+// and whether that pass removes it from the source ring.
+// data_sample is the stride mix used by POST /data with source mixed.
 type ConsumeConfig struct {
-	Consume bool `json:"consume"`
+	TRNG          bool          `json:"trng"`
+	Fortuna       bool          `json:"fortuna"`
+	VirtIO        bool          `json:"virtio"`
+	FortunaSeed   FeedSource    `json:"fortuna_seed"`
+	VirtIOSources VirtIOSources `json:"virtio_sources"`
+	DataSample    DataSample    `json:"data_sample"`
 }
 
 // DataRequest represents a request for random data
@@ -100,7 +129,7 @@ type DataRequest struct {
 	Format string `json:"format" validate:"required,oneof=int8 int16 int32 int64 uint8 uint16 uint32 uint64 binary"`
 	Count  int    `json:"limit" validate:"required,min=1,max=100000"`
 	Offset int    `json:"offset" validate:"min=0"`
-	Source string `json:"source" validate:"required,oneof=trng fortuna virtio"`
+	Source string `json:"source" validate:"required,oneof=trng fortuna virtio mixed"`
 }
 
 // HealthCheckResponse represents the health check response
@@ -143,6 +172,11 @@ type Metrics struct {
 	QueueCurrent         *prometheus.GaugeVec
 	QueueCapacity        *prometheus.GaugeVec
 	QueuePercentage      *prometheus.GaugeVec
+	QueueCurrentBytes    *prometheus.GaugeVec
+	QueueCapacityBytes   *prometheus.GaugeVec
+	QueueItemBytes       *prometheus.GaugeVec
+	QueueDropped         *prometheus.GaugeVec
+	ConsumeEnabled       *prometheus.GaugeVec
 	ConsumedTotal        *prometheus.GaugeVec
 	Unconsumed           *prometheus.GaugeVec
 	MonobitAverage       *prometheus.GaugeVec
@@ -260,7 +294,27 @@ func NewServer(db database.DBHandler, controllerAddr, fortunaAddr, virtioAddr st
 		}, []string{"source"}),
 		QueuePercentage: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "lokey_queue_percentage",
-			Help: "Queue utilization percentage by source",
+			Help: "Queue utilization percentage by source (0-100)",
+		}, []string{"source"}),
+		QueueCurrentBytes: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "lokey_queue_current_bytes",
+			Help: "Bytes of entropy currently stored by source",
+		}, []string{"source"}),
+		QueueCapacityBytes: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "lokey_queue_capacity_bytes",
+			Help: "Byte capacity of the ring by source",
+		}, []string{"source"}),
+		QueueItemBytes: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "lokey_queue_item_bytes",
+			Help: "Bytes per item currently used to size the ring",
+		}, []string{"source"}),
+		QueueDropped: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "lokey_queue_dropped",
+			Help: "Items overwritten because the ring was full",
+		}, []string{"source"}),
+		ConsumeEnabled: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "lokey_consume_enabled",
+			Help: "1 when reads of this source consume items, 0 when they copy",
 		}, []string{"source"}),
 		ConsumedTotal: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "lokey_consumed_total",
@@ -365,6 +419,11 @@ func NewServer(db database.DBHandler, controllerAddr, fortunaAddr, virtioAddr st
 		metrics.QueueCurrent,
 		metrics.QueueCapacity,
 		metrics.QueuePercentage,
+		metrics.QueueCurrentBytes,
+		metrics.QueueCapacityBytes,
+		metrics.QueueItemBytes,
+		metrics.QueueDropped,
+		metrics.ConsumeEnabled,
 		metrics.ConsumedTotal,
 		metrics.Unconsumed,
 		metrics.MonobitAverage,
@@ -417,7 +476,6 @@ func NewServer(db database.DBHandler, controllerAddr, fortunaAddr, virtioAddr st
 		metrics:               metrics,
 		registry:              reg,
 		httpClient:            &http.Client{Timeout: 10 * time.Second},
-		consumeMode:           false,           // Default: don't consume (read-only mode)
 		seedingCooldown:       5 * time.Minute, // Default cooldown for seeding circuit breaker
 		virtioSeedingCooldown: 5 * time.Minute, // Default cooldown for VirtIO seeding circuit breaker
 		trngQualityTracker:    NewTRNGQualityTracker(aptWindowSize),
@@ -427,6 +485,10 @@ func NewServer(db database.DBHandler, controllerAddr, fortunaAddr, virtioAddr st
 		virtioSeedingSource:   "trng", // Default seeding source
 		controllerLastKnown:   make(map[string]controllerLastKnown),
 	}
+	server.consumeVirtIO.Store(true)
+	server.fortunaSeed.configure(FeedSource{Ratio: 0.1, Consume: false})
+	server.virtioFromTRNG.configure(FeedSource{Ratio: 0.1, Consume: false})
+	server.virtioFromFortuna.configure(FeedSource{Ratio: 0, Consume: false})
 
 	server.setupRoutes()
 	return server
@@ -582,27 +644,21 @@ func (s *Server) UpdateQueueConfig(c *gin.Context) {
 	c.JSON(http.StatusOK, config)
 }
 
-// GetConsumeConfig returns the current consume mode configuration.
+// GetConsumeConfig returns client read flags and the Fortuna and VirtIO feed draws.
 // @Summary Get consume configuration
-// @Description Get current consume mode setting (true = delete-on-read, false = keep data in queue)
+// @Description Get client read flags plus the Fortuna seed and VirtIO source draws, and the mixed data-sample ratios. A feed ratio of 0.1 takes 10 percent of new items from that ring. A data_sample ratio of 0.1 reads every 10th stored item. consume true on a feed removes each chosen item from the source ring.
 // @Tags            configuration
 // @Accept          json
 // @Produce         json
 // @Success         200 {object} ConsumeConfig
 // @Router          /config/consume [get]
 func (s *Server) GetConsumeConfig(c *gin.Context) {
-	s.consumeMutex.RLock()
-	consumeMode := s.consumeMode
-	s.consumeMutex.RUnlock()
-
-	c.JSON(http.StatusOK, ConsumeConfig{
-		Consume: consumeMode,
-	})
+	c.JSON(http.StatusOK, s.consumeSnapshot())
 }
 
-// UpdateConsumeConfig updates the consume mode configuration.
+// UpdateConsumeConfig updates client read flags and the Fortuna and VirtIO feeds.
 // @Summary Update consume configuration
-// @Description Update consume mode setting (true = delete-on-read, false = keep data in queue)
+// @Description Set client read flags, the Fortuna seed and VirtIO source draws, and the mixed data-sample ratios. Omitted fields stay unchanged. A feed ratio of 0.1 takes 10 percent of new items. A data_sample ratio must be 0 or the reciprocal of an integer stride, such as 0.1, 0.25, 0.5, or 1. consume true on a feed removes each chosen item from its source ring. The VirtIO service read flag is forwarded to the VirtIO service.
 // @Tags            configuration
 // @Accept          json
 // @Produce         json
@@ -611,24 +667,153 @@ func (s *Server) GetConsumeConfig(c *gin.Context) {
 // @Failure         400 {object} map[string]string "Invalid request"
 // @Router          /config/consume [put]
 func (s *Server) UpdateConsumeConfig(c *gin.Context) {
-	var config ConsumeConfig
-	if err := c.ShouldBindJSON(&config); err != nil {
+	body, err := c.GetRawData()
+	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request body"})
 		return
 	}
+	next, err := s.mergeConsumeBody(body)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	s.SetConsumeConfig(next)
+	log.Printf("Consume mode updated: trng=%v fortuna=%v virtio=%v fortuna_seed=%v virtio_trng=%v virtio_fortuna=%v data_sample=%v",
+		next.TRNG, next.Fortuna, next.VirtIO, next.FortunaSeed, next.VirtIOSources.TRNG, next.VirtIOSources.Fortuna, next.DataSample)
+	c.JSON(http.StatusOK, s.consumeSnapshot())
+}
 
-	s.consumeMutex.Lock()
-	s.consumeMode = config.Consume
-	s.consumeMutex.Unlock()
+func (s *Server) mergeConsumeBody(body []byte) (ConsumeConfig, error) {
+	var present map[string]json.RawMessage
+	if err := json.Unmarshal(body, &present); err != nil {
+		return ConsumeConfig{}, fmt.Errorf("invalid request body")
+	}
+	next := s.consumeSnapshot()
+	if raw, ok := present["trng"]; ok {
+		if err := json.Unmarshal(raw, &next.TRNG); err != nil {
+			return ConsumeConfig{}, fmt.Errorf("invalid trng flag")
+		}
+	}
+	if raw, ok := present["fortuna"]; ok {
+		if err := json.Unmarshal(raw, &next.Fortuna); err != nil {
+			return ConsumeConfig{}, fmt.Errorf("invalid fortuna flag")
+		}
+	}
+	if raw, ok := present["virtio"]; ok {
+		if err := json.Unmarshal(raw, &next.VirtIO); err != nil {
+			return ConsumeConfig{}, fmt.Errorf("invalid virtio flag")
+		}
+	}
+	if raw, ok := present["fortuna_seed"]; ok {
+		if err := mergeFeed(&next.FortunaSeed, raw); err != nil {
+			return ConsumeConfig{}, err
+		}
+	}
+	if raw, ok := present["virtio_sources"]; ok {
+		if err := mergeVirtIOSources(&next.VirtIOSources, raw); err != nil {
+			return ConsumeConfig{}, err
+		}
+	}
+	if raw, ok := present["data_sample"]; ok {
+		if err := mergeDataSample(&next.DataSample, raw); err != nil {
+			return ConsumeConfig{}, err
+		}
+	}
+	return next, nil
+}
 
-	log.Printf("Consume mode updated to: %v", config.Consume)
+func (s *Server) consumeSnapshot() ConsumeConfig {
+	return ConsumeConfig{
+		TRNG:          s.consumeTRNG.Load(),
+		Fortuna:       s.consumeFortuna.Load(),
+		VirtIO:        s.consumeVirtIO.Load(),
+		FortunaSeed:   s.fortunaSeed.snapshot(),
+		VirtIOSources: VirtIOSources{TRNG: s.virtioFromTRNG.snapshot(), Fortuna: s.virtioFromFortuna.snapshot()},
+		DataSample:    DataSample{TRNG: s.dataSampleTRNG.snapshot(), Fortuna: s.dataSampleFortuna.snapshot()},
+	}
+}
 
-	c.JSON(http.StatusOK, config)
+func (s *Server) applyConsume(config ConsumeConfig) {
+	s.SetConsumeConfig(config)
+}
+
+// SetConsumeConfig replaces client read flags and the Fortuna and VirtIO feeds.
+func (s *Server) SetConsumeConfig(config ConsumeConfig) {
+	s.consumeTRNG.Store(config.TRNG)
+	s.consumeFortuna.Store(config.Fortuna)
+	s.consumeVirtIO.Store(config.VirtIO)
+	s.fortunaSeed.configure(config.FortunaSeed)
+	s.virtioFromTRNG.configure(config.VirtIOSources.TRNG)
+	s.virtioFromFortuna.configure(config.VirtIOSources.Fortuna)
+	if err := s.dataSampleTRNG.configure(config.DataSample.TRNG.Ratio); err != nil {
+		log.Printf("invalid data sample trng ratio: %v", err)
+	}
+	if err := s.dataSampleFortuna.configure(config.DataSample.Fortuna.Ratio); err != nil {
+		log.Printf("invalid data sample fortuna ratio: %v", err)
+	}
+	s.syncSeedingSource()
+	s.publishConsumeMetrics()
+	s.notifyVirtIOConsume(config.VirtIO)
+}
+
+func (s *Server) syncSeedingSource() {
+	source := seedingSourceFromRatios(s.virtioFromTRNG.snapshot().Ratio, s.virtioFromFortuna.snapshot().Ratio)
+	s.virtioConfigMutex.Lock()
+	s.virtioSeedingSource = source
+	s.virtioConfigMutex.Unlock()
+}
+
+// ObserveTRNGSample counts one newly stored TRNG sample toward the Fortuna reseed
+// and the VirtIO TRNG draw. A consume draw removes that sample from the TRNG ring.
+func (s *Server) ObserveTRNGSample(sample []byte) {
+	removeSeed := s.fortunaSeed.observe(sample)
+	removeVirtIO := s.virtioFromTRNG.observe(sample)
+	if removeSeed || removeVirtIO {
+		if _, ok := s.DB.PopNewestTRNG(); !ok {
+			log.Printf("TRNG feed consume missed the newest sample")
+		}
+	}
+}
+
+// ObserveFortunaSample counts one newly stored Fortuna pull toward the VirtIO Fortuna draw.
+func (s *Server) ObserveFortunaSample(sample []byte) {
+	if s.virtioFromFortuna.observe(sample) {
+		if _, ok := s.DB.PopNewestFortuna(); !ok {
+			log.Printf("Fortuna feed consume missed the newest sample")
+		}
+	}
+}
+
+func (s *Server) intakeSnapshot() IntakeStats {
+	trngBytes := s.trngIntakeBytes.Load()
+	fortunaBytes := s.fortunaIntakeBytes.Load()
+	return IntakeStats{
+		TRNGBytesTotal:    trngBytes,
+		FortunaBytesTotal: fortunaBytes,
+		BytesTotal:        trngBytes + fortunaBytes,
+		TRNGItemsTotal:    s.trngIntakeItems.Load(),
+		FortunaItemsTotal: s.fortunaIntakeItems.Load(),
+	}
+}
+
+func (s *Server) publishConsumeMetrics() {
+	if s.metrics == nil || s.metrics.ConsumeEnabled == nil {
+		return
+	}
+	boolTo := func(ok bool) float64 {
+		if ok {
+			return 1
+		}
+		return 0
+	}
+	s.metrics.ConsumeEnabled.WithLabelValues("trng").Set(boolTo(s.consumeTRNG.Load()))
+	s.metrics.ConsumeEnabled.WithLabelValues("fortuna").Set(boolTo(s.consumeFortuna.Load()))
+	s.metrics.ConsumeEnabled.WithLabelValues("virtio").Set(boolTo(s.consumeVirtIO.Load()))
 }
 
 // GetRandomData retrieves random data in various formats with pagination.
 // @Summary Get random data
-// @Description Retrieve random data in various formats with pagination. Valid sources are "trng" (True Random Number Generator) and "fortuna" (Fortuna CSPRNG). Note: VirtIO is a consumer endpoint for virtualization (named pipe/HTTP streaming) and cannot be used as a data source here. To access VirtIO data, use the named pipe or HTTP streaming endpoint directly.
+// @Description Retrieve random data in various formats with pagination. Valid sources are "trng" (True Random Number Generator), "fortuna" (Fortuna CSPRNG), and "mixed". mixed walks each ring by the data_sample ratio: 0.1 reads indexes 0, 10, 20, and the next lap starts at 1. The two selections are concatenated. VirtIO is a consumer endpoint for virtualization (named pipe/HTTP streaming) and cannot be used as a data source here. To access VirtIO data, use the named pipe or HTTP streaming endpoint directly.
 // @Tags data
 // @Accept json
 // @Produce json
@@ -651,10 +836,14 @@ func (s *Server) GetRandomData(c *gin.Context) {
 		return
 	}
 
-	// Use global consume mode setting
-	s.consumeMutex.RLock()
-	consumeData := s.consumeMode
-	s.consumeMutex.RUnlock()
+	// Each ring has its own consume flag.
+	var consumeData bool
+	switch request.Source {
+	case "trng":
+		consumeData = s.consumeTRNG.Load()
+	case "fortuna":
+		consumeData = s.consumeFortuna.Load()
+	}
 
 	// Calculate chunks needed
 	bytesPerValue := getBytesPerValue(request.Format)
@@ -669,12 +858,14 @@ func (s *Server) GetRandomData(c *gin.Context) {
 		rawData, err = s.DB.GetTRNGData(estimatedChunksNeeded, request.Offset, consumeData)
 	case "fortuna":
 		rawData, err = s.DB.GetFortunaData(estimatedChunksNeeded, request.Offset, consumeData)
+	case "mixed":
+		rawData, err = s.collectMixed(estimatedBytesNeeded)
 	case "virtio":
 		// VirtIO is a consumer endpoint (for VMs via named pipe/HTTP streaming), not a data source for the API
 		// Data flows one way: API seeds VirtIO, VirtIO serves VMs
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error": "VirtIO is a consumer endpoint for virtualization (named pipe/HTTP streaming), not a data source. " +
-				"Use 'trng' or 'fortuna' as the source instead. " +
+				"Use 'trng', 'fortuna', or 'mixed' as the source instead. " +
 				"To access VirtIO data, use the named pipe (/var/run/lokey/virtio-rng) or HTTP streaming endpoint (GET /stream).",
 		})
 		return
@@ -846,6 +1037,15 @@ func (s *Server) getVirtIOQueueMetrics() database.DataSourceStats {
 	if dropped, ok := queueInfo["queue_dropped"].(float64); ok {
 		stats.QueueDropped = int64(dropped)
 	}
+	if currentBytes, ok := queueInfo["queue_current_bytes"].(float64); ok {
+		stats.QueueCurrentBytes = int(currentBytes)
+	}
+	if itemBytes, ok := queueInfo["queue_item_bytes"].(float64); ok {
+		stats.QueueItemBytes = int(itemBytes)
+	}
+	if capacityBytes, ok := queueInfo["queue_capacity_bytes"].(float64); ok {
+		stats.QueueCapacityBytes = int(capacityBytes)
+	}
 
 	// Calculate derived metrics
 	stats.UnconsumedCount = stats.QueueCurrent
@@ -854,20 +1054,35 @@ func (s *Server) getVirtIOQueueMetrics() database.DataSourceStats {
 	if stats.QueueCapacity > 0 {
 		stats.QueuePercentage = float64(stats.QueueCurrent) / float64(stats.QueueCapacity) * 100
 	}
+	if stats.QueueCapacityBytes == 0 && stats.QueueItemBytes > 0 {
+		stats.QueueCapacityBytes = stats.QueueCapacity * stats.QueueItemBytes
+	}
 
 	return stats
 }
 
 // VirtIOStats represents VirtIO statistics without polling_count (VirtIO is not polled, only seeded)
 type VirtIOStats struct {
-	QueueCurrent    int     `json:"queue_current"`
-	QueueCapacity   int     `json:"queue_capacity"`
-	QueuePercentage float64 `json:"queue_percentage"`
-	QueueDropped    int64   `json:"queue_dropped"`
-	ConsumedCount   int64   `json:"consumed_count"`
-	UnconsumedCount int     `json:"unconsumed_count"`
-	TotalGenerated  int64   `json:"total_generated"`
+	QueueCurrent       int     `json:"queue_current"`
+	QueueCapacity      int     `json:"queue_capacity"`
+	QueuePercentage    float64 `json:"queue_percentage"`
+	QueueCurrentBytes  int     `json:"queue_current_bytes"`
+	QueueItemBytes     int     `json:"queue_item_bytes"`
+	QueueCapacityBytes int     `json:"queue_capacity_bytes"`
+	QueueDropped       int64   `json:"queue_dropped"`
+	ConsumedCount      int64   `json:"consumed_count"`
+	UnconsumedCount    int     `json:"unconsumed_count"`
+	TotalGenerated     int64   `json:"total_generated"`
 	// Note: polling_count is intentionally omitted - VirtIO is not polled by the API
+}
+
+// IntakeStats is entropy the API has accepted from the controller and Fortuna.
+type IntakeStats struct {
+	TRNGBytesTotal    uint64 `json:"trng_bytes_total"`
+	FortunaBytesTotal uint64 `json:"fortuna_bytes_total"`
+	BytesTotal        uint64 `json:"bytes_total"`
+	TRNGItemsTotal    uint64 `json:"trng_items_total"`
+	FortunaItemsTotal uint64 `json:"fortuna_items_total"`
 }
 
 // StatusResponse represents the status response with custom VirtIO stats
@@ -877,6 +1092,8 @@ type StatusResponse struct {
 	VirtIO      VirtIOStats                 `json:"virtio"`
 	Database    database.Stats              `json:"database"`
 	TRNGQuality database.QualityMetrics     `json:"trng_quality"`
+	Intake      IntakeStats                 `json:"intake"`
+	Consume     ConsumeConfig               `json:"consume"`
 	Controllers map[string]ControllerStatus `json:"controllers,omitempty"`
 }
 
@@ -916,14 +1133,19 @@ func (s *Server) GetStatus(c *gin.Context) {
 		Database:    stats.Database,
 		TRNGQuality: stats.TRNGQuality,
 		VirtIO: VirtIOStats{
-			QueueCurrent:    virtioStats.QueueCurrent,
-			QueueCapacity:   virtioStats.QueueCapacity,
-			QueuePercentage: virtioStats.QueuePercentage,
-			QueueDropped:    virtioStats.QueueDropped,
-			ConsumedCount:   virtioStats.ConsumedCount,
-			UnconsumedCount: virtioStats.UnconsumedCount,
-			TotalGenerated:  virtioStats.TotalGenerated,
+			QueueCurrent:       virtioStats.QueueCurrent,
+			QueueCapacity:      virtioStats.QueueCapacity,
+			QueuePercentage:    virtioStats.QueuePercentage,
+			QueueCurrentBytes:  virtioStats.QueueCurrentBytes,
+			QueueItemBytes:     virtioStats.QueueItemBytes,
+			QueueCapacityBytes: virtioStats.QueueCapacityBytes,
+			QueueDropped:       virtioStats.QueueDropped,
+			ConsumedCount:      virtioStats.ConsumedCount,
+			UnconsumedCount:    virtioStats.UnconsumedCount,
+			TotalGenerated:     virtioStats.TotalGenerated,
 		},
+		Intake:      s.intakeSnapshot(),
+		Consume:     s.consumeSnapshot(),
 		Controllers: deviceStatuses,
 	}
 
@@ -1038,6 +1260,7 @@ func (s *Server) refreshQueuePrometheusMetrics() {
 
 	s.metrics.DatabaseSizeBytes.Set(float64(stats.Database.SizeBytes))
 	s.publishQueueMetrics(stats)
+	s.publishConsumeMetrics()
 	s.updateFortunaAmplification()
 }
 
@@ -1075,7 +1298,7 @@ func (s *Server) publishHealthMetrics() {
 
 // GetVirtIOConfig returns the current VirtIO configuration.
 // @Summary Get VirtIO configuration
-// @Description Get current VirtIO configuration including seeding source (TRNG, Fortuna, or both) and queue size. Queue size is queried from the VirtIO service.
+// @Description Get VirtIO queue size, seeding source, client read flags, and the Fortuna and VirtIO feed ratios. Queue size is queried from the VirtIO service. A ratio of 0.1 is 10 percent of new items from that ring.
 // @Tags configuration
 // @Accept json
 // @Produce json
@@ -1109,15 +1332,12 @@ func (s *Server) GetVirtIOConfig(c *gin.Context) {
 		}
 	}
 
-	c.JSON(http.StatusOK, VirtIOConfig{
-		SeedingSource: seedingSource,
-		QueueSize:     queueSize,
-	})
+	c.JSON(http.StatusOK, s.virtioConfigResponse(seedingSource, queueSize))
 }
 
-// UpdateVirtIOConfig updates the VirtIO configuration.
+// Update VirtIO configuration.
 // @Summary Update VirtIO configuration
-// @Description Update VirtIO seeding source (TRNG, Fortuna, or both) and queue size. Queue size changes are forwarded to the VirtIO service. Seeding source changes take effect immediately.
+// @Description Update VirtIO queue size, client read flags, Fortuna seed draw, and VirtIO source ratios. Omitted fields stay unchanged. A changed seeding_source sets a 10 percent ratio on each source it names and turns the others off, unless virtio_sources is included. Ratio 0.1 is 10 percent of new items. consume true on a source removes each chosen item from that ring.
 // @Tags configuration
 // @Accept json
 // @Produce json
@@ -1127,8 +1347,13 @@ func (s *Server) GetVirtIOConfig(c *gin.Context) {
 // @Failure 500 {object} map[string]string "Server error"
 // @Router /config/virtio [put]
 func (s *Server) UpdateVirtIOConfig(c *gin.Context) {
+	body, err := c.GetRawData()
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request body"})
+		return
+	}
 	var config VirtIOConfig
-	if err := c.ShouldBindJSON(&config); err != nil {
+	if err := json.Unmarshal(body, &config); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request body"})
 		return
 	}
@@ -1138,11 +1363,35 @@ func (s *Server) UpdateVirtIOConfig(c *gin.Context) {
 		return
 	}
 
-	// Update internal state
-	s.virtioConfigMutex.Lock()
-	oldSource := s.virtioSeedingSource
-	s.virtioSeedingSource = config.SeedingSource
-	s.virtioConfigMutex.Unlock()
+	var present map[string]json.RawMessage
+	_ = json.Unmarshal(body, &present)
+	consume := s.consumeSnapshot()
+	if _, ok := present["trng"]; ok {
+		consume.TRNG = config.TRNG
+	}
+	if _, ok := present["fortuna"]; ok {
+		consume.Fortuna = config.Fortuna
+	}
+	if _, ok := present["virtio"]; ok {
+		consume.VirtIO = config.VirtIO
+	}
+	if raw, ok := present["fortuna_seed"]; ok {
+		if err := mergeFeed(&consume.FortunaSeed, raw); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+	}
+	oldSource := s.getVirtIOSeedingSource()
+	if raw, ok := present["virtio_sources"]; ok {
+		if err := mergeVirtIOSources(&consume.VirtIOSources, raw); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+	} else if _, ok := present["seeding_source"]; ok && config.SeedingSource != oldSource {
+		consume.VirtIOSources = ratiosForSeedingSource(config.SeedingSource, consume.VirtIOSources)
+	}
+	s.SetConsumeConfig(consume)
+	newSource := s.getVirtIOSeedingSource()
 
 	// Best-effort notify VirtIO service of queue size change
 	s.notifyVirtIOQueueSize(config.QueueSize)
@@ -1153,13 +1402,24 @@ func (s *Server) UpdateVirtIOConfig(c *gin.Context) {
 		log.Printf("[WARN] Failed to update VirtIO queue size in database: %v", err)
 	}
 
-	// If seeding source changed, notify polling manager (will be handled in polling.go)
-	if oldSource != config.SeedingSource {
-		// This will be handled by the polling manager when it checks the source
-		log.Printf("[INFO] VirtIO seeding source changed from %s to %s", oldSource, config.SeedingSource)
+	if oldSource != newSource {
+		log.Printf("[INFO] VirtIO seeding source changed from %s to %s", oldSource, newSource)
 	}
 
-	c.JSON(http.StatusOK, config)
+	c.JSON(http.StatusOK, s.virtioConfigResponse(newSource, config.QueueSize))
+}
+
+func (s *Server) virtioConfigResponse(seedingSource string, queueSize int) VirtIOConfig {
+	consume := s.consumeSnapshot()
+	return VirtIOConfig{
+		SeedingSource: seedingSource,
+		QueueSize:     queueSize,
+		TRNG:          consume.TRNG,
+		Fortuna:       consume.Fortuna,
+		VirtIO:        consume.VirtIO,
+		FortunaSeed:   consume.FortunaSeed,
+		VirtIOSources: consume.VirtIOSources,
+	}
 }
 
 // SetVirtIOSeedingSource sets the VirtIO seeding source
@@ -1188,10 +1448,39 @@ func (s *Server) notifyVirtIOQueueSize(queueSize int) {
 	_ = resp.Body.Close()
 }
 
+func (s *Server) notifyVirtIOConsume(consume bool) {
+	if s.VirtioAddr == "" {
+		return
+	}
+	body, err := json.Marshal(map[string]bool{"consume": consume})
+	if err != nil {
+		log.Printf("[WARN] Failed to marshal VirtIO consume update: %v", err)
+		return
+	}
+	req, err := http.NewRequest(http.MethodPut, s.VirtioAddr+"/config/consume", bytes.NewReader(body))
+	if err != nil {
+		log.Printf("[WARN] Failed to create VirtIO consume update request: %v", err)
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		log.Printf("[WARN] VirtIO consume update failed (service may be unavailable): %v", err)
+		return
+	}
+	_ = resp.Body.Close()
+}
+
+// SetVirtIOSeedingSource selects which stored rings feed VirtIO.
+// trng and fortuna use a 10 percent ratio when that source was off. both enables each source that was off.
 func (s *Server) SetVirtIOSeedingSource(source string) {
-	s.virtioConfigMutex.Lock()
-	defer s.virtioConfigMutex.Unlock()
-	s.virtioSeedingSource = source
+	sources := ratiosForSeedingSource(source, VirtIOSources{
+		TRNG:    s.virtioFromTRNG.snapshot(),
+		Fortuna: s.virtioFromFortuna.snapshot(),
+	})
+	s.virtioFromTRNG.configure(sources.TRNG)
+	s.virtioFromFortuna.configure(sources.Fortuna)
+	s.syncSeedingSource()
 }
 
 // isVirtIOSeedingCircuitOpen checks if the VirtIO seeding circuit breaker is open

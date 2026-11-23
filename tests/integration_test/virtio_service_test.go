@@ -231,8 +231,8 @@ func (v *VirtIOServiceTestHelper) updateQueueConfigHandler(ctx *gin.Context) {
 		return
 	}
 
-	if config.QueueSize < 10 || config.QueueSize > 1000000 {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": "Queue size must be between 10 and 1000000"})
+	if config.QueueSize < 10 || config.QueueSize > 5000000 {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "Queue size must be between 10 and 5000000"})
 		return
 	}
 

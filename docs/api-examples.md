@@ -463,7 +463,38 @@ curl -X POST http://localhost:8080/api/v1/data \
 "source": "trng"
 }'
 ```
-**Note:** Data is returned without deletion by default (`consumeMode` is false; enable via `/api/v1/config/consume`). Pagination works best when queue has sufficient data.
+**Note:** API reads of TRNG and Fortuna copy by default. Set `trng` or `fortuna` to true on `PUT /api/v1/config/consume` to delete those items when a client reads them. VirtIO serving consumes by default. Pagination works best when the queue has enough data.
+
+Fortuna's reseed and VirtIO's fill are separate draws on the stored rings. A ratio of `0.1` is 10 percent of the items stored since the last draw. `consume: true` on that draw removes each chosen item from the source ring.
+
+```bash
+# Give Fortuna 10 percent of new TRNG samples and leave them in the TRNG ring.
+# Give VirtIO 10 percent of new TRNG samples and 25 percent of new Fortuna pulls.
+# VirtIO's TRNG share is removed from the TRNG ring. Its Fortuna share is copied.
+curl -sk -X PUT https://localhost/api/v1/config/consume \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "fortuna_seed": {"ratio": 0.1, "consume": false},
+    "virtio_sources": {
+      "trng": {"ratio": 0.1, "consume": true},
+      "fortuna": {"ratio": 0.25, "consume": false}
+    }
+  }'
+```
+
+Omitted fields stay as they are. `seeding_source` on `PUT /api/v1/config/virtio` still selects `trng`, `fortuna`, or `both`. Changing it without `virtio_sources` turns the named sources on at 10 percent and the other source off. Sending `virtio_sources` is the direct way to set each ratio.
+
+`source=mixed` on `POST /api/v1/data` samples the rings that are already stored. `data_sample.trng.ratio` of `0.1` reads indexes `0, 10, 20, …` on the first call and `1, 11, 21, …` on the next. The Fortuna ratio is separate. `0.1` and `0.1` returns both of those series, TRNG first. A ratio must be `0` or the reciprocal of an integer (`0.1`, `0.25`, `0.5`, `1`). `offset` is ignored for `mixed`. Copy mode leaves the items in the ring and only advances the position. The `trng` and `fortuna` consume flags still delete the sampled slots.
+
+```bash
+curl -sk -X PUT https://localhost/api/v1/config/consume \
+  -H 'Content-Type: application/json' \
+  -d '{"data_sample":{"trng":{"ratio":0.1},"fortuna":{"ratio":0.1}}}'
+
+curl -sk -X POST https://localhost/api/v1/data \
+  -H 'Content-Type: application/json' \
+  -d '{"format":"binary","limit":4096,"source":"mixed"}'
+```
 
 ### Stream Processing
 
@@ -667,7 +698,7 @@ database_size_bytes
 ```
 
 
-**Solution:** Ensure queue sizes are within valid range (10-1000000).
+**Solution:** Ensure queue sizes are within valid range (10-5000000).
 
 ## Python Integration Example
 
@@ -866,14 +897,14 @@ spec:
 
 **Environment Variables:**
 - `VIRTIO_PIPE_PATH`: Named pipe filesystem path (default: `/var/run/lokey/virtio-rng`)
-- `VIRTIO_QUEUE_SIZE`: Internal queue capacity (default: 15000 items ≈ 480 KB)
+- `VIRTIO_QUEUE_SIZE`: Internal queue capacity (default: 1000000 items, about 32 MB)
 
 **Example Docker Compose:**
 ```yaml
 virtio:
   environment:
     - VIRTIO_PIPE_PATH=/var/run/lokey/virtio-rng
-    - VIRTIO_QUEUE_SIZE=15000
+    - VIRTIO_QUEUE_SIZE=1000000
   volumes:
     - /var/run/lokey:/var/run/lokey
   ports:

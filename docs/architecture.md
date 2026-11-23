@@ -227,7 +227,7 @@ There are **two** seeds:
 | Seed | When | Role |
 |------|------|------|
 | Boot seed | Fortuna process start | 32 bytes from `crypto/rand` → first AES key (safe `/generate` before first TRNG reseed) |
-| TRNG reseed | Every 30s from API | 5 ATECC samples (~155 B) mixed into pools → new AES key |
+| TRNG reseed | Every 30s from API | A ratio of the TRNG samples already stored in the API ring. Default `0.1` (10 percent). `FORTUNA_SEED_CONSUME=true` removes each chosen sample from that ring |
 
 ```mermaid
 flowchart TB
@@ -235,9 +235,9 @@ flowchart TB
     OS["crypto/rand 32 B"] --> IK["initial AES key"]
   end
 
-  subgraph intake ["2. Every 30s — TRNG intake"]
-    ATECC["ATECC608"] --> CTRL["controller /generate?count=5"]
-    CTRL --> API["API quality-check"]
+  subgraph intake ["2. Every 30s — stored TRNG share"]
+    Q["TRNG ring"] --> SHARE["ratio of new samples, default 10 percent"]
+    SHARE --> API["API quality-check"]
     API --> POST["POST fortuna /seed"]
     POST --> P0["pool 0"]
     POST --> P1["pool 1"]
@@ -263,6 +263,8 @@ flowchart TB
 
 API also **polls** Fortuna `/generate` on `FORTUNA_POLL_INTERVAL_MS` to fill the Fortuna queue for `source=fortuna` clients. Seeding and polling are separate loops.
 
+`POST /api/v1/data` with `source=mixed` reads both rings by a stride instead of a contiguous slice. `data_sample.trng.ratio` and `data_sample.fortuna.ratio` are independent, so `0.1` and `0.1` returns 10 percent of each ring, concatenated with TRNG first. A ratio of `0.1` is stride 10: the first lap reads indexes `0, 10, 20, …`, and the next lap starts at `1`. The cursor moves even when the read copies the items. After every residue class has been visited, the cursor returns to `0`. `source=trng` and `source=fortuna` stay contiguous reads. The client consume flags still delete the slots a mixed read returns.
+
 ### Fortuna pool schedule
 
 Pool *i* is eligible on reseed *N* when `N % 2^i == 0` (classic Fortuna). Driven by a dedicated **`reseedCount`**, not the AES-CTR block counter (using the block counter caused intermittent empty-pool reseeds).
@@ -279,9 +281,15 @@ flowchart LR
 
 ### VirtIO Seeding Flow
 
+VirtIO does not read the chip. Each source ring has its own ratio and consume flag. A ratio of `0.1` gives VirtIO 10 percent of the items that have just been stored in that ring. A ratio of `0` turns that source off, so VirtIO can be fed from TRNG, from Fortuna, or from both. `consume: true` on a source removes each chosen item from that ring. `consume: false` leaves the item in place for clients and for the other draw.
+
+The same rule seeds Fortuna: `fortuna_seed.ratio` is the share of new TRNG samples, and `fortuna_seed.consume` decides whether those samples stay in the TRNG ring.
+
 ```mermaid
 flowchart TB
-  API["API every ~30s"] -->|"VIRTIO_SEEDING_SOURCE: trng / fortuna / both"| SEED["POST virtio /seed"]
+  TRNG["TRNG ring"] -->|"trng ratio"| PICK["chosen samples"]
+  FORT["Fortuna ring"] -->|"fortuna ratio"| PICK
+  PICK -->|"consume true removes the source item"| SEED["POST virtio /seed"]
   SEED --> Q["VirtIO circular queue"]
   Q -->|named pipe| Local["Local VMs"]
   Q -->|HTTP /stream| Remote["Remote / K8s"]
@@ -519,7 +527,7 @@ The VirtIO service provides high-throughput random data access for virtualizatio
 **PUT /config/queue**
 - Updates queue size dynamically
 - Migrates existing data if possible
-- Accepts `{"queue_size": <number>}` (10-1000000)
+- Accepts `{"queue_size": <number>}` (10-5000000)
 
 ## API Service
 

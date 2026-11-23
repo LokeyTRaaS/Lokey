@@ -95,17 +95,21 @@ func (s *Server) publishQueueMetrics(stats *database.DetailedStats) {
 		return
 	}
 	type qp struct {
-		source string
-		cur    float64
-		cap    float64
-		pct    float64
-		cons   float64
-		uncons float64
+		source    string
+		cur       float64
+		cap       float64
+		pct       float64
+		curBytes  float64
+		capBytes  float64
+		itemBytes float64
+		dropped   float64
+		cons      float64
+		uncons    float64
 	}
 	rows := []qp{
-		{"trng", float64(stats.TRNG.QueueCurrent), float64(stats.TRNG.QueueCapacity), stats.TRNG.QueuePercentage, float64(stats.TRNG.ConsumedCount), float64(stats.TRNG.UnconsumedCount)},
-		{"fortuna", float64(stats.Fortuna.QueueCurrent), float64(stats.Fortuna.QueueCapacity), stats.Fortuna.QueuePercentage, float64(stats.Fortuna.ConsumedCount), float64(stats.Fortuna.UnconsumedCount)},
-		{"virtio", float64(stats.VirtIO.QueueCurrent), float64(stats.VirtIO.QueueCapacity), stats.VirtIO.QueuePercentage, float64(stats.VirtIO.ConsumedCount), float64(stats.VirtIO.UnconsumedCount)},
+		{"trng", float64(stats.TRNG.QueueCurrent), float64(stats.TRNG.QueueCapacity), stats.TRNG.QueuePercentage, float64(stats.TRNG.QueueCurrentBytes), float64(stats.TRNG.QueueCapacityBytes), float64(stats.TRNG.QueueItemBytes), float64(stats.TRNG.QueueDropped), float64(stats.TRNG.ConsumedCount), float64(stats.TRNG.UnconsumedCount)},
+		{"fortuna", float64(stats.Fortuna.QueueCurrent), float64(stats.Fortuna.QueueCapacity), stats.Fortuna.QueuePercentage, float64(stats.Fortuna.QueueCurrentBytes), float64(stats.Fortuna.QueueCapacityBytes), float64(stats.Fortuna.QueueItemBytes), float64(stats.Fortuna.QueueDropped), float64(stats.Fortuna.ConsumedCount), float64(stats.Fortuna.UnconsumedCount)},
+		{"virtio", float64(stats.VirtIO.QueueCurrent), float64(stats.VirtIO.QueueCapacity), stats.VirtIO.QueuePercentage, float64(stats.VirtIO.QueueCurrentBytes), float64(stats.VirtIO.QueueCapacityBytes), float64(stats.VirtIO.QueueItemBytes), float64(stats.VirtIO.QueueDropped), float64(stats.VirtIO.ConsumedCount), float64(stats.VirtIO.UnconsumedCount)},
 	}
 	for _, r := range rows {
 		if s.metrics.QueueCurrent != nil {
@@ -116,6 +120,18 @@ func (s *Server) publishQueueMetrics(stats *database.DetailedStats) {
 		}
 		if s.metrics.QueuePercentage != nil {
 			s.metrics.QueuePercentage.WithLabelValues(r.source).Set(r.pct)
+		}
+		if s.metrics.QueueCurrentBytes != nil {
+			s.metrics.QueueCurrentBytes.WithLabelValues(r.source).Set(r.curBytes)
+		}
+		if s.metrics.QueueCapacityBytes != nil {
+			s.metrics.QueueCapacityBytes.WithLabelValues(r.source).Set(r.capBytes)
+		}
+		if s.metrics.QueueItemBytes != nil {
+			s.metrics.QueueItemBytes.WithLabelValues(r.source).Set(r.itemBytes)
+		}
+		if s.metrics.QueueDropped != nil {
+			s.metrics.QueueDropped.WithLabelValues(r.source).Set(r.dropped)
 		}
 		if s.metrics.ConsumedTotal != nil {
 			s.metrics.ConsumedTotal.WithLabelValues(r.source).Set(r.cons)

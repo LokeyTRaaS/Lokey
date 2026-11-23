@@ -17,8 +17,10 @@ networks:
 
 volumes:
   traefik-acme:
+  traefik-access:
   prometheus-data:
   grafana-data:
+  loki-data:
 
 x-logging: &logging-common
   driver: "json-file"
@@ -33,13 +35,26 @@ x-api-env: &api-env
   CONTROLLER_ADDRS: ${CONTROLLER_ADDRS:-device_a=http://controller-a:8081,device_b=http://controller-b:8081}
   FORTUNA_ADDR: http://fortuna:8082
   VIRTIO_ADDR: http://virtio:8083
-  TRNG_QUEUE_SIZE: "100000"
-  FORTUNA_QUEUE_SIZE: "50000"
-  VIRTIO_QUEUE_SIZE: "15000"
+  TRNG_QUEUE_SIZE: "2000000"
+  FORTUNA_QUEUE_SIZE: "2000000"
+  VIRTIO_QUEUE_SIZE: "1000000"
   TRNG_POLL_INTERVAL_MS: "100"
   FORTUNA_POLL_INTERVAL_MS: "100"
   VIRTIO_SEED_INTERVAL_SECONDS: "30"
   VIRTIO_SEEDING_SOURCE: trng
+  TRNG_CONSUME: "false"
+  FORTUNA_CONSUME: "false"
+  VIRTIO_CONSUME: "true"
+  # 0.1 means 10 percent of new items. Fortuna's reseed reads the stored TRNG ring.
+  FORTUNA_SEED_RATIO: "0.1"
+  FORTUNA_SEED_CONSUME: "false"
+  VIRTIO_TRNG_RATIO: "0.1"
+  VIRTIO_FORTUNA_RATIO: "0"
+  VIRTIO_TRNG_CONSUME: "false"
+  VIRTIO_FORTUNA_CONSUME: "false"
+  # Mixed POST /data ratios. 0 leaves that ring out. 0.1 reads every 10th item.
+  DATA_TRNG_RATIO: "0"
+  DATA_FORTUNA_RATIO: "0"
   TRNG_APT_WINDOW_SIZE: "512"
 
 x-fortuna-env: &fortuna-env
@@ -48,7 +63,7 @@ x-fortuna-env: &fortuna-env
 
 x-virtio-env: &virtio-env
   PORT: "8083"
-  VIRTIO_QUEUE_SIZE: "15000"
+  VIRTIO_QUEUE_SIZE: "1000000"
   VIRTIO_PIPE_PATH: /var/run/lokey/virtio-rng
 
 x-controller-env-base: &controller-env-base
@@ -87,6 +102,9 @@ services:
       - --metrics.prometheus.addRoutersLabels=true
       - --api.dashboard=true
       - --api.insecure=false
+      - --accesslog=true
+      - --accesslog.format=json
+      - --accesslog.filepath=/logs/access.log
       - --certificatesresolvers.letsencrypt.acme.email=${LOKEY_ACME_EMAIL:-admin@example.com}
       - --certificatesresolvers.letsencrypt.acme.storage=/acme/acme.json
       - --certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web
@@ -95,6 +113,7 @@ services:
       - ./deploy/traefik/dynamic:/etc/traefik/dynamic:ro
       - ./deploy/traefik/certs:/certs:ro
       - traefik-acme:/acme
+      - traefik-access:/logs
     security_opt:
       - seccomp=./deploy/seccomp/observability.json
     networks:
@@ -145,7 +164,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 512M
+          memory: 2G
 
   fortuna:
     image: ${LOKEY_IMAGE_FORTUNA:-ghcr.io/lokeytraas/lokey/fortuna:latest}
@@ -203,7 +222,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 128M
+          memory: 512M
 
   # Emulated controllers — COMPOSE_PROFILES=emulated (laptop/CI)
   controller-a:
@@ -380,3 +399,48 @@ services:
       - traefik.http.routers.lokey-grafana.entrypoints=websecure
       - traefik.http.routers.lokey-grafana.tls=true
       - traefik.http.services.lokey-grafana.loadbalancer.server.port=3000
+
+  loki:
+    image: grafana/loki:3.4.2
+    restart: unless-stopped
+    logging: *logging-common
+    command: ["-config.file=/etc/loki/loki.yml"]
+    volumes:
+      - ./deploy/loki/loki.yml:/etc/loki/loki.yml:ro
+      - loki-data:/loki
+    networks:
+      - lokey-metrics
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+
+  alloy:
+    image: grafana/alloy:v1.7.5
+    restart: unless-stopped
+    logging: *logging-common
+    command:
+      - run
+      - /etc/alloy/config.alloy
+      - --storage.path=/var/lib/alloy
+      - --server.http.listen-addr=0.0.0.0:12345
+    volumes:
+      - ./deploy/alloy/config.alloy:/etc/alloy/config.alloy:ro
+      - traefik-access:/logs:ro
+    networks:
+      - lokey-metrics
+    depends_on:
+      - loki
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+
+  landing:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    logging: *logging-common
+    volumes:
+      - ./deploy/landing:/usr/share/nginx/html:ro
+    networks:
+      - lokey-edge

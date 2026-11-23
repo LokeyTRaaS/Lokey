@@ -198,3 +198,35 @@ func TestVirtIORNG_ConcurrentAccess(t *testing.T) {
 		t.Errorf("Expected queue current 10, got %d", v.GetQueueCurrent())
 	}
 }
+
+func TestPullBytesCopyLeavesRing(t *testing.T) {
+	v, err := virtio.NewVirtIORNG("", 100)
+	if err != nil {
+		t.Fatalf("Failed to create VirtIO RNG: %v", err)
+	}
+	defer v.Close()
+
+	payload := []byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32}
+	if err := v.Seed(payload); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	v.SetConsume(false)
+	got, _, err := v.PullBytes(32)
+	if err != nil {
+		t.Fatalf("pull: %v", err)
+	}
+	if len(got) != 32 {
+		t.Fatalf("expected 32 bytes, got %d", len(got))
+	}
+	if v.GetQueueCurrent() != 1 {
+		t.Fatalf("copy read changed queue depth: %d", v.GetQueueCurrent())
+	}
+
+	v.SetConsume(true)
+	if _, _, err := v.PullBytes(32); err != nil {
+		t.Fatalf("consuming pull: %v", err)
+	}
+	if v.GetQueueCurrent() != 0 {
+		t.Fatalf("consume read left items in the queue: %d", v.GetQueueCurrent())
+	}
+}

@@ -23,23 +23,15 @@ func (s *Server) StartPolling(ctx context.Context, trngPollInterval, fortunaPoll
 	// Start Fortuna polling
 	go s.PollFortunaService(ctx, fortunaPollInterval)
 
-	// Start Fortuna seeding with TRNG data
+	// Fortuna's reseed and VirtIO's fill both draw from items already stored.
+	// Ratio changes apply on the next arrival. The loops only deliver what was chosen.
 	go s.SeedFortunaWithTRNG(ctx, 30*time.Second)
 
-	// Start VirtIO seeding based on configuration
 	if s.VirtioAddr != "" {
-		seedingSource := s.getVirtIOSeedingSource()
+		s.notifyVirtIOConsume(s.consumeVirtIO.Load())
 		seedInterval := 30 * time.Second
-
-		switch seedingSource {
-		case "trng":
-			go s.SeedVirtIOWithTRNG(ctx, seedInterval)
-		case "fortuna":
-			go s.SeedVirtIOWithFortuna(ctx, seedInterval)
-		case "both":
-			go s.SeedVirtIOWithTRNG(ctx, seedInterval)
-			go s.SeedVirtIOWithFortuna(ctx, seedInterval)
-		}
+		go s.SeedVirtIOWithTRNG(ctx, seedInterval)
+		go s.SeedVirtIOWithFortuna(ctx, seedInterval)
 	}
 
 	log.Printf("Started polling services - TRNG interval: %s, Fortuna interval: %s, Fortuna seeding: every 30s",
@@ -122,6 +114,8 @@ func (s *Server) FetchAndStoreTRNGData() error {
 	s.trngQualityTracker.ProcessData(dataBytes)
 	s.deviceTracker(ep.DeviceID).ProcessData(dataBytes)
 	s.publishQuality("trng", ep.DeviceID, s.deviceTracker(ep.DeviceID))
+	s.trngIntakeBytes.Add(uint64(len(dataBytes)))
+	s.trngIntakeItems.Add(1)
 	if s.metrics != nil && s.metrics.BytesProduced != nil {
 		s.metrics.BytesProduced.WithLabelValues("trng", ep.DeviceID).Add(float64(len(dataBytes)))
 	}
@@ -129,6 +123,7 @@ func (s *Server) FetchAndStoreTRNGData() error {
 	if err := s.DB.StoreTRNGData(dataBytes); err != nil {
 		return fmt.Errorf("error storing TRNG data: %w", err)
 	}
+	s.ObserveTRNGSample(dataBytes)
 	if err := s.DB.IncrementPollingCount("trng"); err != nil {
 		log.Printf("Warning: failed to increment TRNG polling count: %v", err)
 	}
@@ -191,6 +186,8 @@ func (s *Server) FetchAndStoreFortunaData() error {
 
 	s.fortunaQualityTracker.ProcessData(randomData)
 	s.publishQuality("fortuna", "fortuna", s.fortunaQualityTracker)
+	s.fortunaIntakeBytes.Add(uint64(len(randomData)))
+	s.fortunaIntakeItems.Add(1)
 	if s.metrics != nil {
 		if s.metrics.BytesProduced != nil {
 			s.metrics.BytesProduced.WithLabelValues("fortuna", "fortuna").Add(float64(len(randomData)))
@@ -206,6 +203,7 @@ func (s *Server) FetchAndStoreFortunaData() error {
 	if err := s.DB.StoreFortunaData(randomData); err != nil {
 		return fmt.Errorf("error storing Fortuna data: %w", err)
 	}
+	s.ObserveFortunaSample(randomData)
 
 	// Increment polling count only on successful storage
 	if err := s.DB.IncrementPollingCount("fortuna"); err != nil {
@@ -294,67 +292,34 @@ func ValidateTRNGData(seeds []string) error {
 	return nil
 }
 
-// seedFortuna fetches TRNG data from all healthy controllers and seeds Fortuna.
+// SeedFortuna delivers the TRNG samples chosen for Fortuna since the last tick.
+// An empty share is not an error. The chip is not read again here.
 func (s *Server) SeedFortuna() error {
-	var seeds []string
-	var seedBytes int
-	for _, ep := range s.controllersOrDefault() {
-		resp, err := s.httpClient.Get(ep.Addr + "/generate?count=5")
-		if err != nil {
-			log.Printf("seeding: controller %s unreachable: %v", ep.DeviceID, err)
-			continue
-		}
-		var result struct {
-			Data interface{} `json:"data"`
-		}
-		decodeErr := json.NewDecoder(resp.Body).Decode(&result)
-		_ = resp.Body.Close()
-		if resp.StatusCode != http.StatusOK || decodeErr != nil {
-			log.Printf("seeding: controller %s bad response", ep.DeviceID)
-			continue
-		}
-		switch v := result.Data.(type) {
-		case string:
-			seeds = append(seeds, v)
-			if b, err := hex.DecodeString(v); err == nil {
-				seedBytes += len(b)
-			}
-		case []interface{}:
-			for _, item := range v {
-				if sHex, ok := item.(string); ok {
-					seeds = append(seeds, sHex)
-					if b, err := hex.DecodeString(sHex); err == nil {
-						seedBytes += len(b)
-					}
-				}
-			}
-		case []string:
-			seeds = append(seeds, v...)
-			for _, sHex := range v {
-				if b, err := hex.DecodeString(sHex); err == nil {
-					seedBytes += len(b)
-				}
-			}
-		}
+	batch := s.fortunaSeed.drain()
+	if len(batch) == 0 {
+		return nil
 	}
-
-	if len(seeds) == 0 {
-		return fmt.Errorf("no TRNG data received for seeding from any controller")
+	seeds := make([]string, 0, len(batch))
+	seedBytes := 0
+	for _, sample := range batch {
+		seeds = append(seeds, hex.EncodeToString(sample))
+		seedBytes += len(sample)
 	}
 	if err := ValidateTRNGData(seeds); err != nil {
 		return fmt.Errorf("TRNG data validation failed: %w", err)
 	}
 
-	seedRequest := struct {
+	seedData, err := json.Marshal(struct {
 		Seeds []string `json:"seeds"`
-	}{Seeds: seeds}
-	seedData, err := json.Marshal(seedRequest)
+	}{Seeds: seeds})
 	if err != nil {
+		s.fortunaSeed.restore(batch)
 		return fmt.Errorf("error marshaling seed request: %w", err)
 	}
 
 	seedResp, err := s.httpClient.Post(s.FortunaAddr+"/seed", "application/json", bytes.NewBuffer(seedData))
 	if err != nil {
+		s.fortunaSeed.restore(batch)
 		return fmt.Errorf("error seeding Fortuna: %w", err)
 	}
 	defer func() {
@@ -363,6 +328,7 @@ func (s *Server) SeedFortuna() error {
 		}
 	}()
 	if seedResp.StatusCode != http.StatusOK {
+		s.fortunaSeed.restore(batch)
 		return fmt.Errorf("fortuna seeding failed with status: %d", seedResp.StatusCode)
 	}
 
@@ -380,7 +346,8 @@ func (s *Server) SeedFortuna() error {
 		s.updateFortunaAmplification()
 	}
 
-	log.Printf("Successfully seeded Fortuna with %d TRNG samples from %d controllers", len(seeds), len(s.controllersOrDefault()))
+	feed := s.fortunaSeed.snapshot()
+	log.Printf("Successfully seeded Fortuna with %d stored TRNG samples (ratio=%v consume=%v)", len(seeds), feed.Ratio, feed.Consume)
 	return nil
 }
 
@@ -423,57 +390,44 @@ func (s *Server) SeedVirtIOWithTRNG(ctx context.Context, interval time.Duration)
 	}
 }
 
-// SeedVirtIOFromTRNG fetches TRNG data and sends it to VirtIO's /seed endpoint
+// SeedVirtIOFromTRNG delivers the TRNG samples chosen for VirtIO since the last tick.
 func (s *Server) SeedVirtIOFromTRNG() error {
-	var seeds []string
-	for _, ep := range s.controllersOrDefault() {
-		resp, err := s.httpClient.Get(ep.Addr + "/generate?count=5")
-		if err != nil {
-			log.Printf("virtio seeding: controller %s unreachable: %v", ep.DeviceID, err)
-			continue
-		}
-		var result struct {
-			Data interface{} `json:"data"`
-		}
-		if decodeErr := json.NewDecoder(resp.Body).Decode(&result); decodeErr != nil {
-			_ = resp.Body.Close()
-			log.Printf("virtio seeding: controller %s decode error: %v", ep.DeviceID, decodeErr)
-			continue
-		}
-		_ = resp.Body.Close()
-		if resp.StatusCode != http.StatusOK {
-			log.Printf("virtio seeding: controller %s status %d", ep.DeviceID, resp.StatusCode)
-			continue
-		}
-		switch data := result.Data.(type) {
-		case []interface{}:
-			for _, item := range data {
-				if s, ok := item.(string); ok {
-					seeds = append(seeds, s)
-				}
-			}
-		case string:
-			seeds = append(seeds, data)
-		}
+	samples := s.virtioFromTRNG.drain()
+	if len(samples) == 0 {
+		return nil
 	}
 
+	seeds := make([]string, 0, len(samples))
+	for _, sample := range samples {
+		if len(sample) == 0 {
+			continue
+		}
+		seeds = append(seeds, hex.EncodeToString(sample))
+	}
 	if len(seeds) == 0 {
-		return fmt.Errorf("no TRNG data received for seeding")
+		return nil
 	}
-
-	// Validate TRNG data quality before sending to VirtIO
 	if err := ValidateTRNGData(seeds); err != nil {
 		return fmt.Errorf("TRNG data validation failed: %w", err)
 	}
-
-	// Send seeds to VirtIO's /seed endpoint
-	seedRequest := struct {
-		Seeds []string `json:"seeds"`
-	}{
-		Seeds: seeds,
+	if err := s.postVirtIOSeeds(seeds); err != nil {
+		s.virtioFromTRNG.restore(samples)
+		return err
 	}
 
-	seedData, err := json.Marshal(seedRequest)
+	for _, sample := range samples {
+		s.virtioQualityTracker.ProcessData(sample)
+	}
+	s.publishQuality("virtio", "virtio", s.virtioQualityTracker)
+	feed := s.virtioFromTRNG.snapshot()
+	log.Printf("Successfully seeded VirtIO with %d TRNG samples (ratio=%v consume=%v)", len(seeds), feed.Ratio, feed.Consume)
+	return nil
+}
+
+func (s *Server) postVirtIOSeeds(seeds []string) error {
+	seedData, err := json.Marshal(struct {
+		Seeds []string `json:"seeds"`
+	}{Seeds: seeds})
 	if err != nil {
 		return fmt.Errorf("error marshaling seed request: %w", err)
 	}
@@ -491,19 +445,9 @@ func (s *Server) SeedVirtIOFromTRNG() error {
 			log.Printf("Error closing seed response body: %v", closeErr)
 		}
 	}()
-
 	if seedResp.StatusCode != http.StatusOK {
 		return fmt.Errorf("virtio seeding failed with status: %d", seedResp.StatusCode)
 	}
-
-	for _, seedHex := range seeds {
-		if b, err := hex.DecodeString(seedHex); err == nil {
-			s.virtioQualityTracker.ProcessData(b)
-		}
-	}
-	s.publishQuality("virtio", "virtio", s.virtioQualityTracker)
-
-	log.Printf("Successfully seeded VirtIO with %d TRNG samples from %d controllers", len(seeds), len(s.controllersOrDefault()))
 	return nil
 }
 
@@ -544,55 +488,24 @@ func (s *Server) SeedVirtIOWithFortuna(ctx context.Context, interval time.Durati
 	}
 }
 
-// SeedVirtIOFromFortuna fetches Fortuna data and sends it to VirtIO's /seed endpoint
+// SeedVirtIOFromFortuna delivers the Fortuna pulls chosen for VirtIO since the last tick.
 func (s *Server) SeedVirtIOFromFortuna() error {
-	// Fetch Fortuna data from database (unconsumed items, 5 samples)
-	fortunaData, err := s.DB.GetFortunaData(5, 0, false)
-	if err != nil {
-		return fmt.Errorf("error fetching Fortuna data for seeding: %w", err)
-	}
-
+	fortunaData := s.virtioFromFortuna.drain()
 	if len(fortunaData) == 0 {
-		return fmt.Errorf("no Fortuna data available for seeding")
+		return nil
 	}
 
-	// Convert to hex strings for seeding
 	seeds := make([]string, 0, len(fortunaData))
 	for _, data := range fortunaData {
 		seeds = append(seeds, hex.EncodeToString(data))
 	}
-
-	// Send seeds to VirtIO's /seed endpoint
-	seedRequest := struct {
-		Seeds []string `json:"seeds"`
-	}{
-		Seeds: seeds,
+	if err := s.postVirtIOSeeds(seeds); err != nil {
+		s.virtioFromFortuna.restore(fortunaData)
+		return err
 	}
 
-	seedData, err := json.Marshal(seedRequest)
-	if err != nil {
-		return fmt.Errorf("error marshaling seed request: %w", err)
-	}
-
-	seedResp, err := s.httpClient.Post(
-		s.VirtioAddr+"/seed",
-		"application/json",
-		bytes.NewBuffer(seedData),
-	)
-	if err != nil {
-		return fmt.Errorf("error seeding VirtIO: %w", err)
-	}
-	defer func() {
-		if closeErr := seedResp.Body.Close(); closeErr != nil {
-			log.Printf("Error closing seed response body: %v", closeErr)
-		}
-	}()
-
-	if seedResp.StatusCode != http.StatusOK {
-		return fmt.Errorf("virtio seeding failed with status: %d", seedResp.StatusCode)
-	}
-
-	log.Printf("Successfully seeded VirtIO with %d Fortuna samples", len(seeds))
+	feed := s.virtioFromFortuna.snapshot()
+	log.Printf("Successfully seeded VirtIO with %d Fortuna samples (ratio=%v consume=%v)", len(seeds), feed.Ratio, feed.Consume)
 	return nil
 }
 

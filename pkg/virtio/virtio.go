@@ -6,6 +6,7 @@ package virtio
 import (
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/lokey/rng-service/pkg/database"
@@ -16,10 +17,11 @@ const (
 	DefaultDevicePath = "/dev/hwrng"
 	// FallbackDevicePath is the fallback path if /dev/hwrng is not available.
 	FallbackDevicePath = "/dev/random"
-	// DefaultQueueSize is the default size for the internal circular queue.
-	// Set to ~15,000 items to achieve ~480 KB total capacity (within 100-500 KB requirement).
-	// Calculation: 15,000 items × 32 bytes/item = 480,000 bytes = 480 KB
-	DefaultQueueSize = 15000
+	// DefaultQueueSize is the default ring capacity on a Raspberry Pi 5.
+	// 1,000,000 items × 32 bytes is about 32 MB of entropy.
+	DefaultQueueSize = 1000000
+	// MaxQueueSize is the largest ring the service will allocate.
+	MaxQueueSize = 5000000
 	// RandomDataSize is the size of random data to generate per request (32 bytes, same as controller).
 	RandomDataSize = 32
 )
@@ -46,6 +48,7 @@ type VirtIORNG struct {
 	queueMutex sync.RWMutex
 	nextID     uint64
 	idMutex    sync.Mutex
+	consume    atomic.Bool
 }
 
 // NewVirtIORNG creates a new VirtIO RNG controller.
@@ -54,13 +57,14 @@ func NewVirtIORNG(devicePath string, queueSize int) (*VirtIORNG, error) {
 	if queueSize < 10 {
 		queueSize = DefaultQueueSize
 	}
-	if queueSize > 1000000 {
-		queueSize = 1000000
+	if queueSize > MaxQueueSize {
+		queueSize = MaxQueueSize
 	}
 
 	v := &VirtIORNG{
 		queue: database.NewCircularQueue(queueSize),
 	}
+	v.consume.Store(true)
 
 	// Device initialization is optional - we don't need it
 	// VirtIO service only serves data from its queue (seeded by API)
@@ -135,8 +139,8 @@ func (v *VirtIORNG) PullBytes(length int) ([]byte, int, error) {
 		itemsNeeded = 1
 	}
 
-	// Get items from queue (consuming them)
-	items := v.queue.Get(itemsNeeded, 0, true)
+	// Get items from the queue. consume=false copies and leaves the ring unchanged.
+	items := v.queue.Get(itemsNeeded, 0, v.consume.Load())
 	if len(items) == 0 {
 		return nil, 0, fmt.Errorf("insufficient data in queue: requested %d bytes, queue is empty", length)
 	}
@@ -176,20 +180,32 @@ func (v *VirtIORNG) PullBytes(length int) ([]byte, int, error) {
 	return result[:length], itemsConsumed, nil
 }
 
-// GetQueueSizeBytes returns the total byte capacity of the queue.
-// This calculates: capacity * average_item_size (32 bytes per item).
-func (v *VirtIORNG) GetQueueSizeBytes() int {
+// SetConsume selects whether PullBytes removes items (true) or copies them (false).
+func (v *VirtIORNG) SetConsume(consume bool) {
+	v.consume.Store(consume)
+}
+
+// Consume reports whether PullBytes removes items.
+func (v *VirtIORNG) Consume() bool {
+	return v.consume.Load()
+}
+
+// QueueByteStats returns payload bytes stored, bytes per item, and byte capacity.
+func (v *VirtIORNG) QueueByteStats() (currentBytes, itemBytes, capacityBytes int) {
 	v.queueMutex.RLock()
 	defer v.queueMutex.RUnlock()
-
-	capacity := v.queue.Capacity()
-	return capacity * RandomDataSize
+	currentBytes, itemBytes = v.queue.ByteStats()
+	if itemBytes <= 0 {
+		itemBytes = RandomDataSize
+	}
+	capacityBytes = v.queue.Capacity() * itemBytes
+	return currentBytes, itemBytes, capacityBytes
 }
 
 // UpdateQueueSize dynamically resizes the queue.
 func (v *VirtIORNG) UpdateQueueSize(newSize int) error {
-	if newSize < 10 || newSize > 1000000 {
-		return fmt.Errorf("invalid queue size: %d (must be between 10 and 1000000)", newSize)
+	if newSize < 10 || newSize > MaxQueueSize {
+		return fmt.Errorf("invalid queue size: %d (must be between 10 and %d)", newSize, MaxQueueSize)
 	}
 
 	v.queueMutex.Lock()

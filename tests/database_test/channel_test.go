@@ -382,6 +382,18 @@ func TestChannelDBHandler_GetDetailedStats(t *testing.T) {
 	if stats.TRNG.QueueCurrent != 1 {
 		t.Errorf("Expected TRNG current 1, got %d", stats.TRNG.QueueCurrent)
 	}
+	if stats.TRNG.QueueCurrentBytes != 3 {
+		t.Errorf("Expected TRNG current bytes 3, got %d", stats.TRNG.QueueCurrentBytes)
+	}
+	if stats.TRNG.QueueItemBytes != 3 {
+		t.Errorf("Expected TRNG item bytes 3, got %d", stats.TRNG.QueueItemBytes)
+	}
+	if stats.TRNG.QueueCapacityBytes != 30 {
+		t.Errorf("Expected TRNG capacity bytes 30, got %d", stats.TRNG.QueueCapacityBytes)
+	}
+	if stats.TRNG.QueuePercentage != 10 {
+		t.Errorf("Expected TRNG percentage 10, got %v", stats.TRNG.QueuePercentage)
+	}
 	if stats.TRNG.PollingCount != 1 {
 		t.Errorf("Expected TRNG polling count 1, got %d", stats.TRNG.PollingCount)
 	}
@@ -492,7 +504,109 @@ func TestChannelDBHandler_GetStats(t *testing.T) {
 	if fortunaCount, ok := stats["fortuna_count"].(int); !ok || fortunaCount != 1 {
 		t.Errorf("Expected fortuna_count 1, got %d", fortunaCount)
 	}
-	if dbSize, ok := stats["db_size"].(int64); !ok || dbSize != 0 {
-		t.Errorf("Expected db_size 0 (in-memory), got %d", dbSize)
+	if dbSize, ok := stats["db_size"].(int64); !ok || dbSize != 2 {
+		t.Errorf("Expected db_size 2, got %d", dbSize)
+	}
+}
+
+func indexItem(i int) database.DataItem {
+	return database.DataItem{ID: uint64(i), Data: []byte{byte(i >> 8), byte(i)}, Timestamp: time.Now()}
+}
+
+func indexesOf(items [][]byte) []int {
+	out := make([]int, len(items))
+	for i, item := range items {
+		out[i] = int(item[0])<<8 | int(item[1])
+	}
+	return out
+}
+
+func TestCircularQueue_SampleStride(t *testing.T) {
+	q := database.NewCircularQueue(1000)
+	for i := 0; i < 1000; i++ {
+		q.Push(indexItem(i))
+	}
+
+	first, next, wrapped := q.SampleStride(0, 10, 0, false)
+	got := indexesOf(first)
+	if len(got) != 100 || got[0] != 0 || got[1] != 10 || got[99] != 990 {
+		t.Fatalf("first pass = %v", got[:min(5, len(got))])
+	}
+	if !wrapped || next != 0 {
+		t.Fatalf("first pass next=%d wrapped=%v", next, wrapped)
+	}
+	if q.Size() != 1000 {
+		t.Fatalf("copy changed size to %d", q.Size())
+	}
+
+	second, _, wrapped := q.SampleStride(1, 10, 0, false)
+	got = indexesOf(second)
+	if len(got) != 100 || got[0] != 1 || got[1] != 11 || got[99] != 991 || !wrapped {
+		t.Fatalf("second pass = %v wrapped=%v", got[:min(5, len(got))], wrapped)
+	}
+
+	partial, next, wrapped := q.SampleStride(0, 10, 6, false)
+	got = indexesOf(partial)
+	if len(got) != 3 || got[0] != 0 || got[2] != 20 || next != 30 || wrapped {
+		t.Fatalf("partial = %v next=%d wrapped=%v", got, next, wrapped)
+	}
+
+	rest, next, wrapped := q.SampleStride(next, 10, 0, false)
+	got = indexesOf(rest)
+	if got[0] != 30 || got[len(got)-1] != 990 || !wrapped || next != 0 {
+		t.Fatalf("resume = %v next=%d wrapped=%v", got[:min(3, len(got))], next, wrapped)
+	}
+}
+
+func TestCircularQueue_SampleStrideConsumeAndRemainder(t *testing.T) {
+	q := database.NewCircularQueue(30)
+	for i := 0; i < 30; i++ {
+		q.Push(indexItem(i))
+	}
+	taken, next, wrapped := q.SampleStride(0, 10, 4, true)
+	got := indexesOf(taken)
+	if len(got) != 2 || got[0] != 0 || got[1] != 10 || wrapped || next != 18 {
+		t.Fatalf("consume partial = %v next=%d wrapped=%v", got, next, wrapped)
+	}
+	if q.Size() != 28 {
+		t.Fatalf("size after consume = %d", q.Size())
+	}
+	rest, _, _ := q.SampleStride(next, 10, 0, false)
+	got = indexesOf(rest)
+	if len(got) != 1 || got[0] != 20 {
+		t.Fatalf("next slot after removal = %v", got)
+	}
+
+	wide := database.NewCircularQueue(1003)
+	for i := 0; i < 1003; i++ {
+		wide.Push(indexItem(i))
+	}
+	seen := map[int]int{}
+	for phase := 0; phase < 10; phase++ {
+		items, _, wrapped := wide.SampleStride(phase, 10, 0, false)
+		if !wrapped {
+			t.Fatalf("phase %d did not wrap", phase)
+		}
+		for _, idx := range indexesOf(items) {
+			seen[idx]++
+		}
+	}
+	if len(seen) != 1003 {
+		t.Fatalf("covered %d indexes", len(seen))
+	}
+	for idx, n := range seen {
+		if n != 1 {
+			t.Fatalf("index %d seen %d times", idx, n)
+		}
+	}
+
+	shifted := database.NewCircularQueue(8)
+	for i := 0; i < 10; i++ {
+		shifted.Push(indexItem(i))
+	}
+	items, _, wrapped := shifted.SampleStride(0, 2, 0, false)
+	got = indexesOf(items)
+	if !wrapped || len(got) != 4 || got[0] != 2 || got[1] != 4 || got[2] != 6 || got[3] != 8 {
+		t.Fatalf("shifted head sample = %v", got)
 	}
 }

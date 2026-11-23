@@ -1,0 +1,43 @@
+local.file_match "traefik_access" {
+  path_targets = [{
+    __path__ = "/logs/access.log",
+    job      = "traefik",
+  }]
+}
+
+loki.source.file "traefik_access" {
+  targets               = local.file_match.traefik_access.targets
+  forward_to            = [loki.process.traefik.receiver]
+  legacy_positions_file = "/tmp/positions.yaml"
+}
+
+loki.process "traefik" {
+  forward_to = [loki.write.local.receiver]
+
+  stage.json {
+    expressions = {
+      client     = "ClientAddr",
+      method     = "RequestMethod",
+      path       = "RequestPath",
+      host       = "RequestHost",
+      router     = "RouterName",
+      service    = "ServiceName",
+      status     = "DownstreamStatus",
+      duration   = "Duration",
+    }
+  }
+
+  stage.labels {
+    values = {
+      method = "method",
+      router = "router",
+      status = "status",
+    }
+  }
+}
+
+loki.write "local" {
+  endpoint {
+    url = "http://loki:3100/loki/api/v1/push"
+  }
+}

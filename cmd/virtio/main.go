@@ -115,6 +115,8 @@ func (v *VirtIOService) setupRoutes() {
 	v.router.POST("/seed", v.seedHandler)
 	v.router.GET("/config/queue", v.getQueueConfigHandler)
 	v.router.PUT("/config/queue", v.updateQueueConfigHandler)
+	v.router.GET("/config/consume", v.getConsumeHandler)
+	v.router.PUT("/config/consume", v.updateConsumeHandler)
 	v.router.GET("/metrics", v.metricsHandler)
 }
 
@@ -220,17 +222,22 @@ func (v *VirtIOService) infoHandler(ctx *gin.Context) {
 	if queueSize > 0 {
 		pct = float64(queueCurrent) * 100.0 / float64(queueSize)
 	}
+	currentBytes, itemBytes, capacityBytes := v.device.QueueByteStats()
 
 	info := gin.H{
-		"status":           "running",
-		"service":          "virtio",
-		"queue_size":       queueSize,
-		"queue_current":    queueCurrent,
-		"queue_percentage": pct,
-		"total_generated":  int64(totalGenerated),
-		"consumed_count":   int64(consumedCount),
-		"unconsumed_count": int64(unconsumed),
-		"queue_dropped":    int64(droppedCount),
+		"status":               "running",
+		"service":              "virtio",
+		"queue_size":           queueSize,
+		"queue_current":        queueCurrent,
+		"queue_percentage":     pct,
+		"queue_current_bytes":  currentBytes,
+		"queue_item_bytes":     itemBytes,
+		"queue_capacity_bytes": capacityBytes,
+		"consume":              v.device.Consume(),
+		"total_generated":      int64(totalGenerated),
+		"consumed_count":       int64(consumedCount),
+		"unconsumed_count":     int64(unconsumed),
+		"queue_dropped":        int64(droppedCount),
 	}
 	if v.pipe != nil {
 		info["pipe_path"] = v.pipe.Path()
@@ -413,13 +420,18 @@ func (v *VirtIOService) getQueueConfigHandler(ctx *gin.Context) {
 	queueSize := v.device.GetQueueSize()
 	queueCurrent := v.device.GetQueueCurrent()
 	totalGenerated, consumedCount, droppedCount := v.device.GetQueueStats()
+	currentBytes, itemBytes, capacityBytes := v.device.QueueByteStats()
 
 	ctx.JSON(http.StatusOK, gin.H{
-		"queue_size":      queueSize,
-		"queue_current":   queueCurrent,
-		"total_generated": int64(totalGenerated),
-		"consumed_count":  int64(consumedCount),
-		"queue_dropped":   int64(droppedCount),
+		"queue_size":           queueSize,
+		"queue_current":        queueCurrent,
+		"queue_current_bytes":  currentBytes,
+		"queue_item_bytes":     itemBytes,
+		"queue_capacity_bytes": capacityBytes,
+		"consume":              v.device.Consume(),
+		"total_generated":      int64(totalGenerated),
+		"consumed_count":       int64(consumedCount),
+		"queue_dropped":        int64(droppedCount),
 	})
 }
 
@@ -432,6 +444,7 @@ func (v *VirtIOService) metricsHandler(ctx *gin.Context) {
 	if queueSize > 0 {
 		pct = float64(queueCurrent) * 100.0 / float64(queueSize)
 	}
+	currentBytes, itemBytes, capacityBytes := v.device.QueueByteStats()
 
 	ctx.Header("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 	fmt.Fprintf(ctx.Writer, "# HELP lokey_virtio_queue_current Current VirtIO queue depth\n")
@@ -440,9 +453,25 @@ func (v *VirtIOService) metricsHandler(ctx *gin.Context) {
 	fmt.Fprintf(ctx.Writer, "# HELP lokey_virtio_queue_capacity VirtIO queue capacity\n")
 	fmt.Fprintf(ctx.Writer, "# TYPE lokey_virtio_queue_capacity gauge\n")
 	fmt.Fprintf(ctx.Writer, "lokey_virtio_queue_capacity %d\n", queueSize)
-	fmt.Fprintf(ctx.Writer, "# HELP lokey_virtio_queue_percentage VirtIO queue utilization percent\n")
+	fmt.Fprintf(ctx.Writer, "# HELP lokey_virtio_queue_percentage VirtIO queue utilization percent (0-100)\n")
 	fmt.Fprintf(ctx.Writer, "# TYPE lokey_virtio_queue_percentage gauge\n")
 	fmt.Fprintf(ctx.Writer, "lokey_virtio_queue_percentage %g\n", pct)
+	fmt.Fprintf(ctx.Writer, "# HELP lokey_virtio_queue_current_bytes Bytes of entropy currently stored\n")
+	fmt.Fprintf(ctx.Writer, "# TYPE lokey_virtio_queue_current_bytes gauge\n")
+	fmt.Fprintf(ctx.Writer, "lokey_virtio_queue_current_bytes %d\n", currentBytes)
+	fmt.Fprintf(ctx.Writer, "# HELP lokey_virtio_queue_item_bytes Bytes per stored item\n")
+	fmt.Fprintf(ctx.Writer, "# TYPE lokey_virtio_queue_item_bytes gauge\n")
+	fmt.Fprintf(ctx.Writer, "lokey_virtio_queue_item_bytes %d\n", itemBytes)
+	fmt.Fprintf(ctx.Writer, "# HELP lokey_virtio_queue_capacity_bytes Byte capacity of the VirtIO ring\n")
+	fmt.Fprintf(ctx.Writer, "# TYPE lokey_virtio_queue_capacity_bytes gauge\n")
+	fmt.Fprintf(ctx.Writer, "lokey_virtio_queue_capacity_bytes %d\n", capacityBytes)
+	fmt.Fprintf(ctx.Writer, "# HELP lokey_virtio_consume_enabled 1 when reads consume items, 0 when they copy\n")
+	fmt.Fprintf(ctx.Writer, "# TYPE lokey_virtio_consume_enabled gauge\n")
+	consumeValue := 0
+	if v.device.Consume() {
+		consumeValue = 1
+	}
+	fmt.Fprintf(ctx.Writer, "lokey_virtio_consume_enabled %d\n", consumeValue)
 	fmt.Fprintf(ctx.Writer, "# HELP lokey_virtio_total_generated_total Items ever pushed into VirtIO queue\n")
 	fmt.Fprintf(ctx.Writer, "# TYPE lokey_virtio_total_generated_total counter\n")
 	fmt.Fprintf(ctx.Writer, "lokey_virtio_total_generated_total %d\n", totalGenerated)
@@ -461,8 +490,8 @@ func (v *VirtIOService) updateQueueConfigHandler(ctx *gin.Context) {
 		return
 	}
 
-	if config.QueueSize < 10 || config.QueueSize > 1000000 {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": "Queue size must be between 10 and 1000000"})
+	if config.QueueSize < 10 || config.QueueSize > virtio.MaxQueueSize {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Queue size must be between 10 and %d", virtio.MaxQueueSize)})
 		return
 	}
 
@@ -479,6 +508,22 @@ func (v *VirtIOService) updateQueueConfigHandler(ctx *gin.Context) {
 	})
 }
 
+func (v *VirtIOService) getConsumeHandler(ctx *gin.Context) {
+	ctx.JSON(http.StatusOK, gin.H{"consume": v.device.Consume()})
+}
+
+func (v *VirtIOService) updateConsumeHandler(ctx *gin.Context) {
+	var body struct {
+		Consume bool `json:"consume"`
+	}
+	if err := ctx.ShouldBindJSON(&body); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request body"})
+		return
+	}
+	v.device.SetConsume(body.Consume)
+	ctx.JSON(http.StatusOK, gin.H{"consume": v.device.Consume()})
+}
+
 func main() {
 	// Read configuration from environment variables
 	devicePath := DefaultDevicePath
@@ -488,7 +533,7 @@ func main() {
 
 	queueSize := DefaultQueueSize
 	if val, ok := os.LookupEnv("VIRTIO_QUEUE_SIZE"); ok {
-		if size, err := strconv.Atoi(val); err == nil && size >= 10 && size <= 1000000 {
+		if size, err := strconv.Atoi(val); err == nil && size >= 10 && size <= virtio.MaxQueueSize {
 			queueSize = size
 		} else {
 			log.Printf("[WARN] Invalid VIRTIO_QUEUE_SIZE, using default: %d", DefaultQueueSize)

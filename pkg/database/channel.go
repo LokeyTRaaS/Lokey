@@ -25,13 +25,14 @@ type QueueStats struct {
 
 // CircularQueue implements a thread-safe circular buffer with channel semantics
 type CircularQueue struct {
-	items    []DataItem
-	capacity int
-	head     int // Read position
-	tail     int // Write position
-	size     int // Current number of items
-	mu       sync.RWMutex
-	Stats    QueueStats
+	items         []DataItem
+	capacity      int
+	head          int // Read position
+	tail          int // Write position
+	size          int // Current number of items
+	lastItemBytes int // Length of the most recently pushed item
+	mu            sync.RWMutex
+	Stats         QueueStats
 }
 
 // NewCircularQueue creates a new circular queue
@@ -60,7 +61,23 @@ func (q *CircularQueue) Push(item DataItem) {
 	q.items[q.tail] = item
 	q.tail = (q.tail + 1) % q.capacity
 	q.size++
+	q.lastItemBytes = len(item.Data)
 	q.Stats.TotalCount.Add(1)
+}
+
+// PopTail removes the most recently pushed item.
+func (q *CircularQueue) PopTail() ([]byte, bool) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if q.size == 0 {
+		return nil, false
+	}
+	q.tail = (q.tail - 1 + q.capacity) % q.capacity
+	item := q.items[q.tail]
+	q.items[q.tail] = DataItem{}
+	q.size--
+	q.Stats.ConsumedCount.Add(1)
+	return item.Data, true
 }
 
 // Get retrieves items with pagination
@@ -123,6 +140,95 @@ func (q *CircularQueue) Get(limit, offset int, consume bool) [][]byte {
 	return result
 }
 
+// SampleStride copies items at logical indexes start, start+stride, start+2*stride, and so on.
+// Logical index 0 is the current head. The walk stops at the end of the ring, or once the
+// copied payloads reach maxBytes. maxBytes <= 0 takes the whole pass.
+// nextIndex is the next logical index on this same pass after any removals.
+// wrapped is true when the walk passed the end. consume removes only the returned items.
+func (q *CircularQueue) SampleStride(start, stride, maxBytes int, consume bool) (items [][]byte, nextIndex int, wrapped bool) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	if stride < 1 || start < 0 {
+		return nil, 0, true
+	}
+	if q.size == 0 {
+		// Not a finished lap. The caller keeps its cursor for when items arrive.
+		return nil, start, false
+	}
+	if start >= q.size {
+		return nil, 0, true
+	}
+
+	indexes := make([]int, 0, (q.size-start+stride-1)/stride)
+	copied := 0
+	next := start
+	for next < q.size {
+		if maxBytes > 0 && copied >= maxBytes && len(indexes) > 0 {
+			break
+		}
+		idx := (q.head + next) % q.capacity
+		buf := append([]byte(nil), q.items[idx].Data...)
+		indexes = append(indexes, next)
+		items = append(items, buf)
+		copied += len(buf)
+		next += stride
+		if maxBytes > 0 && copied >= maxBytes {
+			break
+		}
+	}
+	wrapped = next >= q.size
+
+	if consume && len(indexes) > 0 {
+		q.removeLogical(indexes)
+		if !wrapped {
+			next -= len(indexes)
+			if next < 0 {
+				next = 0
+			}
+		}
+	}
+	if wrapped {
+		return items, 0, true
+	}
+	return items, next, false
+}
+
+// removeLogical deletes the given logical indexes and closes the gaps.
+// Caller holds q.mu. indexes are unique and in the range [0, size).
+func (q *CircularQueue) removeLogical(indexes []int) {
+	if len(indexes) == 0 || q.size == 0 {
+		return
+	}
+	drop := make(map[int]struct{}, len(indexes))
+	for _, idx := range indexes {
+		if idx >= 0 && idx < q.size {
+			drop[idx] = struct{}{}
+		}
+	}
+	if len(drop) == 0 {
+		return
+	}
+	write := 0
+	for i := 0; i < q.size; i++ {
+		if _, ok := drop[i]; ok {
+			continue
+		}
+		src := (q.head + i) % q.capacity
+		dst := (q.head + write) % q.capacity
+		if src != dst {
+			q.items[dst] = q.items[src]
+		}
+		write++
+	}
+	for i := write; i < q.size; i++ {
+		q.items[(q.head+i)%q.capacity] = DataItem{}
+	}
+	q.Stats.ConsumedCount.Add(uint64(len(drop)))
+	q.size = write
+	q.tail = (q.head + q.size) % q.capacity
+}
+
 // Size returns current queue size
 func (q *CircularQueue) Size() int {
 	q.mu.RLock()
@@ -135,6 +241,34 @@ func (q *CircularQueue) Capacity() int {
 	q.mu.RLock()
 	defer q.mu.RUnlock()
 	return q.capacity
+}
+
+// ByteStats reports payload bytes currently stored and the item size used for capacity.
+// Item size is the common length when every stored item matches, otherwise the last pushed length.
+func (q *CircularQueue) ByteStats() (currentBytes, itemBytes int) {
+	q.mu.RLock()
+	defer q.mu.RUnlock()
+
+	uniform := q.size > 0
+	firstLen := 0
+	for i := 0; i < q.size; i++ {
+		n := len(q.items[(q.head+i)%q.capacity].Data)
+		currentBytes += n
+		if i == 0 {
+			firstLen = n
+			continue
+		}
+		if n != firstLen {
+			uniform = false
+		}
+	}
+	switch {
+	case uniform && q.size > 0:
+		itemBytes = firstLen
+	default:
+		itemBytes = q.lastItemBytes
+	}
+	return currentBytes, itemBytes
 }
 
 // Resize changes capacity, preserving newest items when shrinking.
@@ -213,6 +347,17 @@ func (h *ChannelDBHandler) GetTRNGData(limit, offset int, consume bool) ([][]byt
 	return h.TRNGQueue.Get(limit, offset, consume), nil
 }
 
+// SampleTRNGStride walks the TRNG ring by stride from start.
+func (h *ChannelDBHandler) SampleTRNGStride(start, stride, maxBytes int, consume bool) ([][]byte, int, bool, error) {
+	items, next, wrapped := h.TRNGQueue.SampleStride(start, stride, maxBytes, consume)
+	return items, next, wrapped, nil
+}
+
+// PopNewestTRNG removes the sample most recently stored in the TRNG ring.
+func (h *ChannelDBHandler) PopNewestTRNG() ([]byte, bool) {
+	return h.TRNGQueue.PopTail()
+}
+
 //---------------------- Fortuna Data Operations ----------------------
 
 // StoreFortunaData stores Fortuna-generated data
@@ -232,6 +377,17 @@ func (h *ChannelDBHandler) StoreFortunaData(data []byte) error {
 // GetFortunaData retrieves Fortuna-generated data with pagination and consumption tracking
 func (h *ChannelDBHandler) GetFortunaData(limit, offset int, consume bool) ([][]byte, error) {
 	return h.FortunaQueue.Get(limit, offset, consume), nil
+}
+
+// SampleFortunaStride walks the Fortuna ring by stride from start.
+func (h *ChannelDBHandler) SampleFortunaStride(start, stride, maxBytes int, consume bool) ([][]byte, int, bool, error) {
+	items, next, wrapped := h.FortunaQueue.SampleStride(start, stride, maxBytes, consume)
+	return items, next, wrapped, nil
+}
+
+// PopNewestFortuna removes the sample most recently stored in the Fortuna ring.
+func (h *ChannelDBHandler) PopNewestFortuna() ([]byte, bool) {
+	return h.FortunaQueue.PopTail()
 }
 
 //---------------------- VirtIO Data Operations ----------------------
@@ -283,80 +439,68 @@ func (h *ChannelDBHandler) IncrementDroppedCount(source string) error {
 	return nil
 }
 
+func fillQueueStats(dst *DataSourceStats, q *CircularQueue) {
+	currentBytes, itemBytes := q.ByteStats()
+	size := q.Size()
+	capacity := q.Capacity()
+
+	dst.PollingCount = int64(q.Stats.PollingCount.Load())   // #nosec G115
+	dst.QueueDropped = int64(q.Stats.DroppedCount.Load())   // #nosec G115
+	dst.ConsumedCount = int64(q.Stats.ConsumedCount.Load()) // #nosec G115
+	dst.QueueCurrent = size
+	dst.QueueCapacity = capacity
+	dst.UnconsumedCount = size
+	dst.TotalGenerated = int64(q.Stats.TotalCount.Load()) // #nosec G115
+	dst.QueueCurrentBytes = currentBytes
+	dst.QueueItemBytes = itemBytes
+	if itemBytes > 0 {
+		dst.QueueCapacityBytes = capacity * itemBytes
+	}
+	if capacity > 0 {
+		dst.QueuePercentage = float64(size) / float64(capacity) * 100
+	}
+}
+
 // GetDetailedStats returns comprehensive system statistics
 func (h *ChannelDBHandler) GetDetailedStats() (*DetailedStats, error) {
 	stats := &DetailedStats{}
+	fillQueueStats(&stats.TRNG, h.TRNGQueue)
+	fillQueueStats(&stats.Fortuna, h.FortunaQueue)
+	fillQueueStats(&stats.VirtIO, h.VirtIOQueue)
 
-	// TRNG stats
-	trngSize := h.TRNGQueue.Size()
-	trngCapacity := h.TRNGQueue.Capacity()
-
-	stats.TRNG.PollingCount = int64(h.TRNGQueue.Stats.PollingCount.Load())   // #nosec G115
-	stats.TRNG.QueueDropped = int64(h.TRNGQueue.Stats.DroppedCount.Load())   // #nosec G115
-	stats.TRNG.ConsumedCount = int64(h.TRNGQueue.Stats.ConsumedCount.Load()) // #nosec G115
-	stats.TRNG.QueueCurrent = trngSize
-	stats.TRNG.QueueCapacity = trngCapacity
-	stats.TRNG.UnconsumedCount = trngSize
-	stats.TRNG.TotalGenerated = int64(h.TRNGQueue.Stats.TotalCount.Load()) // #nosec G115
-
-	if trngCapacity > 0 {
-		stats.TRNG.QueuePercentage = float64(trngSize) / float64(trngCapacity) * 100
-	}
-
-	// Fortuna stats
-	fortunaSize := h.FortunaQueue.Size()
-	fortunaCapacity := h.FortunaQueue.Capacity()
-
-	stats.Fortuna.PollingCount = int64(h.FortunaQueue.Stats.PollingCount.Load())   // #nosec G115
-	stats.Fortuna.QueueDropped = int64(h.FortunaQueue.Stats.DroppedCount.Load())   // #nosec G115
-	stats.Fortuna.ConsumedCount = int64(h.FortunaQueue.Stats.ConsumedCount.Load()) // #nosec G115
-	stats.Fortuna.QueueCurrent = fortunaSize
-	stats.Fortuna.QueueCapacity = fortunaCapacity
-	stats.Fortuna.UnconsumedCount = fortunaSize
-	stats.Fortuna.TotalGenerated = int64(h.FortunaQueue.Stats.TotalCount.Load()) // #nosec G115
-
-	if fortunaCapacity > 0 {
-		stats.Fortuna.QueuePercentage = float64(fortunaSize) / float64(fortunaCapacity) * 100
-	}
-
-	// VirtIO stats
-	virtioSize := h.VirtIOQueue.Size()
-	virtioCapacity := h.VirtIOQueue.Capacity()
-
-	stats.VirtIO.PollingCount = int64(h.VirtIOQueue.Stats.PollingCount.Load())   // #nosec G115
-	stats.VirtIO.QueueDropped = int64(h.VirtIOQueue.Stats.DroppedCount.Load())   // #nosec G115
-	stats.VirtIO.ConsumedCount = int64(h.VirtIOQueue.Stats.ConsumedCount.Load()) // #nosec G115
-	stats.VirtIO.QueueCurrent = virtioSize
-	stats.VirtIO.QueueCapacity = virtioCapacity
-	stats.VirtIO.UnconsumedCount = virtioSize
-	stats.VirtIO.TotalGenerated = int64(h.VirtIOQueue.Stats.TotalCount.Load()) // #nosec G115
-
-	if virtioCapacity > 0 {
-		stats.VirtIO.QueuePercentage = float64(virtioSize) / float64(virtioCapacity) * 100
-	}
-
-	// Database stats (in-memory, so no file)
-	stats.Database.SizeBytes = 0
-	stats.Database.SizeHuman = "0 B (in-memory)"
+	buffered := int64(stats.TRNG.QueueCurrentBytes + stats.Fortuna.QueueCurrentBytes + stats.VirtIO.QueueCurrentBytes)
+	stats.Database.SizeBytes = buffered
+	stats.Database.SizeHuman = FormatBytes(buffered) + " (in-memory)"
 	stats.Database.Path = "memory://channels"
-
-	// Initialize empty quality metrics (will be populated by API server)
 	stats.TRNGQuality = QualityMetrics{}
 
 	return stats, nil
 }
 
-// GetDatabaseSize returns 0 for in-memory implementation
+// FormatBytes renders a byte count with a binary unit.
+func FormatBytes(n int64) string {
+	if n < 0 {
+		n = 0
+	}
+	units := []string{"B", "KiB", "MiB", "GiB"}
+	value := float64(n)
+	unit := units[0]
+	for i := 0; i < len(units)-1 && value >= 1024; i++ {
+		value /= 1024
+		unit = units[i+1]
+	}
+	if unit == "B" {
+		return fmt.Sprintf("%d B", n)
+	}
+	return fmt.Sprintf("%.1f %s", value, unit)
+}
+
+// GetDatabaseSize returns the sum of entropy payload bytes currently stored.
 func (h *ChannelDBHandler) GetDatabaseSize() (int64, error) {
-	// Calculate approximate memory usage
-	trngSize := h.TRNGQueue.Size()
-	fortunaSize := h.FortunaQueue.Size()
-	virtioSize := h.VirtIOQueue.Size()
-
-	// Approximate: 32 bytes data + 24 bytes overhead per item
-	approxSize := int64((trngSize + fortunaSize + virtioSize) * 56)
-
-	return approxSize, nil
+	trngBytes, _ := h.TRNGQueue.ByteStats()
+	fortunaBytes, _ := h.FortunaQueue.ByteStats()
+	virtioBytes, _ := h.VirtIOQueue.ByteStats()
+	return int64(trngBytes + fortunaBytes + virtioBytes), nil
 }
 
 // GetDatabasePath returns a virtual path for in-memory storage
@@ -385,7 +529,8 @@ func (h *ChannelDBHandler) GetStats() (map[string]interface{}, error) {
 	stats["trng_count"] = h.TRNGQueue.Size()
 	stats["fortuna_count"] = h.FortunaQueue.Size()
 	stats["virtio_count"] = h.VirtIOQueue.Size()
-	stats["db_size"] = int64(0)
+	size, _ := h.GetDatabaseSize()
+	stats["db_size"] = size
 
 	return stats, nil
 }

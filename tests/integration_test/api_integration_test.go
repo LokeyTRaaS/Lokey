@@ -157,14 +157,17 @@ func testAPIEndpoints(t *testing.T, setupDB func() (database.DBHandler, func()))
 			t.Fatalf("Failed to unmarshal response: %v", err)
 		}
 		// Default should be false
-		if config.Consume {
+		if config.TRNG {
 			t.Error("Expected consume mode to be false by default")
+		}
+		if !config.VirtIO {
+			t.Error("Expected VirtIO consume to be true by default")
 		}
 	})
 
 	t.Run("PUT /api/v1/config/consume", func(t *testing.T) {
 		config := api.ConsumeConfig{
-			Consume: true,
+			TRNG: true,
 		}
 		body, _ := json.Marshal(config)
 		w := httptest.NewRecorder()
@@ -180,7 +183,7 @@ func testAPIEndpoints(t *testing.T, setupDB func() (database.DBHandler, func()))
 		if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
 			t.Fatalf("Failed to unmarshal response: %v", err)
 		}
-		if !response.Consume {
+		if !response.TRNG {
 			t.Error("Expected consume mode to be true")
 		}
 	})
@@ -465,7 +468,7 @@ func testCompleteFlow(t *testing.T, setupDB func() (database.DBHandler, func()))
 
 	// Step 4: Enable consume mode
 	t.Run("enable consume mode", func(t *testing.T) {
-		config := api.ConsumeConfig{Consume: true}
+		config := api.ConsumeConfig{TRNG: true}
 		body, _ := json.Marshal(config)
 		w := httptest.NewRecorder()
 		req, _ := http.NewRequest("PUT", "/api/v1/config/consume", bytes.NewBuffer(body))
@@ -485,7 +488,7 @@ func testCompleteFlow(t *testing.T, setupDB func() (database.DBHandler, func()))
 		if err := json.Unmarshal(w2.Body.Bytes(), &response); err != nil {
 			t.Fatalf("Failed to unmarshal response: %v", err)
 		}
-		if !response.Consume {
+		if !response.TRNG {
 			t.Error("Expected consume mode to be enabled")
 		}
 	})

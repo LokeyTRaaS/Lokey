@@ -146,8 +146,11 @@ func TestServer_GetConsumeConfig(t *testing.T) {
 		t.Fatalf("Failed to unmarshal response: %v", err)
 	}
 	// Default should be false
-	if config.Consume {
-		t.Error("Expected default consume mode to be false")
+	if config.TRNG {
+		t.Error("Expected default TRNG consume mode to be false")
+	}
+	if !config.VirtIO {
+		t.Error("Expected default VirtIO consume mode to be true")
 	}
 }
 
@@ -155,7 +158,7 @@ func TestServer_UpdateConsumeConfig(t *testing.T) {
 	server, _ := setupTestServer()
 
 	t.Run("set to true", func(t *testing.T) {
-		config := api.ConsumeConfig{Consume: true}
+		config := api.ConsumeConfig{TRNG: true}
 		body, _ := json.Marshal(config)
 		w := httptest.NewRecorder()
 		req, _ := http.NewRequest("PUT", "/api/v1/config/consume", bytes.NewBuffer(body))
@@ -172,8 +175,11 @@ func TestServer_UpdateConsumeConfig(t *testing.T) {
 		server.Router.ServeHTTP(w2, req2)
 		var response api.ConsumeConfig
 		json.Unmarshal(w2.Body.Bytes(), &response)
-		if !response.Consume {
-			t.Error("Expected consume mode to be true after update")
+		if !response.TRNG {
+			t.Error("Expected TRNG consume mode to be true after update")
+		}
+		if response.Fortuna {
+			t.Error("Expected Fortuna consume mode to stay false")
 		}
 	})
 }

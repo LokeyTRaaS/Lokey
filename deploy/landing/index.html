@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Lokey node</title>
+  <meta name="description" content="This host is a Lokey TRaaS node: hardware entropy, Fortuna, and VirtIO, fronted by Traefik.">
+  <style>
+    :root {
+      --bg-body: #111827;
+      --bg-card: #1f2937;
+      --text-primary: #f7bc24;
+      --text-secondary: #9ca3af;
+      --border-primary: #374151;
+      --lokey-light-blue: #2cafd9;
+      --lokey-medium-blue: #1f7598;
+      --lokey-dark-blue: #1c5775;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: Inter, sans-serif;
+      background: var(--bg-body);
+      color: var(--text-primary);
+      line-height: 1.5;
+    }
+    header, main, footer { width: min(1040px, calc(100% - 32px)); margin: 0 auto; }
+    header { padding: 28px 0 8px; display: flex; justify-content: space-between; align-items: center; gap: 16px; }
+    .brand { font-weight: 800; letter-spacing: 0.04em; font-size: 1.25rem; color: var(--text-primary); text-decoration: none; }
+    nav { display: flex; flex-wrap: wrap; gap: 14px; }
+    a { color: var(--lokey-light-blue); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    nav a { color: var(--text-secondary); font-weight: 600; font-size: 0.92rem; }
+    nav a:hover { color: var(--lokey-light-blue); }
+    h1 { font-size: clamp(2.2rem, 6vw, 4.2rem); line-height: 1.05; margin: 12px 0; font-weight: 800; }
+    .lede { color: var(--text-secondary); font-size: 1.05rem; max-width: 68ch; }
+    .row { display: flex; flex-wrap: wrap; gap: 12px; margin: 22px 0 8px; }
+    .btn {
+      display: inline-flex; align-items: center; justify-content: center;
+      border-radius: 999px; padding: 12px 22px; font-weight: 800; color: white;
+      background: var(--lokey-light-blue);
+    }
+    .btn.ghost { background: transparent; color: var(--text-primary); border: 2px solid rgba(247, 188, 36, 0.35); }
+    section { margin: 28px 0; }
+    h2 { font-size: 1.6rem; margin-bottom: 12px; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; }
+    .card {
+      background: var(--bg-card);
+      border: 1px solid var(--border-primary);
+      border-radius: 16px;
+      padding: 16px 18px;
+    }
+    .card h3 { margin: 0 0 6px; font-size: 1.05rem; }
+    .muted { color: var(--text-secondary); }
+    .metric { font-size: 1.35rem; font-weight: 800; }
+    .links { display: flex; flex-direction: column; gap: 6px; }
+    footer { padding: 12px 0 36px; color: var(--text-secondary); font-size: 0.9rem; }
+    code { color: #e5e7eb; }
+  </style>
+</head>
+<body>
+  <header>
+    <a class="brand" href="https://lokey.cloud/">Lokey</a>
+    <nav>
+      <a href="https://lokey.cloud/">lokey.cloud</a>
+      <a href="https://github.com/LokeyTRaaS">GitHub</a>
+      <a href="/swagger/index.html">API</a>
+      <a href="/grafana/">Grafana</a>
+      <a href="/dashboard/">Traefik</a>
+    </nav>
+  </header>
+  <main>
+    <section>
+      <h1>Hardware entropy,<br>on this machine.</h1>
+      <p class="lede">
+        This host is a Lokey True Randomness as a Service node. An ATECC608 secure element
+        captures physical noise. The API keeps that entropy in memory, Fortuna mixes it,
+        and VirtIO hands it to virtual machines. Traefik is the front door on port 443.
+        Nothing here is written to disk, and this page does not set cookies.
+      </p>
+      <div class="row">
+        <a class="btn" href="https://lokey.cloud/">About Lokey</a>
+        <a class="btn ghost" href="https://github.com/LokeyTRaaS/Lokey">Source code</a>
+      </div>
+    </section>
+
+    <section>
+      <h2>Rings on this node</h2>
+      <div class="grid" id="rings">
+        <article class="card"><h3>TRNG</h3><p class="muted">Waiting for /api/v1/status</p></article>
+        <article class="card"><h3>Fortuna</h3><p class="muted">Waiting for /api/v1/status</p></article>
+        <article class="card"><h3>VirtIO</h3><p class="muted">Waiting for /api/v1/status</p></article>
+      </div>
+      <p class="muted" id="intake"></p>
+    </section>
+
+    <section>
+      <h2>On this host</h2>
+      <div class="grid">
+        <article class="card">
+          <h3>Operate</h3>
+          <div class="links">
+            <a href="/swagger/index.html">Swagger</a>
+            <a href="/api/v1/status">Status</a>
+            <a href="/api/v1/health">Health</a>
+            <a href="/metrics">Prometheus metrics</a>
+            <a href="/grafana/">Grafana</a>
+            <a href="/dashboard/">Traefik dashboard</a>
+          </div>
+          <p class="muted">The Traefik dashboard asks for a password. It is not printed here.</p>
+        </article>
+        <article class="card">
+          <h3>Where this comes from</h3>
+          <div class="links">
+            <a href="https://lokey.cloud/">lokey.cloud</a>
+            <a href="https://github.com/LokeyTRaaS">github.com/LokeyTRaaS</a>
+            <a href="https://github.com/LokeyTRaaS/Lokey">Lokey</a>
+            <a href="https://github.com/LokeyTRaaS/Knowledgebase">Knowledgebase</a>
+            <a href="https://github.com/LokeyTRaaS/client-container">client-container</a>
+            <a href="https://github.com/LokeyTRaaS/Lokey_PythonSDK">Python SDK</a>
+          </div>
+        </article>
+      </div>
+    </section>
+  </main>
+  <footer>Open source, EU-hosted Lokey. This page only talks to this node.</footer>
+  <script>
+    const names = ["trng", "fortuna", "virtio"];
+    function bytes(n) {
+      if (n == null || Number.isNaN(n)) return "—";
+      const units = ["B", "KiB", "MiB", "GiB"];
+      let v = Number(n), i = 0;
+      while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
+      return (i === 0 ? v.toFixed(0) : v.toFixed(1)) + " " + units[i];
+    }
+    function card(name, src) {
+      const pct = src && src.queue_percentage != null ? Number(src.queue_percentage).toFixed(1) : "—";
+      const current = src ? src.queue_current : "—";
+      const capacity = src ? src.queue_capacity : "—";
+      const dropped = src ? src.queue_dropped : "—";
+      return `<article class="card"><h3>${name}</h3><div class="metric">${pct}%</div><p class="muted">${current} / ${capacity} items<br>${bytes(src && src.queue_current_bytes)} / ${bytes(src && src.queue_capacity_bytes)}<br>dropped ${dropped}</p></article>`;
+    }
+    async function load() {
+      try {
+        const res = await fetch("/api/v1/status", { cache: "no-store" });
+        if (!res.ok) throw new Error(res.statusText);
+        const body = await res.json();
+        document.getElementById("rings").innerHTML = names.map((name) => card(name.toUpperCase(), body[name])).join("");
+        const intake = body.intake || {};
+        const consume = body.consume || {};
+        const seed = consume.fortuna_seed || {};
+        const sources = consume.virtio_sources || {};
+        const trngFeed = sources.trng || {};
+        const fortunaFeed = sources.fortuna || {};
+        const share = (feed) => `${Math.round((feed.ratio || 0) * 100)}% ${feed.consume ? "consume" : "copy"}`;
+        const dataSample = consume.data_sample || {};
+        const samplePct = (src) => `${Math.round(((src && src.ratio) || 0) * 100)}%`;
+        document.getElementById("intake").textContent =
+          `Intake ${bytes(intake.bytes_total)} (${intake.trng_items_total || 0} TRNG samples, ${intake.fortuna_items_total || 0} Fortuna pulls). Client reads: TRNG ${consume.trng ? "consume" : "copy"}, Fortuna ${consume.fortuna ? "consume" : "copy"}, VirtIO ${consume.virtio ? "consume" : "copy"}. Fortuna seed ${share(seed)}. VirtIO from TRNG ${share(trngFeed)}, from Fortuna ${share(fortunaFeed)}. Mixed read TRNG ${samplePct(dataSample.trng)}, Fortuna ${samplePct(dataSample.fortuna)}.`;
+      } catch (err) {
+        document.getElementById("intake").textContent = "Status is not reachable yet.";
+      }
+    }
+    load();
+    setInterval(load, 5000);
+  </script>
+</body>
+</html>

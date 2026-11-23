@@ -1,6 +1,7 @@
 package api_test
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -189,7 +190,6 @@ func TestServer_fetchAndStoreFortunaData(t *testing.T) {
 
 func TestServer_seedFortuna(t *testing.T) {
 	t.Run("successful seeding", func(t *testing.T) {
-		// Generate high-entropy test data
 		validSeed1 := make([]byte, 32)
 		rand.Read(validSeed1)
 		validSeed2 := make([]byte, 32)
@@ -198,20 +198,6 @@ func TestServer_seedFortuna(t *testing.T) {
 		rand.Read(validSeed3)
 
 		var seedRequestReceived bool
-		controllerServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Path == "/generate" {
-				// Return multiple TRNG samples with high entropy
-				data := []string{
-					hex.EncodeToString(validSeed1),
-					hex.EncodeToString(validSeed2),
-					hex.EncodeToString(validSeed3),
-				}
-				response := map[string]interface{}{"data": data}
-				w.Header().Set("Content-Type", "application/json")
-				json.NewEncoder(w).Encode(response)
-			}
-		}))
-
 		fortunaServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path == "/seed" {
 				seedRequestReceived = true
@@ -220,117 +206,112 @@ func TestServer_seedFortuna(t *testing.T) {
 					t.Errorf("Failed to decode seed request: %v", err)
 				}
 				w.WriteHeader(http.StatusOK)
-				w.Write([]byte("{}"))
+				_, _ = w.Write([]byte("{}"))
 			}
 		}))
-
-		defer controllerServer.Close()
 		defer fortunaServer.Close()
 
 		db, _ := database.NewChannelDBHandler(10, 20, 15)
 		testRegistry := prometheus.NewRegistry()
-		server := api.NewServer(db, controllerServer.URL, fortunaServer.URL, "http://localhost:8083", 0, testRegistry)
-
-		err := server.SeedFortuna()
-		if err != nil {
-			t.Fatalf("Expected no error, got %v", err)
+		server := api.NewServer(db, "http://unused", fortunaServer.URL, "http://localhost:8083", 0, testRegistry)
+		server.SetConsumeConfig(api.ConsumeConfig{
+			VirtIO:      true,
+			FortunaSeed: api.FeedSource{Ratio: 1, Consume: false},
+		})
+		for _, sample := range [][]byte{validSeed1, validSeed2, validSeed3} {
+			if err := db.StoreTRNGData(sample); err != nil {
+				t.Fatal(err)
+			}
+			server.ObserveTRNGSample(sample)
 		}
 
+		if err := server.SeedFortuna(); err != nil {
+			t.Fatalf("Expected no error, got %v", err)
+		}
 		if !seedRequestReceived {
 			t.Error("Expected seed request to be sent to Fortuna")
 		}
+		stats, err := db.GetDetailedStats()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if stats.TRNG.QueueCurrent != 3 {
+			t.Fatalf("copy reseed removed TRNG samples: current=%d", stats.TRNG.QueueCurrent)
+		}
 	})
 
-	t.Run("controller error", func(t *testing.T) {
-		controllerServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.WriteHeader(http.StatusInternalServerError)
-		}))
-		defer controllerServer.Close()
-
+	t.Run("nothing chosen is not an error", func(t *testing.T) {
+		posted := false
 		fortunaServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			posted = true
 			w.WriteHeader(http.StatusOK)
 		}))
 		defer fortunaServer.Close()
 
 		db, _ := database.NewChannelDBHandler(10, 20, 15)
-		testRegistry := prometheus.NewRegistry()
-		server := api.NewServer(db, controllerServer.URL, fortunaServer.URL, "http://localhost:8083", 0, testRegistry)
-
-		err := server.SeedFortuna()
-		if err == nil {
-			t.Error("Expected error when controller returns error, got nil")
+		server := api.NewServer(db, "http://unused", fortunaServer.URL, "http://localhost:8083", 0, prometheus.NewRegistry())
+		if err := server.SeedFortuna(); err != nil {
+			t.Fatalf("empty share returned %v", err)
 		}
-		if err != nil && err.Error() == "" {
-			t.Error("Expected non-empty error message")
+		if posted {
+			t.Fatal("empty share posted to Fortuna")
 		}
 	})
 
 	t.Run("fortuna seeding error", func(t *testing.T) {
-		// Generate high-entropy test data
 		validSeed := make([]byte, 32)
 		rand.Read(validSeed)
 
-		controllerServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Path == "/generate" {
-				data := []string{hex.EncodeToString(validSeed)}
-				response := map[string]interface{}{"data": data}
-				w.Header().Set("Content-Type", "application/json")
-				json.NewEncoder(w).Encode(response)
-			}
-		}))
-		defer controllerServer.Close()
-
 		fortunaServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Path == "/seed" {
-				w.WriteHeader(http.StatusInternalServerError)
-			}
+			w.WriteHeader(http.StatusInternalServerError)
 		}))
 		defer fortunaServer.Close()
 
 		db, _ := database.NewChannelDBHandler(10, 20, 15)
-		testRegistry := prometheus.NewRegistry()
-		server := api.NewServer(db, controllerServer.URL, fortunaServer.URL, "http://localhost:8083", 0, testRegistry)
-
-		err := server.SeedFortuna()
-		if err == nil {
-			t.Error("Expected error when fortuna seeding fails, got nil")
+		server := api.NewServer(db, "http://unused", fortunaServer.URL, "http://localhost:8083", 0, prometheus.NewRegistry())
+		server.SetConsumeConfig(api.ConsumeConfig{
+			VirtIO:      true,
+			FortunaSeed: api.FeedSource{Ratio: 1, Consume: true},
+		})
+		if err := db.StoreTRNGData(validSeed); err != nil {
+			t.Fatal(err)
 		}
-		if err != nil && err.Error() == "" {
-			t.Error("Expected non-empty error message")
+		server.ObserveTRNGSample(validSeed)
+
+		if err := server.SeedFortuna(); err == nil {
+			t.Fatal("expected error when fortuna seeding fails")
+		}
+		stats, err := db.GetDetailedStats()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if stats.TRNG.QueueCurrent != 0 {
+			t.Fatalf("consume reseed left the sample in the ring: current=%d", stats.TRNG.QueueCurrent)
 		}
 	})
 
 	t.Run("seed validation rejects bad data", func(t *testing.T) {
-		// Controller returns 0xFF pattern (bad data)
-		controllerServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Path == "/generate" {
-				badData := make([]byte, 32)
-				for i := range badData {
-					badData[i] = 0xFF
-				}
-				data := []string{hex.EncodeToString(badData)}
-				response := map[string]interface{}{"data": data}
-				w.Header().Set("Content-Type", "application/json")
-				json.NewEncoder(w).Encode(response)
-			}
-		}))
-		defer controllerServer.Close()
-
+		badData := bytes.Repeat([]byte{0xFF}, 32)
+		posted := false
 		fortunaServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			posted = true
 			w.WriteHeader(http.StatusOK)
 		}))
 		defer fortunaServer.Close()
 
 		db, _ := database.NewChannelDBHandler(10, 20, 15)
-		testRegistry := prometheus.NewRegistry()
-		server := api.NewServer(db, controllerServer.URL, fortunaServer.URL, "http://localhost:8083", 0, testRegistry)
+		server := api.NewServer(db, "http://unused", fortunaServer.URL, "http://localhost:8083", 0, prometheus.NewRegistry())
+		server.SetConsumeConfig(api.ConsumeConfig{
+			VirtIO:      true,
+			FortunaSeed: api.FeedSource{Ratio: 1, Consume: false},
+		})
+		server.ObserveTRNGSample(badData)
 
-		err := server.SeedFortuna()
-		if err == nil {
-			t.Error("Expected error when TRNG data validation fails, got nil")
+		if err := server.SeedFortuna(); err == nil {
+			t.Fatal("expected error when TRNG data validation fails")
 		}
-		if err != nil && err.Error() == "" {
-			t.Error("Expected non-empty error message")
+		if posted {
+			t.Fatal("invalid seed was posted")
 		}
 	})
 }
@@ -483,25 +464,12 @@ func TestServer_seedFortunaWithTRNG_Cancellation(t *testing.T) {
 
 func TestServer_SeedVirtIOFromTRNG(t *testing.T) {
 	t.Run("successful seeding", func(t *testing.T) {
-		// Generate high-entropy test data
 		validSeed1 := make([]byte, 32)
 		validSeed2 := make([]byte, 32)
 		rand.Read(validSeed1)
 		rand.Read(validSeed2)
 
 		var seedRequestReceived bool
-		controllerServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Path == "/generate" {
-				data := []string{
-					hex.EncodeToString(validSeed1),
-					hex.EncodeToString(validSeed2),
-				}
-				response := map[string]interface{}{"data": data}
-				w.Header().Set("Content-Type", "application/json")
-				json.NewEncoder(w).Encode(response)
-			}
-		}))
-
 		virtioServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path == "/seed" {
 				seedRequestReceived = true
@@ -510,16 +478,28 @@ func TestServer_SeedVirtIOFromTRNG(t *testing.T) {
 					t.Errorf("Failed to decode seed request: %v", err)
 				}
 				w.WriteHeader(http.StatusOK)
-				w.Write([]byte(`{"status": "seeded", "count": 2}`))
+				_, _ = w.Write([]byte(`{"status": "seeded", "count": 2}`))
 			}
 		}))
-
-		defer controllerServer.Close()
 		defer virtioServer.Close()
 
 		db, _ := database.NewChannelDBHandler(10, 20, 15)
+		if err := db.StoreTRNGData(validSeed1); err != nil {
+			t.Fatalf("store: %v", err)
+		}
+		if err := db.StoreTRNGData(validSeed2); err != nil {
+			t.Fatalf("store: %v", err)
+		}
 		testRegistry := prometheus.NewRegistry()
-		server := api.NewServer(db, controllerServer.URL, "http://localhost:8082", virtioServer.URL, 0, testRegistry)
+		server := api.NewServer(db, "http://localhost:8081", "http://localhost:8082", virtioServer.URL, 0, testRegistry)
+		server.SetConsumeConfig(api.ConsumeConfig{
+			VirtIO: true,
+			VirtIOSources: api.VirtIOSources{
+				TRNG: api.FeedSource{Ratio: 1, Consume: false},
+			},
+		})
+		server.ObserveTRNGSample(validSeed1)
+		server.ObserveTRNGSample(validSeed2)
 
 		err := server.SeedVirtIOFromTRNG()
 		if err != nil {
@@ -528,6 +508,13 @@ func TestServer_SeedVirtIOFromTRNG(t *testing.T) {
 
 		if !seedRequestReceived {
 			t.Error("Expected seed request to be sent to VirtIO")
+		}
+		stats, statsErr := db.GetDetailedStats()
+		if statsErr != nil {
+			t.Fatal(statsErr)
+		}
+		if stats.TRNG.QueueCurrent != 2 {
+			t.Fatalf("default copy mode consumed TRNG samples: current=%d", stats.TRNG.QueueCurrent)
 		}
 	})
 }
@@ -557,6 +544,13 @@ func TestServer_SeedVirtIOFromFortuna(t *testing.T) {
 
 		testRegistry := prometheus.NewRegistry()
 		server := api.NewServer(db, "http://localhost:8081", "http://localhost:8082", virtioServer.URL, 0, testRegistry)
+		server.SetConsumeConfig(api.ConsumeConfig{
+			VirtIO: true,
+			VirtIOSources: api.VirtIOSources{
+				Fortuna: api.FeedSource{Ratio: 1, Consume: false},
+			},
+		})
+		server.ObserveFortunaSample(testData)
 
 		err := server.SeedVirtIOFromFortuna()
 		if err != nil {
