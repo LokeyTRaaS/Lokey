@@ -54,13 +54,13 @@ jobs:
           fi
 
       - name: Run golangci-lint on source code
-        uses: golangci/golangci-lint-action@v8
+        uses: golangci/golangci-lint-action@v9
         with:
           version: v2.15.0
           args: --config .golangci.yml ./pkg/... ./cmd/...
 
       - name: Run golangci-lint on tests
-        uses: golangci/golangci-lint-action@v8
+        uses: golangci/golangci-lint-action@v9
         with:
           version: v2.15.0
           args: --config .golangci-tests.yml ./tests/...
