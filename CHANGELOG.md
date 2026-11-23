@@ -1,5 +1,15 @@
 # Changelog
 
+## [2.0.0](https://github.com/LokeyTRaaS/Lokey/compare/v1.2.4...v2.0.0) (2026-11-23)
+
+### ⚠ BREAKING CHANGES
+
+* fortuna_seed and virtio_sources ratios replace the unmetered reseed and the single VirtIO source. Client consume is set per ring. source=mixed samples by stride, and a ratio must be 0 or 1/n.
+
+### Features
+
+* draw stored rings by ratio and mix the data read ([b7e85fc](https://github.com/LokeyTRaaS/Lokey/commit/b7e85fceb1d3623ed6a9dd5e24101c7f42c442a3))
+
 ## [1.2.4](https://github.com/LokeyTRaaS/Lokey/compare/v1.2.3...v1.2.4) (2026-11-22)
 
 ### Bug Fixes
